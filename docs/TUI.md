@@ -410,6 +410,13 @@ with `{"text", "cwd"}`:
 - **Sub-agents**: a running one shows its step count on its row and its
   last 3 steps in a tree under it; once done, the transcript keeps its first
   step, `… N more`, and its last two. The plain styles keep one line.
+- **Thinking**: while the model reasons, its last 3 rows show under the
+  prompt after a `∴`, quiet and in italics, with `Thinking… (Ns)`. When its
+  answer or a step begins, the thought folds into the transcript as
+  `∴ Thought for Ns` with its words (at most 600 characters). Any other wait
+  says `Working…`.
+- **A running step** shows once, with its own time (counted from when you
+  allowed it), not a second spinner line naming it again.
 - **The turn footer**: under each answer, `■ Default · opus · 12s · 1.2k
   tokens`: the mode (square and name in its colour), the model, the time and
   the tokens the turn used. The UI shows no money anywhere; `/cost` and

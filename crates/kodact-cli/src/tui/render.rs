@@ -1294,6 +1294,9 @@ pub struct FrontBox {
     pub under: bool,
 }
 
+/// Rows of a streaming thought shown under the prompt.
+const THOUGHT_ROWS: usize = 3;
+
 /// The live region for a terminal `width` columns wide, at most `max_height` rows.
 pub fn live_view(app: &App, width: u16, max_height: u16) -> LiveView {
     live_view_at(app, width, max_height, Instant::now())
@@ -1312,6 +1315,17 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
     let mut live: Vec<Line<'static>> = app.live_line().map(|l| text::wrap(vec![l], tw as u16)).unwrap_or_default();
     if live.len() > LIVE_ROWS {
         live.drain(..live.len() - LIVE_ROWS);
+    }
+    // The model's reasoning while it streams: its last rows, quiet and in italics, under
+    // a `∴` so the wait reads as thought, not a stall. It folds into the transcript when
+    // the answer or a step begins.
+    if live.is_empty() && !app.thought.trim().is_empty() {
+        let words = t.subtle().add_modifier(ratatui::style::Modifier::ITALIC);
+        let text = app.thought.split_whitespace().collect::<Vec<_>>().join(" ");
+        let rows =
+            text::wrap(vec![Line::from(vec![Span::styled("∴ ", t.subtle()), Span::styled(text, words)])], tw as u16);
+        let keep = rows.len().saturating_sub(THOUGHT_ROWS);
+        live.extend(rows.into_iter().skip(keep));
     }
     // 2. Tool calls still running, each with its dot turning; then the spinner.
     let mut spinner = vec![];
@@ -1334,12 +1348,11 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
         // A sub-agent's row says what it explores; the line below says they're agents.
         let skip = usize::from(is_agent(&r.name) && r.header.len() > 1);
         spans.extend(r.header.iter().skip(skip * 2).cloned());
-        if is_agent(&r.name) {
-            spans.push(Span::styled(format!("  {}s", ran.as_secs()), t.subtle()));
-            if r.steps > 0 {
-                let n = if r.steps == 1 { "1 step".to_string() } else { format!("{} steps", r.steps) };
-                spans.push(Span::styled(format!(" · {n}"), t.subtle()));
-            }
+        // A step keeps its own time, from when it started, not the turn's.
+        spans.push(Span::styled(format!("  {}s", ran.as_secs()), t.subtle()));
+        if is_agent(&r.name) && r.steps > 0 {
+            let n = if r.steps == 1 { "1 step".to_string() } else { format!("{} steps", r.steps) };
+            spans.push(Span::styled(format!(" · {n}"), t.subtle()));
         }
         spinner.push(Line::default());
         spinner.extend(text::wrap(vec![Line::from(spans)], tw as u16).into_iter().take(2));
@@ -1351,7 +1364,10 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
     }
     // A permission question shows its own waiting row: no second line saying so.
     let asked_row = app.asking_for().is_some_and(|id| app.running.iter().any(|r| r.id == id));
-    if app.busy && !asked_row {
+    // A step on screen already says what runs and for how long: no second line naming it.
+    let step_shown = app.running.iter().any(|r| !is_agent(&r.name) && app.asking_for() != Some(r.id.as_str()))
+        && !app.running.iter().any(|r| is_agent(&r.name));
+    if app.busy && !asked_row && !(step_shown && !app.waiting_for_answer()) {
         let since = app.busy_since.map(|s| now.duration_since(s)).unwrap_or_default();
         let frame = SPINNER[(since.as_millis() / SPINNER_STEP.as_millis()) as usize % SPINNER.len()];
         let mut line = vec![Span::styled(format!("{frame} "), t.accent())];
@@ -1372,7 +1388,8 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
                 format!("Waiting for {agents} {}", if agents == 1 { "agent" } else { "agents" })
             } else {
                 match app.activity.as_str() {
-                    "" | "Working" if app.look == super::look::Look::Frame => "Thinking".to_string(),
+                    // "Thinking" only while reasoning arrives; any other wait is work.
+                    "" | "Working" if app.look == super::look::Look::Frame => "Working".to_string(),
                     "" | "Working" => VERBS[(since.as_secs() / VERB_FOR.as_secs()) as usize % VERBS.len()].to_string(),
                     a => a.to_string(),
                 }
@@ -1832,6 +1849,55 @@ mod tests {
     }
 
     #[test]
+    fn a_thought_shows_while_it_streams_then_folds_into_the_transcript() {
+        use kodact_types::{Delta, StreamEvent};
+        let mut a = app(false);
+        a.look = crate::tui::look::Look::Frame;
+        typed(&mut a, "why");
+        a.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        a.take_pending();
+        let ev = |event| UiEvent::Engine(kodact_engine::EngineEvent::Stream { event, parent_tool_use_id: None });
+        a.on_event(ev(StreamEvent::ContentBlockDelta {
+            index: 0,
+            delta: Delta::ThinkingDelta { thinking: "Rounding per line drifts.".into() },
+        }));
+        let (rows, _) = draw(&live_view(&a, 80, 20), 80);
+        let text = rows.join("\n");
+        assert!(text.contains("∴ Rounding per line drifts.") && text.contains("Thinking…"), "{text}");
+        a.on_event(ev(StreamEvent::ContentBlockStop { index: 0 }));
+        let done: Vec<String> =
+            a.take_pending().iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
+        assert!(done.iter().any(|l| l.starts_with("∴ Thought for")), "{done:?}");
+        assert!(done.iter().any(|l| l.contains("Rounding per line drifts.")), "{done:?}");
+        let (rows, _) = draw(&live_view(&a, 80, 20), 80);
+        let text = rows.join("\n");
+        assert!(!text.contains("Rounding") && text.contains("Working…"), "a wait after the thought is work: {text}");
+    }
+
+    #[test]
+    fn a_running_step_shows_once_with_its_own_time() {
+        let mut a = app(false);
+        a.look = crate::tui::look::Look::Frame;
+        typed(&mut a, "test");
+        a.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let start = a.busy_since.unwrap();
+        a.running.push(crate::tui::app::Running {
+            id: "b1".into(),
+            header: vec![Span::raw("Run the cart tests")],
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "pytest"}),
+            since: start + Duration::from_secs(30),
+            step: None,
+            steps: 0,
+            trail: vec![],
+        });
+        let (rows, _) = draw(&live_view_at(&a, 80, 20, start + Duration::from_secs(37)), 80);
+        let text = rows.join("\n");
+        assert_eq!(text.matches("Run the cart tests").count(), 1, "{text}");
+        assert!(text.contains("Run the cart tests  7s"), "the step's own time: {text}");
+    }
+
+    #[test]
     fn the_default_style_says_what_it_does_once() {
         let mut a = app(false);
         a.look = crate::tui::look::Look::Frame;
@@ -1840,7 +1906,7 @@ mod tests {
         let start = a.busy_since.unwrap();
         let (rows, _) = draw(&live_view_at(&a, 80, 20, start + Duration::from_millis(1300)), 80);
         let text = rows.join("\n");
-        assert!(text.contains("Thinking… (1s)"), "a word for what it does, no key: {text}");
+        assert!(text.contains("Working… (1s)"), "a word for what it does, no key: {text}");
         assert!(text.contains("Type to queue a message") && !text.contains("esc stops"), "{text}");
         assert_eq!(text.matches("esc").count(), 1, "the esc key once, on the status line: {text}");
         // Plan mode: the status line says how to leave it.

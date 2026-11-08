@@ -13,7 +13,7 @@ use kodact_core::commands::screens::{FieldKind, Form, RowAction, Screen};
 use kodact_engine::{EngineEvent, NoticeLevel, PermissionAnswer, PermissionPrompt};
 use kodact_permissions::{PermissionMode, Suggestion};
 use kodact_types::{ContentBlock, Delta, StreamEvent};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
@@ -466,6 +466,11 @@ pub struct App {
     /// The current request's reply has thinking in it: its output isn't carried into the next
     /// request (over chat completions), so the live meter leaves it out.
     request_thought: bool,
+    /// The model's reasoning as it streams, shown under the prompt while it thinks,
+    /// then folded into the transcript when its answer or a step begins.
+    pub thought: String,
+    /// When the current reasoning began, for "Thought for 4s".
+    pub thought_since: Option<Instant>,
     /// When the open question was asked: the wait shown is the person's, not the turn's.
     pub asked_at: Option<Instant>,
     /// The last line already written to the terminal is blank.
@@ -861,6 +866,9 @@ fn diff_rows(hunks: &[Value], [removed, added, quiet, rule]: [Style; 4], width: 
 /// The width from which the full screen can show the sidebar.
 pub const SIDEBAR_MIN_COLS: u16 = 140;
 
+/// How much of a finished thought the transcript keeps, in characters.
+pub const THOUGHT_CHARS: usize = 600;
+
 /// A TodoWrite call's items: (status, content).
 pub fn todo_items(input: &Value) -> Vec<(String, String)> {
     input["todos"]
@@ -1027,6 +1035,8 @@ impl App {
             streamed: false,
             request_usage: Default::default(),
             request_thought: false,
+            thought: String::new(),
+            thought_since: None,
             asked_at: None,
             printed_blank: false,
             dialog: None,
@@ -1153,6 +1163,7 @@ impl App {
     }
 
     fn flush_live(&mut self) {
+        self.flush_thought();
         if !self.live.is_empty() {
             let rest = std::mem::take(&mut self.live);
             self.commit_text_line(&rest);
@@ -1161,6 +1172,43 @@ impl App {
         let t = self.theme;
         let held = self.md.finish(&t);
         self.commit_answer_lines(held);
+    }
+
+    /// The reasoning that just ended goes into the transcript, folded: how long it took,
+    /// then its words, quiet and in italics, at most [`THOUGHT_CHARS`] of them.
+    fn flush_thought(&mut self) {
+        let since = self.thought_since.take();
+        let text = std::mem::take(&mut self.thought);
+        if self.activity == "Thinking" {
+            self.activity = "Working".into();
+        }
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let t = self.theme;
+        let secs = since.map(|s| s.elapsed().as_secs()).unwrap_or(0).max(1);
+        self.gap();
+        self.pending.push(Line::from(vec![
+            Span::styled("∴ ", t.subtle()),
+            Span::styled(format!("Thought for {secs}s"), t.subtle().add_modifier(Modifier::ITALIC)),
+        ]));
+        let words = t.subtle().add_modifier(Modifier::ITALIC);
+        let mut left = THOUGHT_CHARS;
+        for para in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            if left == 0 {
+                break;
+            }
+            let n = para.chars().count();
+            let shown: String = if n > left {
+                format!("{}…", para.chars().take(left).collect::<String>().trim_end())
+            } else {
+                para.to_string()
+            };
+            left = left.saturating_sub(n);
+            self.pending.push(Line::from(vec![Span::raw("  "), Span::styled(shown, words)]));
+        }
+        self.first_line = true;
     }
 
     /// A skill was used (by the model, a sub-agent, or typed as `/name`): it goes to the
@@ -1541,7 +1589,9 @@ impl App {
                         self.activity = Self::preparing(name, target.as_deref());
                     }
                 }
-                StreamEvent::ContentBlockDelta { delta: Delta::ThinkingDelta { .. }, .. } => {
+                StreamEvent::ContentBlockDelta { delta: Delta::ThinkingDelta { thinking }, .. } => {
+                    self.thought_since.get_or_insert_with(Instant::now);
+                    self.thought.push_str(&thinking);
                     self.activity = "Thinking".into();
                     self.request_thought = true;
                 }
@@ -1730,6 +1780,11 @@ impl App {
 
     fn answer(&mut self, a: PermissionAnswer) {
         self.asked_at = None;
+        // The step's time counts from its answer: the wait for you isn't its run.
+        let asked = self.asking_for().map(str::to_string);
+        for r in self.running.iter_mut().filter(|r| Some(&r.id) == asked.as_ref()) {
+            r.since = Instant::now();
+        }
         if let Some(mut d) = self.dialog.take() {
             if let Some(tx) = d.reply.take() {
                 let _ = tx.send(a);
