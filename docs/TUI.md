@@ -441,7 +441,13 @@ with `{"text", "cwd"}`:
   context gauge uses the same cell, filled to how much is used, and the
   sidebar adds a bar under it that fills left to right, dot by dot. A finished state
   is still: `●` connected, `✓` done. Every state has a word or a shape as
-  well as a colour. The sidebar fills the window: with room to spare every
+  well as a colour. Each section is a pane: a rounded hairline box on the
+  window's own background, its name and count set into the top border
+  (`╭─ Plan ──── 1/4 ─╮`), the session's title in a pane named `session`; a
+  pane with nothing under its heading says `none used yet`. The sidebar is a
+  quarter of the window, 34 to 46 columns, and its panes are drawn at that
+  width each frame, so resizing redraws them whole. A pane shows whole or not
+  at all: short of room, the blank rows between panes go first. The sidebar fills the window: with room to spare every
   section shows in full; short of room the lowest sections tighten first
   (a sub-agent keeps only its latest step, the skills their five latest, a
   long plan step two rows), then give way, lowest first: agents, skills,

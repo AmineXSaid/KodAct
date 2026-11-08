@@ -310,7 +310,7 @@ impl<B: Backend> Full<B> {
         let full_w = size.width - 2 * pad;
         // The sidebar takes the right of a wide window, once the conversation has begun.
         let side = app.sidebar && !app.front && size.width >= app::SIDEBAR_MIN_COLS;
-        let side_w = if side { render::SIDEBAR_W } else { 0 };
+        let side_w = if side { render::sidebar_width(size.width) } else { 0 };
         let width = full_w - side_w - if side { 2 } else { 0 };
         if width != self.wrapped_w {
             self.wrapped = indented(self.transcript.clone(), width);
@@ -327,13 +327,8 @@ impl<B: Backend> Full<B> {
             if side {
                 let rect = ratatui::layout::Rect { x: area.x + width + 2, width: side_w, ..full };
                 let lines = render::sidebar(app, side_w as usize, full.height as usize, Instant::now());
-                let t = app.theme;
-                let surface = if t.color && t.depth != palette::Depth::Ansi16 {
-                    ratatui::style::Style::default().bg(palette::PROMPT_BG.color(t.depth, t.light))
-                } else {
-                    ratatui::style::Style::default()
-                };
-                f.render_widget(Paragraph::new(lines).style(surface), rect);
+                // Panes float on the window's own background: no slab behind them.
+                f.render_widget(Paragraph::new(lines), rect);
             }
             if let Some((x, y)) = view.cursor {
                 if x < area.width && y < area.height {

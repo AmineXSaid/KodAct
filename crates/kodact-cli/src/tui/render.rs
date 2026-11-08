@@ -597,8 +597,16 @@ fn room_left(s: &StatusView) -> u8 {
     }
 }
 
-/// The sidebar's width, columns.
+/// The sidebar's narrowest width, columns.
 pub const SIDEBAR_W: u16 = 34;
+/// The sidebar's widest, on a very wide window.
+pub const SIDEBAR_MAX_W: u16 = 46;
+
+/// The sidebar's width on a window `cols` wide: a quarter of it, between
+/// [`SIDEBAR_W`] and [`SIDEBAR_MAX_W`], so its panes grow and shrink with the window.
+pub fn sidebar_width(cols: u16) -> u16 {
+    (cols / 4).clamp(SIDEBAR_W, SIDEBAR_MAX_W)
+}
 
 /// A braille cell filled to each of its eight levels, bottom up: the one shape KodAct
 /// uses for "how full" (the context) and "in flight" (work that fills and drains).
@@ -692,7 +700,8 @@ const SIDEBAR_SKILLS: usize = 5;
 pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>> {
     let t = app.theme;
     let s = &app.status;
-    let inner = w.saturating_sub(2).max(1);
+    // Inside a pane: its border and a space on each side.
+    let inner = w.saturating_sub(4).max(1);
     let width_of = |spans: &[Span<'static>]| spans.iter().map(|s| text_width(&s.content)).sum::<usize>();
     // A section's heading, with what it counts flush right: `MCP          1 failed`.
     let heading = |name: &str, right: Vec<Span<'static>>| -> Line<'static> {
@@ -718,7 +727,7 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         context.push(Line::from(gauge(&t, s)));
         // The same room as a bar across the sidebar, filling dot by dot.
         let tone = gauge(&t, s).first().map(|sp| sp.style).unwrap_or_default();
-        context.push(Line::from(fill_bar(&t, 100 - room_left(s), inner.min(24), tone)));
+        context.push(Line::from(fill_bar(&t, 100 - room_left(s), inner, tone)));
     }
     if s.session_tokens > 0 {
         context.push(Line::from(Span::styled(format!("{} used", tokens(s.session_tokens)), t.dim())));
@@ -876,15 +885,18 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         tight: Vec<Line<'static>>,
         tightened: bool,
         gives_way: bool,
+        /// Its first line is a heading, set into the pane's top border.
+        named: bool,
     }
     let section = |full: Vec<Line<'static>>, tight: Vec<Line<'static>>, gives_way: bool| Section {
         tightened: false,
         full,
         tight,
         gives_way,
+        named: true,
     };
     let mut sections: Vec<Section> = vec![
-        section(title.clone(), title, true),
+        Section { named: false, ..section(title.clone(), title, true) },
         section(context.clone(), context, true),
         section(plan_rows(usize::MAX), plan_rows(2), false),
         section(mcp.clone(), mcp, true),
@@ -892,10 +904,20 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         section(agent_rows(true), agent_rows(false), true),
     ];
     sections.retain(|s| !s.full.is_empty());
-    let rows_of = |s: &Section| if s.tightened { s.tight.len() } else { s.full.len() };
-    let height = |ss: &[Section]| 1 + ss.iter().map(|s| rows_of(s) + 1).sum::<usize>();
-    while height(&sections) > room {
-        if let Some(i) = sections.iter().rposition(|s| !s.tightened && s.tight.len() < s.full.len()) {
+    // A pane's height: its rows (the heading goes into the top border) and its two borders;
+    // a blank row between panes and one above the first.
+    let rows_of = |s: &Section| {
+        let n = if s.tightened { s.tight.len() } else { s.full.len() };
+        (n - usize::from(s.named)).max(1) + 2
+    };
+    // Short of room, first the blank rows between panes go, then sections tighten, then
+    // they give way, lowest first.
+    let mut gap = 1;
+    let height = |ss: &[Section], gap: usize| ss.iter().map(|s| rows_of(s) + gap).sum::<usize>();
+    while height(&sections, gap) > room {
+        if gap == 1 {
+            gap = 0;
+        } else if let Some(i) = sections.iter().rposition(|s| !s.tightened && s.tight.len() < s.full.len()) {
             sections[i].tightened = true;
         } else if let Some(i) = sections.iter().rposition(|s| s.gives_way) {
             sections.remove(i);
@@ -903,24 +925,102 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
             break;
         }
     }
-    let mut out: Vec<Line<'static>> = vec![Line::default()];
-    for (i, s) in sections.into_iter().enumerate() {
-        if i > 0 {
+    // Panes: rounded hairline boxes on the window's own background, each section's name
+    // and count set into its top border. A pane shows whole or not at all; if even the
+    // plan is taller than the room, its pane keeps its borders and says how many more.
+    let border = t.hairline();
+    let mut out: Vec<Line<'static>> = vec![];
+    let mut left = room;
+    for s in sections {
+        if left < 3 + gap {
+            break;
+        }
+        let named = s.named;
+        let mut lines = if s.tightened { s.tight } else { s.full };
+        let head = if named { Some(lines.remove(0)) } else { None };
+        // A pane with nothing under its heading says so, rather than an empty box.
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled("none used yet", t.subtle())));
+        }
+        let fits = left - gap - 2;
+        if lines.len() > fits {
+            let more = lines.len() - (fits - 1);
+            lines.truncate(fits - 1);
+            lines.push(Line::from(Span::styled(format!("… {more} more"), t.subtle())));
+        }
+        if gap == 1 {
             out.push(Line::default());
         }
-        out.extend(if s.tightened { s.tight } else { s.full });
+        out.push(pane_top(head, w, border, if named { t.subtle() } else { t.accent() }));
+        for l in lines {
+            out.push(pane_row(l, w, border));
+        }
+        out.push(Line::from(Span::styled(format!("╰{}╯", "─".repeat(w.saturating_sub(2))), border)));
+        left = room.saturating_sub(out.len());
     }
     out.truncate(room);
     out.resize(room, Line::default());
-    out.extend(foot);
+    out.extend(foot.into_iter().map(|l| {
+        let mut spans = vec![Span::raw("  ")];
+        spans.extend(l.spans);
+        Line::from(spans)
+    }));
     out.push(Line::default());
-    out.into_iter()
-        .map(|l| {
-            let mut spans = vec![Span::raw(" ")];
-            spans.extend(l.spans);
-            Line::from(spans)
-        })
-        .collect()
+    out
+}
+
+/// A pane's top border, `w` wide, with the section's name set into it on the left and
+/// what it counts on the right: `╭─ Plan ────────── 1/4 ─╮`. Without a heading (the
+/// session's title pane), it is named "session" in the accent colour.
+fn pane_top(head: Option<Line<'static>>, w: usize, border: Style, name_style: Style) -> Line<'static> {
+    // A heading line is the name, a gap, then the count (see `heading`).
+    let (name, right): (Vec<Span<'static>>, Vec<Span<'static>>) = match head {
+        Some(l) => {
+            let mut spans = l.spans.into_iter();
+            let name = spans.next().map(|s| Span::styled(s.content, name_style)).into_iter().collect();
+            spans.next(); // the gap
+            (name, spans.collect())
+        }
+        None => (vec![Span::styled("session", name_style)], vec![]),
+    };
+    let width_of = |v: &[Span<'static>]| v.iter().map(|s| text_width(&s.content)).sum::<usize>();
+    let right_w = width_of(&right);
+    let mut spans = vec![Span::styled("╭─ ", border)];
+    spans.extend(name.iter().cloned());
+    spans.push(Span::raw(" "));
+    // ╭─ + name + space … space + right + ─╮
+    let used = 3 + width_of(&name) + 1 + if right_w > 0 { 1 + right_w + 1 } else { 0 } + 2;
+    spans.push(Span::styled("─".repeat(w.saturating_sub(used)), border));
+    if right_w > 0 {
+        spans.push(Span::raw(" "));
+        spans.extend(right);
+        spans.push(Span::raw(" "));
+    }
+    spans.push(Span::styled("─╮", border));
+    Line::from(spans)
+}
+
+/// A row inside a pane `w` wide: the border, a space, the content cut or padded to fit,
+/// a space and the border, so every pane edge lines up whatever the content.
+fn pane_row(l: Line<'static>, w: usize, border: Style) -> Line<'static> {
+    let inner = w.saturating_sub(4);
+    let mut used = 0;
+    let mut spans = vec![Span::styled("│ ", border)];
+    for s in l.spans {
+        let sw = text_width(&s.content);
+        if used + sw <= inner {
+            used += sw;
+            spans.push(s);
+        } else {
+            let cut = fit(&s.content, inner - used);
+            used += text_width(&cut);
+            spans.push(Span::styled(cut, s.style));
+            break;
+        }
+    }
+    spans.push(Span::raw(" ".repeat(inner.saturating_sub(used))));
+    spans.push(Span::styled(" │", border));
+    Line::from(spans)
 }
 
 /// The sidebar has a mark that fills with nothing else to redraw it: a server
@@ -2563,10 +2663,22 @@ mod tests {
     }
 
     /// The sidebar's rows as text.
+    /// The sidebar's rows as text, read inside its panes: a pane's top border as its
+    /// name and count (`Plan  1/3`), a row without its `│` edges, a bottom border blank.
     fn side(a: &App, h: usize, now: Instant) -> Vec<String> {
         sidebar(a, SIDEBAR_W as usize, h, now)
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>().trim_end().to_string())
+            .map(|l| {
+                let r = l.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+                let r = r.trim();
+                if let Some(top) = r.strip_prefix("╭─ ").and_then(|t| t.strip_suffix("─╮")) {
+                    top.replace('─', " ").trim_end().to_string()
+                } else if r.starts_with('╰') {
+                    String::new()
+                } else {
+                    r.strip_prefix("│ ").and_then(|t| t.strip_suffix('│')).unwrap_or(r).trim_end().to_string()
+                }
+            })
             .collect()
     }
 
@@ -2605,6 +2717,49 @@ mod tests {
     }
 
     #[test]
+    fn the_sidebar_panes_stay_whole_at_any_size() {
+        let now = Instant::now();
+        let a = busy_session(now);
+        for w in [SIDEBAR_W as usize, 40, SIDEBAR_MAX_W as usize] {
+            for h in 8..=60 {
+                let rows: Vec<String> = sidebar(&a, w, h, now)
+                    .iter()
+                    .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                    .collect();
+                let all = rows.join("\n");
+                assert_eq!(rows.len(), h, "{w}x{h}: the sidebar fills its height\n{all}");
+                let opened = rows.iter().filter(|r| r.starts_with('╭')).count();
+                let closed = rows.iter().filter(|r| r.starts_with('╰')).count();
+                assert_eq!(opened, closed, "{w}x{h}: every pane closes\n{all}");
+                for r in rows.iter().filter(|r| r.starts_with(['╭', '│', '╰'])) {
+                    assert_eq!(text_width(r), w, "{w}x{h}: a pane row is exactly the sidebar's width: {r:?}\n{all}");
+                    assert!(r.ends_with(['╮', '│', '╯']), "{w}x{h}: its right edge: {r:?}");
+                }
+                // A pane is whole or absent: between a top and its bottom only rows.
+                let mut open = false;
+                for r in &rows {
+                    if r.starts_with('╭') {
+                        assert!(!open, "{w}x{h}: panes never overlap\n{all}");
+                        open = true;
+                    } else if r.starts_with('╰') {
+                        open = false;
+                    } else if open {
+                        assert!(r.starts_with('│'), "{w}x{h}: inside a pane only its rows\n{all}");
+                    }
+                }
+                assert!(!open, "{w}x{h}: no pane left open\n{all}");
+                if h >= 20 {
+                    assert!(all.contains("Plan"), "{w}x{h}: the plan never gives way\n{all}");
+                }
+            }
+        }
+        assert_eq!(sidebar_width(136), SIDEBAR_W);
+        assert_eq!(sidebar_width(140), 35);
+        assert_eq!(sidebar_width(160), 40);
+        assert_eq!(sidebar_width(400), SIDEBAR_MAX_W);
+    }
+
+    #[test]
     fn the_sidebar_keeps_one_order_and_says_what_each_part_brings() {
         let now = Instant::now();
         let a = busy_session(now);
@@ -2622,9 +2777,9 @@ mod tests {
         assert!(rows[at("Agents")].ends_with("1 running"), "{all}");
         // A connected server shows the tools it brings; a failed one says so beside a cross.
         let jira = &rows[at("jira")];
-        assert!(jira.starts_with(" ● jira") && jira.ends_with("12 tools"), "{jira}");
+        assert!(jira.starts_with("● jira") && jira.ends_with("12 tools"), "{jira}");
         let figma = &rows[at("figma")];
-        assert!(figma.starts_with(" × figma") && figma.ends_with("failed"), "{figma}");
+        assert!(figma.starts_with("× figma") && figma.ends_with("failed"), "{figma}");
         // The skills used, the latest first, with how often; never the whole list.
         assert!(at("▸ verify") < at("▸ simplify"), "{all}");
         assert!(rows[at("▸ verify")].ends_with("×2"), "{all}");
@@ -2638,7 +2793,7 @@ mod tests {
         // for its latest step instead of the tree.
         let tight = side(&a, 27, now);
         let joined = tight.join("\n");
-        assert!(joined.contains("Agents") && tight.iter().any(|r| r == "   Reading src/parse.rs"), "{joined}");
+        assert!(joined.contains("Agents") && tight.iter().any(|r| r == "  Reading src/parse.rs"), "{joined}");
         assert!(!joined.contains("└"), "{joined}");
         // Plan marks: done checked, the rest open.
         assert!(all.contains("✓ Read the form") && all.contains("○ Run the tests"), "{all}");
