@@ -1,4 +1,4 @@
-//! On Windows, the KodAct cube becomes kodact.exe's icon (`assets/kodact.rc`).
+//! On Windows, Kod, KodAct's logo (see `design/brand`), becomes kodact.exe's icon (`assets/kodact.rc`).
 //! A build without a resource compiler fails here rather than ship no icon.
 
 fn main() {
