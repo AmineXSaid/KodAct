@@ -1124,14 +1124,25 @@ pub fn wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
     let mut out = vec![];
     for line in lines {
         let base = line.style;
-        let cells: Vec<(char, Style)> =
-            line.spans.iter().flat_map(|s| s.content.chars().map(move |c| (c, base.patch(s.style)))).collect();
+        let cells = cells_of(&line.spans, base);
         if cells.is_empty() {
             out.push(Line::default());
             continue;
         }
         // Continuation rows start under the text; never more than half the width.
         let indent = hanging_indent(&cells, width / 2).min(width / 2);
+        // A line that starts with a rail (a code block's `│` gutter, a quote's `│` bar,
+        // nested `│ │`) keeps it on its continuation rows, so the block's edge never breaks.
+        let rail = {
+            let mut k = cells.iter().take_while(|(c, _)| *c == ' ').count();
+            let mut end = 0;
+            while cells.get(k).is_some_and(|(c, _)| *c == '│') && cells.get(k + 1).is_some_and(|(c, _)| *c == ' ') {
+                k += 2;
+                end = k;
+            }
+            end
+        };
+        let rail = if rail > 0 && rail <= indent { rail } else { 0 };
         let mut start = 0;
         let mut first = true;
         while start < cells.len() {
@@ -1164,7 +1175,9 @@ pub fn wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
             }
             let mut row = spans_of(&cells[start..end]);
             if !first && indent > 0 {
-                row.spans.insert(0, Span::raw(" ".repeat(indent)));
+                let mut lead = if rail > 0 { spans_of(&cells[..rail]).spans } else { vec![] };
+                lead.push(Span::raw(" ".repeat(indent - rail)));
+                row.spans.splice(0..0, lead);
             }
             out.push(row);
             first = false;
@@ -1180,6 +1193,27 @@ pub fn wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
 
 fn width_of(cells: &[(char, Style)]) -> usize {
     cells.iter().map(|(c, _)| c.width().unwrap_or(0)).sum()
+}
+
+/// The line's characters, each with its style, as the terminal will draw them: a tab
+/// becomes spaces to the next 4-column stop, and other control characters are dropped.
+/// A raw tab would move the terminal's cursor past cells the screen thinks it drew,
+/// leaving stale letters behind until the next full redraw (a `Read` result's
+/// `1\tdef …` line numbers did this).
+fn cells_of(spans: &[Span<'static>], base: Style) -> Vec<(char, Style)> {
+    let mut cells: Vec<(char, Style)> = vec![];
+    for s in spans {
+        let style = base.patch(s.style);
+        for c in s.content.chars() {
+            if c == '\t' {
+                let col: usize = cells.iter().map(|(c, _)| c.width().unwrap_or(0)).sum();
+                cells.extend(std::iter::repeat_n((' ', style), 4 - col % 4));
+            } else if !c.is_control() {
+                cells.push((c, style));
+            }
+        }
+    }
+    cells
 }
 
 fn spans_of(cells: &[(char, Style)]) -> Line<'static> {
@@ -1327,6 +1361,29 @@ mod tests {
         }
         let out = at(md.finish(&T), 80);
         assert_eq!(out[2], "a    │    1");
+    }
+
+    #[test]
+    fn tabs_become_spaces_so_the_screen_and_terminal_agree() {
+        let rows = wrap(vec![Line::from("     1\tdef total(items):\r")], 80);
+        let text: String = rows[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "     1  def total(items):");
+    }
+
+    #[test]
+    fn a_wrapped_code_line_keeps_its_gutter_on_every_row() {
+        let line = Line::from(vec![
+            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            Span::raw("def total(items: list[tuple[float, int]]) -> float: return sum(p * q for p, q in items)"),
+        ]);
+        let rows = wrap(vec![line], 30);
+        assert!(rows.len() > 2);
+        for row in &rows {
+            let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(text.starts_with("│ "), "{text:?}");
+            assert!(text.chars().count() <= 30, "{text:?}");
+            assert_eq!(row.spans[0].style.fg, Some(Color::DarkGray));
+        }
     }
 
     #[test]
