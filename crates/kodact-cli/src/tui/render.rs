@@ -113,8 +113,6 @@ fn status_left(app: &App, now: Instant) -> (String, Style) {
         "bypassPermissions" => (format!("{} bypass permissions on", glyphs::MODE_BYPASS), t.error()),
         "dontAsk" => ("don't ask mode on (shift+tab to cycle)".into(), t.dim()),
         // The folder the session works in; `?` still lists the keys.
-        // The sidebar's foot shows the folder when it is open; the line keeps the keys.
-        _ if app.sidebar_shown.get() => (String::new(), t.subtle()),
         _ if !app.status.cwd.is_empty() => (super::short_path(&app.status.cwd), t.subtle()),
         _ => ("? for shortcuts".into(), t.subtle()),
     }
@@ -702,7 +700,7 @@ const SIDEBAR_SKILLS: usize = 5;
 /// sections keep one order, so the eye learns where things are: the session's
 /// title, its context, the plan, the MCP servers and the tools each brings, the
 /// skills (how many, and the ones this session used), the sub-agents at work,
-/// and at the foot the folder and the branch. Marks that fill tell work in flight
+/// with the folder and the branch under the title. Marks that fill tell work in flight
 /// from work done, and every state has a word or a shape as well as a colour. On a
 /// short window the lowest sections give way first; the plan never does.
 pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>> {
@@ -877,13 +875,13 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         agents
     };
 
-    // The folder and the branch at the foot.
-    let mut foot = vec![Line::from(Span::styled(keep_end(&super::short_path(&s.cwd), inner), t.subtle()))];
-    if !app.branch.is_empty() {
-        foot.push(Line::from(Span::styled(fit(&format!("⎇ {}", app.branch), inner), t.subtle())));
-    }
-    // A blank row at the top and under the foot; the sections between, a blank row apart.
-    let room = h.saturating_sub(foot.len() + 1);
+    // The folder and the branch, in the session's pane under its title: where the
+    // session is, read with what it is. A long folder loses whole folders from its start.
+    let branch = if app.branch.is_empty() { String::new() } else { format!("  ⎇ {}", fit(&app.branch, 16)) };
+    let folder = keep_end(&super::short_path(&s.cwd), inner.saturating_sub(text_width(&branch)).max(8));
+    let place = Line::from(vec![Span::styled(folder, t.subtle()), Span::styled(branch, t.subtle())]);
+    // A blank row under the panes.
+    let room = h.saturating_sub(1);
     // Each section as it shows with room to spare, and as it shows when space is short.
     // The sidebar fills the window: every section at its fullest while they all fit.
     // When they don't, the lowest sections tighten first, then give way, lowest first;
@@ -904,7 +902,14 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         named: true,
     };
     let mut sections: Vec<Section> = vec![
-        Section { named: false, ..section(title.clone(), title, true) },
+        Section {
+            named: false,
+            ..section(
+                title.iter().cloned().chain(std::iter::once(place.clone())).collect(),
+                title.into_iter().take(1).chain(std::iter::once(place)).collect(),
+                true,
+            )
+        },
         section(context.clone(), context, true),
         section(plan_rows(usize::MAX), plan_rows(2), false),
         section(mcp.clone(), mcp, true),
@@ -968,11 +973,6 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
     }
     out.truncate(room);
     out.resize(room, Line::default());
-    out.extend(foot.into_iter().map(|l| {
-        let mut spans = vec![Span::raw("  ")];
-        spans.extend(l.spans);
-        Line::from(spans)
-    }));
     out.push(Line::default());
     out
 }
@@ -1070,10 +1070,23 @@ fn status(app: &App, w: usize, now: Instant) -> Line<'static> {
     let lead = 2;
     // The folder keeps its end and at most half the line, so the model and context stay in view.
     let folder = !app.status.cwd.is_empty() && left == super::short_path(&app.status.cwd);
-    let mut left = if folder { keep_end(&left, (w / 2).max(8)) } else { fit(&left, w.saturating_sub(lead)) };
-    if folder && app.look == super::look::Look::Frame && !app.branch.is_empty() {
-        left = format!("{left}  ⎇ {}", fit(&app.branch, 24));
-    }
+    let left = if folder { keep_end(&left, (w / 2).max(8)) } else { fit(&left, w.saturating_sub(lead)) };
+    // The folder always shows: its parents quiet, its own name brighter, then the
+    // branch after a lime mark, so where you are reads at a glance.
+    let left_spans = if folder {
+        let t = app.theme;
+        let cut = left.rfind('/').map_or(0, |i| i + 1);
+        let mut out =
+            vec![Span::styled(left[..cut].to_string(), t.subtle()), Span::styled(left[cut..].to_string(), t.dim())];
+        if app.look == super::look::Look::Frame && !app.branch.is_empty() {
+            out.push(Span::styled("  ⎇ ", t.accent()));
+            out.push(Span::styled(fit(&app.branch, 24), t.subtle()));
+        }
+        out
+    } else {
+        vec![Span::styled(left, left_style)]
+    };
+    let left: String = left_spans.iter().map(|s| s.content.as_ref()).collect();
     let room = w.saturating_sub(text_width(&left) + 2 * lead + 2);
     // The front screen shows the model under its input; the status line keeps the version.
     let right = if app.look == super::look::Look::Frame && app.status_text.is_none() {
@@ -1088,7 +1101,8 @@ fn status(app: &App, w: usize, now: Instant) -> Line<'static> {
     // As far from the right edge as the folder is from the left, under the box's text.
     let gap = w.saturating_sub(lead + text_width(&left) + right_w + lead);
     let mut spans = vec![Span::raw("  ")];
-    spans.extend([Span::styled(left, left_style), Span::raw(" ".repeat(gap))]);
+    spans.extend(left_spans);
+    spans.push(Span::raw(" ".repeat(gap)));
     spans.extend(right);
     Line::from(spans)
 }
@@ -2672,12 +2686,12 @@ mod tests {
     }
 
     #[test]
-    fn the_status_line_leaves_the_folder_to_an_open_sidebar() {
+    fn the_status_line_always_shows_the_folder_even_with_the_sidebar_open() {
         let mut a = app(false);
         a.status.cwd = "/home/me/proj2".into();
-        a.sidebar_shown.set(true);
+        a.sidebar = true;
         let (rows, _) = draw(&live_view(&a, 100, 10), 100);
-        assert!(!rows.last().unwrap().contains("proj2"), "{rows:#?}");
+        assert!(rows.last().unwrap().contains("proj2"), "{rows:#?}");
     }
 
     #[test]
@@ -2792,10 +2806,10 @@ mod tests {
         let rows = side(&a, 60, now);
         let all = rows.join("\n");
         let at = |want: &str| rows.iter().position(|r| r.contains(want)).unwrap_or_else(|| panic!("{want}\n{all}"));
-        // Title, context, plan, MCP, skills, agents, then the folder at the foot.
+        // Title and folder, context, plan, MCP, skills, agents.
         let order = ["add an age check", "Context", "Plan", "MCP", "Skills", "Agents"].map(at);
         assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}\n{all}");
-        assert!(at("/p") > at("Agents"), "the folder at the foot\n{all}");
+        assert_eq!(at("/p"), at("add an age check") + 1, "the folder under the title\n{all}");
         // Each heading counts what its section holds, flush right.
         assert!(rows[at("Plan")].ends_with("1/3"), "{all}");
         assert!(rows[at("MCP")].ends_with("1 failed"), "{all}");
@@ -2870,12 +2884,13 @@ mod tests {
         let (agents, skills, mcp, context) =
             (first_gone("Agents"), first_gone("Skills"), first_gone("MCP"), first_gone("Context"));
         assert!(agents > skills && skills > mcp && mcp > context, "{agents} {skills} {mcp} {context}");
-        // The plan stays at every height that can hold it, and the folder stays at the foot.
+        // The plan stays at every height that can hold it; the folder stays with the session's pane.
         for h in 10..60 {
             let rows = side(&a, h, now);
             assert_eq!(rows.len(), h);
             assert!(rows.join("\n").contains("Add the field"), "height {h}: {rows:#?}");
-            assert!(rows.iter().any(|r| r.contains("/p")), "height {h}");
+            let session = rows.iter().any(|r| r.contains("session"));
+            assert_eq!(rows.iter().any(|r| r.contains("/p")), session, "height {h}");
         }
     }
 

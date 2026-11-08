@@ -431,7 +431,7 @@ with `{"text", "cwd"}`:
   - **Agents** (`2 running`), only while sub-agents run: each with what it
     was asked and its step count, then its kind and how long it has run, and
     its last 3 steps as a tree;
-  - the folder and the branch at the foot.
+  - the folder and the branch in the session pane under its title.
 
   Work in flight has a mark that fills: a braille cell that fills from the
   bottom, dot by dot (`⡀ ⣀ ⣄ ⣤ ⣦ ⣶ ⣷ ⣿`), and drains again, its colour

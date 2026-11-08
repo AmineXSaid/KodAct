@@ -514,9 +514,6 @@ pub struct App {
     pub first_run: bool,
     /// The sidebar is open (Ctrl+B, full screen from [`SIDEBAR_MIN_COLS`] columns).
     pub sidebar: bool,
-    /// The sidebar is on screen this frame (open, and the window wide enough); set as the
-    /// frame is drawn, so the status line can leave the folder to the sidebar's foot.
-    pub sidebar_shown: std::cell::Cell<bool>,
     /// The session's title for the sidebar: its first prompt, on one line.
     pub title: String,
     /// MCP servers and their state: (name, status).
@@ -1059,7 +1056,6 @@ impl App {
             front: false,
             first_run: false,
             sidebar: false,
-            sidebar_shown: Default::default(),
             title: String::new(),
             mcp: vec![],
             mcp_tools: Default::default(),
