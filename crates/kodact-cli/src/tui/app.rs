@@ -755,7 +755,14 @@ pub fn lay_out(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
                 let hunks: Vec<Value> = serde_json::from_str(&l.spans[4].content).unwrap_or_default();
                 out.extend(diff_rows(&hunks, styles, width));
             }
-            _ => out.push(l),
+            // A table, anywhere on the line: what comes before it (the answer's mark) leads it.
+            _ => match l.spans.iter().position(|s| s.content == super::text::TABLE_MARK) {
+                Some(at) => {
+                    let lead = l.spans[..at].to_vec();
+                    out.extend(super::text::lay_out_table(lead, &l.spans[at..], width));
+                }
+                None => out.push(l),
+            },
         }
     }
     out

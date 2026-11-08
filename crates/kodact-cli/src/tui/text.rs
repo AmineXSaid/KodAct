@@ -260,6 +260,152 @@ pub struct Markdown {
     table: Vec<String>,
 }
 
+/// The start of a line that stands for a table until it is laid out ([`lay_out_table`]).
+pub const TABLE_MARK: &str = "\u{e000}kodact-table";
+const TABLE_HEAD: &str = "\u{e001}H";
+const TABLE_ROW: &str = "\u{e001}R";
+const TABLE_CELL: &str = "\u{e002}L";
+const TABLE_CELL_RIGHT: &str = "\u{e002}R";
+/// The narrowest a column is squeezed to before the table is shown as stacked rows.
+const MIN_COLUMN: usize = 6;
+
+/// A table placeholder laid out in `width` columns, after `lead` (the answer's mark or
+/// indent, kept on the first row). With room, aligned columns with `│` between them and a
+/// rule under the header. Short of room, the widest columns give way first and long cells
+/// wrap inside their own column, so the bars stay straight. Too narrow for that, each row
+/// becomes a small block of `Header: value` lines.
+pub fn lay_out_table(lead: Vec<Span<'static>>, spans: &[Span<'static>], cols: u16) -> Vec<Line<'static>> {
+    let rule = spans[0].style;
+    // Decode: rows of cells, each cell its spans; which row is the header; right-aligned columns.
+    let mut rows: Vec<(bool, Vec<Vec<Span<'static>>>)> = vec![];
+    let mut right: Vec<bool> = vec![];
+    for s in &spans[1..] {
+        match s.content.as_ref() {
+            TABLE_HEAD | TABLE_ROW => rows.push((s.content == TABLE_HEAD, vec![])),
+            TABLE_CELL | TABLE_CELL_RIGHT => {
+                if let Some((_, cells)) = rows.last_mut() {
+                    if right.len() <= cells.len() {
+                        right.push(s.content == TABLE_CELL_RIGHT);
+                    }
+                    cells.push(vec![]);
+                }
+            }
+            _ => {
+                if let Some(cell) = rows.last_mut().and_then(|(_, c)| c.last_mut()) {
+                    cell.push(s.clone());
+                }
+            }
+        }
+    }
+    let n = rows.iter().map(|(_, c)| c.len()).max().unwrap_or(0);
+    let lead_w: usize = lead.iter().map(|s| width(&s.content)).sum();
+    let room = (cols as usize).saturating_sub(lead_w).max(1);
+    let cell_w = |c: &[Span<'static>]| c.iter().map(|s| width(&s.content)).sum::<usize>();
+    let natural: Vec<usize> = (0..n)
+        .map(|i| rows.iter().filter_map(|(_, c)| c.get(i)).map(|c| cell_w(c)).max().unwrap_or(0).max(1))
+        .collect();
+    let gaps = 3 * n.saturating_sub(1);
+    let mut out: Vec<Line<'static>> = vec![];
+    let indent = || Span::raw(" ".repeat(lead_w));
+    let mut first = true;
+    let mut push = |out: &mut Vec<Line<'static>>, mut l: Vec<Span<'static>>| {
+        let mut spans = if first { lead.clone() } else { vec![indent()] };
+        first = false;
+        spans.append(&mut l);
+        out.push(Line::from(spans));
+    };
+    if n == 0 {
+        return out;
+    }
+    // Columns: as they are when they fit; else the widest give way first. A column is never
+    // squeezed below its longest word (up to 16 columns): past that, the table stacks.
+    let longest_word: Vec<usize> = (0..n)
+        .map(|i| {
+            rows.iter()
+                .filter_map(|(_, c)| c.get(i))
+                .flat_map(|c| c.iter().flat_map(|s| s.content.split_whitespace().map(width).collect::<Vec<_>>()))
+                .max()
+                .unwrap_or(1)
+                .clamp(1, 16)
+        })
+        .collect();
+    let mut widths = natural.clone();
+    let budget = room.saturating_sub(gaps).max(n);
+    while widths.iter().sum::<usize>() > budget {
+        let (i, w) = widths.iter().copied().enumerate().max_by_key(|(_, w)| *w).unwrap();
+        if w <= MIN_COLUMN.min(natural[i]) {
+            break;
+        }
+        widths[i] = w - 1;
+    }
+    let squeezed = widths.iter().sum::<usize>() > budget || (0..n).any(|i| widths[i] < longest_word[i]);
+    if n > 1 && squeezed {
+        // Stacked: each row a block of `Header: value`, the header's own row naming the fields.
+        let header: Option<Vec<Vec<Span<'static>>>> = rows.iter().find(|(h, _)| *h).map(|(_, c)| c.clone());
+        for (ri, (is_head, cells)) in rows.iter().enumerate() {
+            if *is_head {
+                continue;
+            }
+            if ri > 0 && !out.is_empty() {
+                push(&mut out, vec![Span::styled("─".repeat(room.min(24)), rule)]);
+            }
+            for (i, cell) in cells.iter().enumerate() {
+                let mut line: Vec<Span<'static>> = vec![];
+                if let Some(h) = header.as_ref().and_then(|h| h.get(i)) {
+                    line.extend(h.iter().cloned());
+                    line.push(Span::styled(": ", rule));
+                }
+                line.extend(cell.iter().cloned());
+                for l in wrap(vec![Line::from(line)], room as u16) {
+                    push(&mut out, l.spans);
+                }
+            }
+        }
+        return out;
+    }
+    let bar = || Span::styled(" │ ", rule);
+    for (ri, (is_head, cells)) in rows.iter().enumerate() {
+        // Each cell wrapped inside its column; the row as tall as its tallest cell.
+        let parts: Vec<Vec<Line<'static>>> = (0..n)
+            .map(|i| {
+                let c = cells.get(i).cloned().unwrap_or_default();
+                if c.is_empty() {
+                    vec![Line::default()]
+                } else {
+                    wrap(vec![Line::from(c)], widths[i] as u16)
+                }
+            })
+            .collect();
+        let tall = parts.iter().map(Vec::len).max().unwrap_or(1);
+        for k in 0..tall {
+            let mut line: Vec<Span<'static>> = vec![];
+            for i in 0..n {
+                if i > 0 {
+                    line.push(bar());
+                }
+                let piece = parts[i].get(k).cloned().unwrap_or_default();
+                let used: usize = piece.spans.iter().map(|s| width(&s.content)).sum();
+                let gap = Span::raw(" ".repeat(widths[i].saturating_sub(used)));
+                if right.get(i).copied().unwrap_or(false) {
+                    line.push(gap);
+                    line.extend(piece.spans);
+                } else {
+                    line.extend(piece.spans);
+                    if i + 1 < n {
+                        line.push(gap);
+                    }
+                }
+            }
+            push(&mut out, line);
+        }
+        if *is_head && ri == 0 {
+            let rule_row: Vec<String> = widths.iter().map(|w| "─".repeat(*w)).collect();
+            push(&mut out, vec![Span::styled(rule_row.join("─┼─"), rule)]);
+        }
+    }
+    out
+}
+
 /// A table row: `| a | b |`.
 fn is_table_row(s: &str) -> bool {
     let t = s.trim();
@@ -357,53 +503,31 @@ impl Markdown {
             .find(|r| is_separator(r))
             .map(|r| (0..n).map(|i| r.get(i).is_some_and(|c| c.ends_with(':') && !c.starts_with(':'))).collect())
             .unwrap_or_else(|| vec![false; n]);
-        let mut widths = vec![0usize; n];
-        for r in rows.iter().filter(|r| !is_separator(r)) {
-            for (i, c) in r.iter().enumerate() {
-                let plain: String = inline(c, t).iter().map(|s| s.content.as_ref()).collect();
-                widths[i] = widths[i].max(width(&plain));
-            }
-        }
-        let bar = || Span::styled(" │ ", t.hairline());
-        let mut out = vec![];
+        // The cells, styled now; laid out later, at the width of the moment (`lay_out_table`),
+        // so a narrower window wraps them inside their columns instead of breaking the rows.
+        let has_header = rows.get(1).is_some_and(|r| is_separator(r));
+        let mut spans = vec![Span::styled(TABLE_MARK, t.hairline())];
         for (ri, r) in rows.iter().enumerate() {
             if is_separator(r) {
-                let rule: Vec<String> = widths.iter().map(|w| "─".repeat(*w)).collect();
-                out.push(Line::from(Span::styled(rule.join("─┼─"), t.hairline())));
                 continue;
             }
-            let header = ri == 0 && rows.get(1).is_some_and(|r| is_separator(r));
-            let mut spans = vec![];
-            for (i, w) in widths.iter().enumerate() {
-                if i > 0 {
-                    spans.push(bar());
-                }
+            let header = ri == 0 && has_header;
+            spans.push(Span::raw(if header { TABLE_HEAD } else { TABLE_ROW }));
+            for i in 0..n {
+                spans.push(Span::raw(if right[i] { TABLE_CELL_RIGHT } else { TABLE_CELL }));
                 let c = r.get(i).map(String::as_str).unwrap_or("");
                 let mut cell = inline(c, t);
                 // Code in a cell keeps its colour, not its shade: shaded blocks break the columns.
                 for s in &mut cell {
                     s.style.bg = None;
-                }
-                if header {
-                    for s in &mut cell {
+                    if header {
                         s.style = s.style.patch(t.teal().add_modifier(Modifier::BOLD));
                     }
                 }
-                let used: usize = cell.iter().map(|s| width(&s.content)).sum();
-                let gap = Span::raw(" ".repeat(w.saturating_sub(used)));
-                if right[i] {
-                    spans.push(gap);
-                    spans.extend(cell);
-                } else {
-                    spans.extend(cell);
-                    if i + 1 < widths.len() {
-                        spans.push(gap);
-                    }
-                }
+                spans.extend(cell.into_iter().filter(|s| !s.content.is_empty()));
             }
-            out.push(Line::from(spans));
         }
-        out
+        vec![Line::from(spans)]
     }
 
     /// One line. A code fence opens with its language on a gutter line and
@@ -1185,11 +1309,15 @@ mod tests {
 
     #[test]
     fn tables_line_up_when_they_end() {
+        // Laid out at a width, as the transcript is.
+        let at = |lines: Vec<Line<'static>>, w: u16| -> Vec<String> {
+            crate::tui::app::lay_out(lines, w).iter().map(plain).collect()
+        };
         let mut md = Markdown::default();
         assert!(md.push("| Check | Result |", &T).is_empty());
         assert!(md.push("| --- | --- |", &T).is_empty());
         assert!(md.push("| `cargo test` | 12 passed |", &T).is_empty());
-        let out: Vec<String> = md.push("After.", &T).iter().map(plain).collect();
+        let out = at(md.push("After.", &T), 80);
         assert_eq!(out, ["Check      │ Result", "───────────┼──────────", "cargo test │ 12 passed", "After."]);
         assert!(md.push("| a | b |", &T).is_empty());
         assert_eq!(md.finish(&T).len(), 1, "a table at the end of a message is drawn by finish");
@@ -1197,8 +1325,39 @@ mod tests {
         for r in ["| Name | Cost |", "| --- | ---: |", "| a | 1 |", "| bb | 100 |"] {
             md.push(r, &T);
         }
-        let out: Vec<String> = md.finish(&T).iter().map(plain).collect();
+        let out = at(md.finish(&T), 80);
         assert_eq!(out[2], "a    │    1");
+    }
+
+    #[test]
+    fn a_table_fits_a_narrow_window_without_breaking_its_rows() {
+        let at = |w: u16| -> Vec<String> {
+            let mut md = Markdown::default();
+            for r in [
+                "| Setting | What it does |",
+                "| --- | --- |",
+                "| autoCompact | Summarizes the conversation when the context is nearly full |",
+                "| theme | dark, light or none |",
+            ] {
+                md.push(r, &T);
+            }
+            crate::tui::app::lay_out(md.finish(&T), w).iter().map(plain).collect()
+        };
+        // Short of room: the long column wraps inside itself; every row stays within the
+        // width and the bars stay in one column.
+        let rows = at(40);
+        assert!(rows.iter().all(|r| width(r) <= 40), "{rows:#?}");
+        let bars: Vec<usize> = rows.iter().filter_map(|r| r.chars().position(|c| c == '│' || c == '┼')).collect();
+        assert!(bars.len() >= 5 && bars.windows(2).all(|p| p[0] == p[1]), "straight bars: {rows:#?}");
+        assert!(rows.iter().any(|r| r.starts_with("autoCompact │ Summarizes")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.starts_with("            │ ")), "a cell continues in its column: {rows:#?}");
+        // Very narrow: each row a block of `Header: value`.
+        let rows = at(20);
+        assert!(rows.iter().all(|r| width(r) <= 20), "{rows:#?}");
+        assert!(rows.contains(&"Setting: theme".to_string()), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.starts_with("What it does: dark")), "{rows:#?}");
+        // Wide: the table as written.
+        assert_eq!(at(120)[0], "Setting     │ What it does");
     }
 
     #[test]
