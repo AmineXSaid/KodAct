@@ -1,0 +1,17 @@
+{
+  "instruction": "./build.sh fails. Fix the pipeline so that it passes. Do not change build.sh or pipeline/runner.py. When the build passes, write FIXES.toml at the top of the project that lists the stages you changed, in pipeline order, as `stages = [\"...\"]`, using the stage names the build prints.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "context",
+  "tags": [
+    "python",
+    "long-output",
+    "compaction",
+    "small-window",
+    "deliverable"
+  ],
+  "timeout_secs": 900,
+  "args": [
+    "--autocompact",
+    "32k"
+  ]
+}

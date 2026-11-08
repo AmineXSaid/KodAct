@@ -470,7 +470,17 @@ pub async fn build(
             return Err(crate::exit::Fail::from(e));
         }
     };
-    let warnings: Vec<String> = session.warnings.iter().chain(&mcp_warnings).cloned().collect();
+    let mut warnings: Vec<String> = session.warnings.iter().chain(&mcp_warnings).cloned().collect();
+    // An unknown model: its endpoint may report its window. Wait for the listing a moment,
+    // so the notice doesn't say "200,000 assumed" when the endpoint has just said 32,768.
+    if let Some(i) = warnings.iter().position(|w| w.starts_with(kodact_core::UNKNOWN_MODEL_PREFIX)) {
+        let model = warnings[i][kodact_core::UNKNOWN_MODEL_PREFIX.len()..].split(':').next().unwrap_or("").to_string();
+        let provider = session.engine.provider();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), provider.list_models()).await;
+        if kodact_api::models::limits_source(&model) == kodact_api::models::LimitsSource::Listed {
+            warnings.remove(i);
+        }
+    }
     let mut driver = Driver::new(session, Surface::Tui, Some(mcp));
     driver.set_rebuild(rebuild.0, rebuild.1, rebuild.2);
     Ok((driver, warnings))

@@ -23,9 +23,15 @@ pub const MICRO_KEEP_TURNS: usize = 3;
 /// Reserved for the summary itself and the next reply.
 pub const AUTOCOMPACT_BUFFER: u64 = 13_000;
 
-/// Context tokens at which auto-compaction runs.
+/// Context tokens at which auto-compaction runs: the window less room for the next
+/// reply and for the summary. Both reserves scale with the window, so a small model
+/// (32k) still gets most of its window before compacting, instead of a threshold of
+/// zero that would compact every turn; a large one (200k and up) keeps the full
+/// reserves: 32k for the reply and [`AUTOCOMPACT_BUFFER`] for the summary.
 pub fn autocompact_threshold(window: u64, max_output: u32) -> u64 {
-    window.saturating_sub(u64::from(max_output.min(32_000))).saturating_sub(AUTOCOMPACT_BUFFER)
+    let reply = u64::from(max_output.min(32_000)).min(window / 4);
+    let buffer = AUTOCOMPACT_BUFFER.min(window / 8);
+    window.saturating_sub(reply).saturating_sub(buffer)
 }
 
 /// Context tokens above which micro-compaction runs (half the auto threshold).
@@ -256,7 +262,10 @@ mod tests {
         assert_eq!(autocompact_threshold(200_000, 32_000), 155_000);
         assert_eq!(autocompact_threshold(1_000_000, 64_000), 955_000);
         assert_eq!(micro_threshold(200_000, 32_000), 77_500);
-        assert_eq!(autocompact_threshold(10_000, 32_000), 0);
+        // A small window keeps most of itself before compacting, never zero.
+        assert_eq!(autocompact_threshold(32_768, 32_000), 20_480);
+        assert_eq!(autocompact_threshold(10_000, 32_000), 6_250);
+        assert_eq!(autocompact_threshold(131_072, 32_000), 86_072);
     }
 
     #[test]

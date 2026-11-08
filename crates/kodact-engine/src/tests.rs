@@ -539,8 +539,9 @@ fn usage(input: u64) -> kodact_types::Usage {
 }
 
 fn small_window() -> EngineConfig {
-    // threshold = 60_000 - 32_000 - 13_000 = 15_000; micro at 7_500.
-    EngineConfig { autocompact_window: Some(60_000), ..Default::default() }
+    // threshold = 24_000 - 6_000 (reply, a quarter) - 3_000 (summary, an eighth) = 15_000;
+    // micro at 7_500.
+    EngineConfig { autocompact_window: Some(24_000), ..Default::default() }
 }
 
 fn result_text(req: &kodact_types::MessagesRequest, id: &str) -> Option<String> {
