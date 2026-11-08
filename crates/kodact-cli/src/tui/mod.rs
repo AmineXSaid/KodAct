@@ -311,6 +311,7 @@ impl<B: Backend> Full<B> {
         // The sidebar takes the right of a wide window, once the conversation has begun.
         let side = app.sidebar && !app.front && size.width >= app::SIDEBAR_MIN_COLS;
         let side_w = if side { render::sidebar_width(size.width) } else { 0 };
+        app.sidebar_shown.set(side);
         let width = full_w - side_w - if side { 2 } else { 0 };
         if width != self.wrapped_w {
             self.wrapped = indented(self.transcript.clone(), width);

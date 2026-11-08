@@ -113,6 +113,8 @@ fn status_left(app: &App, now: Instant) -> (String, Style) {
         "bypassPermissions" => (format!("{} bypass permissions on", glyphs::MODE_BYPASS), t.error()),
         "dontAsk" => ("don't ask mode on (shift+tab to cycle)".into(), t.dim()),
         // The folder the session works in; `?` still lists the keys.
+        // The sidebar's foot shows the folder when it is open; the line keeps the keys.
+        _ if app.sidebar_shown.get() => (String::new(), t.subtle()),
         _ if !app.status.cwd.is_empty() => (super::short_path(&app.status.cwd), t.subtle()),
         _ => ("? for shortcuts".into(), t.subtle()),
     }
@@ -153,6 +155,12 @@ fn spend(app: &App) -> Option<String> {
 fn keep_end(s: &str, max: usize) -> String {
     if text_width(s) <= max {
         return s.to_string();
+    }
+    // A path loses whole folders from its start, so what stays reads as names:
+    // `…/demo/proj2`, never `…f31-5eaf/demo/proj2`.
+    if let Some(cut) = s.char_indices().filter(|&(_, c)| c == '/').map(|(i, _)| i).find(|&i| text_width(&s[i..]) < max)
+    {
+        return format!("…{}", &s[cut..]);
     }
     let mut tail: Vec<char> = vec![];
     let mut used = 1;
@@ -2652,6 +2660,24 @@ mod tests {
         let last = rows.last().unwrap();
         assert!(last.starts_with("  …") && last.contains("/demo/proj2"), "{last}");
         assert!(last.contains("opus"), "the model stays: {last}");
+    }
+
+    #[test]
+    fn a_long_folder_loses_whole_folders_never_half_a_name() {
+        let p = "/tmp/claude-0/-home-user-ForgeCLI/f668c950-af31-5eaf-a001-d64346c7dabd/scratchpad/demo/proj2";
+        assert_eq!(keep_end(p, 30), "…/scratchpad/demo/proj2");
+        assert_eq!(keep_end(p, 12), "…/demo/proj2");
+        assert_eq!(keep_end("/a/a-very-long-project-name", 10), "…ject-name", "one name too long is cut");
+        assert_eq!(keep_end("~/proj", 30), "~/proj");
+    }
+
+    #[test]
+    fn the_status_line_leaves_the_folder_to_an_open_sidebar() {
+        let mut a = app(false);
+        a.status.cwd = "/home/me/proj2".into();
+        a.sidebar_shown.set(true);
+        let (rows, _) = draw(&live_view(&a, 100, 10), 100);
+        assert!(!rows.last().unwrap().contains("proj2"), "{rows:#?}");
     }
 
     #[test]
