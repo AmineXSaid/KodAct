@@ -513,8 +513,8 @@ impl Markdown {
             }
             let header = ri == 0 && has_header;
             spans.push(Span::raw(if header { TABLE_HEAD } else { TABLE_ROW }));
-            for i in 0..n {
-                spans.push(Span::raw(if right[i] { TABLE_CELL_RIGHT } else { TABLE_CELL }));
+            for (i, &to_right) in right.iter().enumerate().take(n) {
+                spans.push(Span::raw(if to_right { TABLE_CELL_RIGHT } else { TABLE_CELL }));
                 let c = r.get(i).map(String::as_str).unwrap_or("");
                 let mut cell = inline(c, t);
                 // Code in a cell keeps its colour, not its shade: shaded blocks break the columns.
