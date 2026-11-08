@@ -219,13 +219,13 @@ fn fit_words(s: &str, max: usize) -> String {
 const FAILURE_LINES: usize = 5;
 
 /// A line of test-runner progress only (`....F.s`), which says nothing on its own.
-fn progress_only(l: &str) -> bool {
+pub(super) fn progress_only(l: &str) -> bool {
     let l = l.trim();
     !l.is_empty() && l.chars().all(|c| matches!(c, '.' | 'F' | 'E' | 's' | 'x' | 'X'))
 }
 
 /// A line that names an error, drawn in red in a failure's output.
-fn names_an_error(l: &str) -> bool {
+pub(super) fn names_an_error(l: &str) -> bool {
     let lower = l.to_lowercase();
     ["error", "failed", "fail:", "panicked", "exception", "not found", "denied", "exit code", "traceback"]
         .iter()
@@ -755,6 +755,7 @@ pub fn lay_out(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
     let mut out = Vec::with_capacity(lines.len());
     for l in lines {
         match l.spans.first() {
+            Some(_) if super::shellbox::is_placeholder(&l) => out.extend(super::shellbox::lay_out(&l, width)),
             Some(s) if s.content == DIFF_MARK && l.spans.len() == 5 => {
                 let styles = [l.spans[0].style, l.spans[1].style, l.spans[2].style, l.spans[3].style];
                 let hunks: Vec<Value> = serde_json::from_str(&l.spans[4].content).unwrap_or_default();
@@ -913,6 +914,25 @@ pub fn agent_tree(t: &Theme, trail: &[String], running: bool) -> Vec<Line<'stati
             Line::from(vec![Span::raw("  "), Span::styled(branch, t.hairline()), Span::styled(fit_words(&r, 120), st)])
         })
         .collect()
+}
+
+/// The command a shell step runs, when this style draws it in a box (every style but
+/// the plain ones).
+pub fn shell_box(look: super::look::Look, name: &str, input: &Value) -> Option<String> {
+    if look.plain_steps() || !matches!(name, "Bash" | "PowerShell") {
+        return None;
+    }
+    input["command"].as_str().filter(|c| !c.trim().is_empty()).map(str::to_string)
+}
+
+/// A duration as a step shows it: `0.4s`, `6.2s`, `1m 05s`.
+pub fn seconds(d: std::time::Duration) -> String {
+    let s = d.as_secs_f64();
+    if s < 60.0 {
+        format!("{s:.1}s")
+    } else {
+        format!("{}m {:02}s", d.as_secs() / 60, d.as_secs() % 60)
+    }
 }
 
 /// A shell command's description, when the model gave one: what the command is for.
@@ -1375,13 +1395,21 @@ impl App {
                 Line::from(spans)
             }
         };
+        let mut line = line;
+        // A command keeps how long it ran; its box below holds the command itself.
+        let boxed = shell_box(self.look, &r.name, &r.input).is_some();
+        if boxed {
+            // Before the word for how it ended: `✗ Run the tests  6.2s · failed`.
+            let at = line.spans.iter().rposition(|s| s.content.starts_with(" · ")).unwrap_or(line.spans.len());
+            line.spans.insert(at, Span::styled(format!("  {}", seconds(r.since.elapsed())), t.subtle()));
+        }
         self.pending.push(line);
         // A sub-agent's work, kept small: its first step, how many more, its last two.
         if !self.look.plain_steps() && is_agent_tool(&r.name) && !r.trail.is_empty() {
             self.pending.extend(agent_tree(&t, &r.trail, false));
         }
         // A described command: the command itself under its purpose, as a terminal shows it.
-        if !self.look.plain_steps() && shell_description(&r.name, &r.input).is_some() {
+        if !boxed && !self.look.plain_steps() && shell_description(&r.name, &r.input).is_some() {
             self.pending.push(shell_command_line(&t, &r.input));
         }
     }
@@ -1652,7 +1680,7 @@ impl App {
                 }
                 for b in &message.content {
                     if let ContentBlock::ToolResult { tool_use_id, content, is_error, .. } = b {
-                        let tool = self.calls.remove(tool_use_id).map(|(n, _)| n).unwrap_or_default();
+                        let (tool, input) = self.calls.remove(tool_use_id).unwrap_or_default();
                         let failed = *is_error == Some(true);
                         if matches!(tool.as_str(), "Task" | "Agent") {
                             self.agents_done += 1;
@@ -1661,13 +1689,22 @@ impl App {
                             let r = self.running.remove(i);
                             self.commit_tool(r, if failed { ToolEnd::Failed } else { ToolEnd::Done });
                         }
-                        let lines = result_lines(
-                            &self.theme,
-                            &tool,
-                            &content.to_text(),
-                            *is_error == Some(true),
-                            tool_use_result.as_ref(),
-                        );
+                        // A shell command: its command and output in one box, laid out at the
+                        // width of the moment.
+                        let shell = shell_box(self.look, &tool, &input);
+                        let lines = if let Some(cmd) = shell {
+                            let (code, output) = super::shellbox::split_exit(&content.to_text());
+                            let state = super::shellbox::State::Ended { code, failed };
+                            vec![super::shellbox::placeholder(&self.theme, &cmd, &output, state)]
+                        } else {
+                            result_lines(
+                                &self.theme,
+                                &tool,
+                                &content.to_text(),
+                                *is_error == Some(true),
+                                tool_use_result.as_ref(),
+                            )
+                        };
                         // Plain styles drop the result's `└` and keep it quiet, under the step.
                         let lines = if self.look.plain_steps() {
                             lines
@@ -1918,6 +1955,16 @@ impl App {
 
     /// A tool call's header with its paths relative to the session's folder.
     fn header(&self, name: &str, input: &Value, done: bool) -> Vec<Span<'static>> {
+        // A boxed command without a description: the box shows the command, so the
+        // header names only the program it runs (`Ran cargo`).
+        if let Some(cmd) = shell_box(self.look, name, input).filter(|_| shell_description(name, input).is_none()) {
+            let program = cmd.split_whitespace().find(|w| !w.contains('=')).unwrap_or("").to_string();
+            return vec![
+                Span::styled(tool_verb(name, done).to_string(), self.theme.bold()),
+                Span::raw(" "),
+                Span::styled(program, self.theme.role(super::palette::SUCCESS)),
+            ];
+        }
         relative_spans(tool_header(&self.theme, name, input, done), &self.status.cwd)
     }
 
@@ -3146,7 +3193,8 @@ mod tests {
         // The call waits in the live region with a turning dot until it answers.
         assert!(texts(&a.take_pending()).is_empty());
         assert_eq!(a.running.len(), 1);
-        assert_eq!(texts(&[Line::from(a.running[0].header.clone())]), ["Running cargo test"]);
+        // The box under it shows the command; the header names the program.
+        assert_eq!(texts(&[Line::from(a.running[0].header.clone())]), ["Running cargo"]);
         a.on_event(UiEvent::Engine(EngineEvent::User {
             message: kodact_types::Message::user(vec![ContentBlock::tool_result("t1", "ok\n2 passed", false)]),
             uuid: "u2".into(),
@@ -3154,10 +3202,22 @@ mod tests {
             is_meta: false,
             parent_tool_use_id: None,
         }));
+        // The header goes out with its result: the command and its output in a box.
+        let out = texts(&lay_out(a.take_pending(), 40));
+        assert!(out[1].starts_with("✓ Ran cargo  0."), "{out:#?}");
         assert_eq!(
-            texts(&a.take_pending()),
-            ["", "✓ Ran cargo test", "  └ ok", "    2 passed"],
-            "the header goes out with its result; a command shows its first lines"
+            out[2..].iter().map(|r| r.trim_end()).collect::<Vec<_>>(),
+            [
+                "  ╭────────────────────────────────────╮",
+                "  │ $ cargo test                       │",
+                "  ├────────────────────────────────────┤",
+                "  │ ok                                 │",
+                "  │ 2 passed                           │",
+                "  ├────────────────────────────────────┤",
+                "  │  exit 0   2 lines                  │",
+                "  ╰────────────────────────────────────╯",
+            ],
+            "{out:#?}"
         );
         assert!(a.running.is_empty());
         let _ = MessageContent::Text(String::new());
@@ -3198,8 +3258,9 @@ mod tests {
         };
         assert_eq!(step_for(Look::Bare), "  ran cargo test");
         assert_eq!(step_for(Look::Ledger), "  ran cargo test");
-        assert_eq!(step_for(Look::Glow), "✓ Ran cargo test");
-        assert_eq!(step_for(Look::Frame), "✓ Ran cargo test");
+        // Boxed styles: the program and how long it ran; the box holds the command.
+        assert!(step_for(Look::Glow).starts_with("✓ Ran cargo  0."), "{}", step_for(Look::Glow));
+        assert!(step_for(Look::Frame).starts_with("✓ Ran cargo  0."), "{}", step_for(Look::Frame));
         // A finished sub-agent keeps a short tree: its first step, how many more, its last two.
         let mut a = app();
         a.look = Look::Frame;
@@ -3221,7 +3282,7 @@ mod tests {
             "{rows:?}"
         );
         assert_eq!(agent_tree(&a.theme, &["a".into(), "b".into()], true).len(), 2, "a short trail is shown whole");
-        // A described command: its purpose, then the command itself, as a terminal shows it.
+        // A described command: its purpose and how long it ran; the box holds the command.
         let mut a = app();
         a.look = Look::Frame;
         let r = Running {
@@ -3236,8 +3297,25 @@ mod tests {
         };
         a.commit_tool(r, ToolEnd::Failed);
         let rows = texts(&a.take_pending());
-        assert_eq!(rows[rows.len() - 2], "✗ Run the cart tests · failed", "{rows:?}");
-        assert_eq!(rows[rows.len() - 1], "  $ python3 -m pytest -q …", "a second line is marked, not shown");
+        let last = rows.last().unwrap();
+        assert!(last.starts_with("✗ Run the cart tests  0.") && last.ends_with("s · failed"), "{rows:?}");
+        // The plain styles keep the command on its own line under the purpose.
+        let mut a = app();
+        a.look = Look::Bare;
+        a.commit_tool(
+            Running {
+                id: "t".into(),
+                header: vec![],
+                name: "Bash".into(),
+                input: json!({"command": "python3 -m pytest -q", "description": "Run the cart tests"}),
+                since: Instant::now(),
+                step: None,
+                steps: 0,
+                trail: Vec::new(),
+            },
+            ToolEnd::Done,
+        );
+        assert!(texts(&a.take_pending()).iter().all(|r| !r.contains('\u{e000}')));
         assert_eq!(
             texts(&[Line::from(tool_header(&a.theme, "Bash", &json!({"command": "ls", "description": " "}), true))]),
             ["Ran ls"]

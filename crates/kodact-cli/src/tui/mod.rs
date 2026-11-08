@@ -24,6 +24,7 @@ pub mod look;
 pub mod palette;
 pub mod render;
 pub mod session;
+pub mod shellbox;
 pub mod text;
 
 use std::io::Write;

@@ -144,6 +144,10 @@ pub const STRONG: Role = role(0xfbf9f3, 0x08090b, Color::White, Color::Black);
 pub const CODE_BG: Role = role(0x22262b, 0xece6db, Color::Reset, Color::Reset);
 /// The person's prompt: a raised surface (the logo's tile).
 pub const PROMPT_BG: Role = role(0x1b1f23, 0xebeae4, Color::DarkGray, Color::Gray);
+/// Behind a command's `exit 0` badge.
+pub const SUCCESS_BG: Role = role(0x16301f, 0xdff1e4, Color::Reset, Color::Reset);
+/// Behind a failed command's `exit 1` badge.
+pub const DANGER_BG: Role = role(0x3a1714, 0xf8dedb, Color::Reset, Color::Reset);
 /// The glow style's band behind the person's words: a lime tint.
 pub const WARM_BG: Role = role(0x1c230f, 0xe8f1d2, Color::DarkGray, Color::Gray);
 /// Text on [`PROMPT_BG`].

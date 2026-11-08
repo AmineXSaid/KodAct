@@ -1356,6 +1356,10 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
         }
         spinner.push(Line::default());
         spinner.extend(text::wrap(vec![Line::from(spans)], tw as u16).into_iter().take(2));
+        // A shell command runs in its box: the command, and a cursor until it ends.
+        if let Some(cmd) = super::app::shell_box(app.look, &r.name, &r.input) {
+            spinner.extend(super::shellbox::running(&t, &cmd, tw));
+        }
         // Its latest steps in a small tree under it, so delegated work stays visible.
         if is_agent(&r.name) && !r.trail.is_empty() {
             let tree = super::app::agent_tree(&t, &r.trail, true);

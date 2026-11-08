@@ -415,6 +415,15 @@ with `{"text", "cwd"}`:
   answer or a step begins, the thought folds into the transcript as
   `∴ Thought for Ns` with its words (at most 600 characters). Any other wait
   says `Working…`.
+- **Shell commands** run in a box: the step's purpose (or `Ran cargo`) and how
+  long it ran, then a box with the command on a raised band (`$`, the
+  program bold, flags, strings and `&&`/`|` each in their colour), a rule,
+  the output's last 8 lines (`… N earlier lines` above them, lines naming an
+  error in red on a failure), and a foot with the exit badge (`exit 0` green,
+  `exit 1` red) and how many lines it printed. While it runs, the box shows a
+  cursor and `running · esc stops it`. The box is laid out at the window's
+  width, so it stays whole when the window is resized; below 26 columns it
+  drops its side walls. The plain styles (Bare, Ledger) keep one quiet line.
 - **A running step** shows once, with its own time (counted from when you
   allowed it), not a second spinner line naming it again.
 - **The turn footer**: under each answer, `■ Default · opus · 12s · 1.2k
