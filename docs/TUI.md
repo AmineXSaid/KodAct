@@ -433,9 +433,13 @@ with `{"text", "cwd"}`:
     its last 3 steps as a tree;
   - the folder and the branch at the foot.
 
-  Work in flight has a mark that fills, `○ ◔ ◑ ◕ ●` and back, each at its
-  own pace: the active plan step during a turn (half full `◑` while the
-  session waits), a server connecting, a sub-agent working. A finished state
+  Work in flight has a mark that fills: a braille cell that fills from the
+  bottom, dot by dot (`⡀ ⣀ ⣄ ⣤ ⣦ ⣶ ⣷ ⣿`), and drains again, its colour
+  breathing with it (dim nearly empty, full when full, in 24-bit colour),
+  each at its own pace: the active plan step during a turn (half full `⣤`
+  while the session waits), a server connecting, a sub-agent working. The
+  context gauge uses the same cell, filled to how much is used, and the
+  sidebar adds a bar under it that fills left to right, dot by dot. A finished state
   is still: `●` connected, `✓` done. Every state has a word or a shape as
   well as a colour. The sidebar fills the window: with room to spare every
   section shows in full; short of room the lowest sections tighten first

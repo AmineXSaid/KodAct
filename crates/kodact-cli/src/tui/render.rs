@@ -600,18 +600,64 @@ fn room_left(s: &StatusView) -> u8 {
 /// The sidebar's width, columns.
 pub const SIDEBAR_W: u16 = 34;
 
+/// A braille cell filled to each of its eight levels, bottom up: the one shape KodAct
+/// uses for "how full" (the context) and "in flight" (work that fills and drains).
+/// Braille is one column wide in every terminal font, and eight dots give smooth steps.
+pub const LEVELS: [&str; 9] = ["⠀", "⡀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣷", "⣿"];
+
 /// The frames of a mark that fills while its work is in flight (a server connecting,
-/// a sub-agent working, the plan's step during a turn): empty to full and back, so
-/// it reads as filling, never as done.
-pub const FILL: [&str; 8] = ["○", "◔", "◑", "◕", "●", "◕", "◑", "◔"];
+/// a sub-agent working, the plan's step during a turn): it fills from the bottom,
+/// dot by dot, and drains again, so it reads as filling, never as done.
+pub const FILL: [&str; 14] = ["⡀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣷", "⣿", "⣷", "⣶", "⣦", "⣤", "⣄", "⣀"];
 
 /// The time between frames of a filling mark.
-pub const FILL_STEP: Duration = Duration::from_millis(140);
+pub const FILL_STEP: Duration = Duration::from_millis(90);
 
 /// A filling mark, `ran` after its work began: each keeps its own phase, so several
 /// in flight never pulse in step.
 pub fn filling(ran: Duration) -> &'static str {
-    FILL[(ran.as_millis() / FILL_STEP.as_millis()) as usize % FILL.len()]
+    FILL[fill_frame(ran)]
+}
+
+fn fill_frame(ran: Duration) -> usize {
+    (ran.as_millis() / FILL_STEP.as_millis()) as usize % FILL.len()
+}
+
+/// A filling mark's colour breathes with it: dim while nearly empty, full when full,
+/// in 24-bit colour; elsewhere the colour as it is.
+pub fn breathing(t: &text::Theme, base: Style, ran: Duration) -> Style {
+    let frame = fill_frame(ran);
+    let level = if frame <= 7 { frame + 1 } else { 15 - frame }; // 1..=8
+    match (t.color && t.depth == palette::Depth::True, base.fg) {
+        (true, Some(ratatui::style::Color::Rgb(r, g, b))) => {
+            let bg = palette::PROMPT_BG.color(t.depth, t.light);
+            let (br, bgc, bb) = match bg {
+                ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+                _ => (0, 0, 0),
+            };
+            let k = 0.35 + 0.65 * level as f32 / 8.0;
+            let mix = |c: u8, under: u8| (under as f32 + (c as f32 - under as f32) * k).round() as u8;
+            base.fg(ratatui::style::Color::Rgb(mix(r, br), mix(g, bgc), mix(b, bb)))
+        }
+        _ => base,
+    }
+}
+
+/// A bar `cells` wide that fills left to right, each cell dot by dot: `pct` of it in
+/// `tone`, the rest a faint track.
+pub fn fill_bar(t: &text::Theme, pct: u8, cells: usize, tone: Style) -> Vec<Span<'static>> {
+    let dots = (pct.min(100) as usize * cells * 8 + 50) / 100;
+    let mut lit = String::new();
+    let mut track = String::new();
+    for i in 0..cells {
+        let k = dots.saturating_sub(i * 8).min(8);
+        if k == 0 {
+            track.push('⣀');
+        } else {
+            lit.push_str(LEVELS[k]);
+        }
+    }
+    vec![Span::styled(lit, tone), Span::styled(track, t.hairline())]
 }
 
 /// How long something has run, for a glance: `41s`, `2m 05s`, `1h 02m`.
@@ -670,6 +716,9 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
     let mut context = vec![heading("Context", vec![])];
     if s.context_pct.is_some() {
         context.push(Line::from(gauge(&t, s)));
+        // The same room as a bar across the sidebar, filling dot by dot.
+        let tone = gauge(&t, s).first().map(|sp| sp.style).unwrap_or_default();
+        context.push(Line::from(fill_bar(&t, 100 - room_left(s), inner.min(24), tone)));
     }
     if s.session_tokens > 0 {
         context.push(Line::from(Span::styled(format!("{} used", tokens(s.session_tokens)), t.dim())));
@@ -692,7 +741,10 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         for (status, content) in &app.todos {
             let (mark, mark_style, body) = match status.as_str() {
                 "completed" => ("✓", t.subtle(), t.subtle()),
-                "in_progress" => (busy_for.filter(|_| app.busy).map_or("◑", filling), t.accent(), t.accent()),
+                "in_progress" => match busy_for.filter(|_| app.busy) {
+                    Some(ran) => (filling(ran), breathing(&t, t.accent(), ran), t.accent()),
+                    None => (LEVELS[4], t.accent(), t.accent()),
+                },
                 _ => ("○", t.dim(), t.dim()),
             };
             let rows =
@@ -728,7 +780,8 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
                 "connected" => ("●", t.success(), String::new(), t.dim()),
                 "failed" => ("×", t.error(), "failed".to_string(), t.error()),
                 "pending" => {
-                    (filling(now.saturating_duration_since(epoch())), t.warning(), "connecting".into(), t.subtle())
+                    let ran = now.saturating_duration_since(epoch());
+                    (filling(ran), breathing(&t, t.warning(), ran), "connecting".into(), t.subtle())
                 }
                 "disabled" => ("○", t.subtle(), "off".to_string(), t.subtle()),
                 other => ("○", t.subtle(), other.to_string(), t.subtle()),
@@ -777,7 +830,7 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
             let ran = now.saturating_duration_since(r.since);
             let steps = format!("{} step{}", r.steps, if r.steps == 1 { "" } else { "s" });
             agents.push(row(
-                Span::styled(filling(ran), t.accent()),
+                Span::styled(filling(ran), breathing(&t, t.accent(), ran)),
                 asked.unwrap_or(kind),
                 Style::default(),
                 Span::styled(steps, t.subtle()),
@@ -882,13 +935,7 @@ pub fn sidebar_moving(app: &App) -> bool {
 fn gauge(t: &text::Theme, s: &StatusView) -> Vec<Span<'static>> {
     let left = room_left(s);
     let used = 100 - left;
-    let shape = match used {
-        0..=12 => "○",
-        13..=37 => "◔",
-        38..=62 => "◑",
-        63..=87 => "◕",
-        _ => "●",
-    };
+    let shape = LEVELS[(used as usize * 8 / 100).clamp(1, 8)];
     let tone = if left <= 10 {
         t.error()
     } else if left <= 30 {
@@ -1597,7 +1644,7 @@ mod tests {
         assert_eq!(rows[0], format!("╭{}╮", "─".repeat(58)));
         assert_eq!(rows[1], format!("│ ❯ {PLACEHOLDER:<54} │"));
         assert_eq!(rows[2], format!("╰{}╯", "─".repeat(58)));
-        assert_eq!(rows[3], "  /p                                     opus · ○ 88% left");
+        assert_eq!(rows[3], "  /p                                     opus · ⡀ 88% left");
         assert_eq!(v.cursor, Some((4, 1)));
         // The placeholder is quiet but readable (muted, over 4.5:1); the prompt marker is KodAct's lime.
         assert_eq!(buf[(6, 1)].fg, crate::tui::palette::MUTED.color(Default::default(), false));
@@ -1855,7 +1902,7 @@ mod tests {
                 "│                                      │",
                 "│ Enter or y·n to answer · Esc to deny │",
                 "╰──────────────────────────────────────╯",
-                "  /p                 opus · ○ 88% left",
+                "  /p                 opus · ⡀ 88% left",
             ]
         );
         assert_eq!(v.cursor, None, "no cursor while a dialog is open");
@@ -1925,7 +1972,7 @@ mod tests {
         );
         let session = &rows[n - 3];
         assert!(session.starts_with("│ Default  ·  quick-thinking  ·  gpt.example.net"), "{session}");
-        assert!(session.ends_with("○ ~96% left  ·  25.3k tokens used │"), "the room left on the right: {session}");
+        assert!(session.ends_with("⡀ ~96% left  ·  25.3k tokens used │"), "the room left on the right: {session}");
         assert_eq!(buf[(0, (n - 6) as u16)].fg, a.theme.accent().fg.unwrap());
         assert_eq!(buf[(2, (n - 3) as u16)].fg, a.theme.mode("default").fg.unwrap(), "the mode in its colour");
         // The status line: the folder and the keys that help; the box has the rest.
@@ -1953,7 +2000,7 @@ mod tests {
         a.status.cost = 0.25;
         a.status.cost_unknown = false;
         let (rows, _) = draw(&live_view(&a, 80, 12), 80);
-        assert!(rows[n - 3].ends_with("○ 96% left  ·  25.3k tokens used │"), "{rows:#?}");
+        assert!(rows[n - 3].ends_with("⡀ 96% left  ·  25.3k tokens used │"), "{rows:#?}");
         assert!(rows.iter().all(|r| !r.contains('$')), "{rows:#?}");
     }
 
@@ -2233,17 +2280,35 @@ mod tests {
             ..Default::default()
         };
         let g = |used| gauge(&t, &at(used)).iter().map(|s| s.content.to_string()).collect::<String>();
-        assert_eq!(g(4_000), "○ 96% left");
-        assert_eq!(g(25_000), "◔ 75% left");
-        assert_eq!(g(50_000), "◑ 50% left");
-        assert_eq!(g(75_000), "◕ 25% left · summarizes at 0%", "low: what happens next");
-        assert_eq!(g(95_000), "● 5% left · /compact now", "very low: what to do");
-        assert_eq!(g(140_000), "● 0% left · /compact now", "past the point: nothing left, never negative");
+        assert_eq!(g(4_000), "⡀ 96% left");
+        assert_eq!(g(25_000), "⣀ 75% left");
+        assert_eq!(g(50_000), "⣤ 50% left");
+        assert_eq!(g(75_000), "⣶ 25% left · summarizes at 0%", "low: what happens next");
+        assert_eq!(g(95_000), "⣷ 5% left · /compact now", "very low: what to do");
+        assert_eq!(g(140_000), "⣿ 0% left · /compact now", "past the point: nothing left, never negative");
         assert_eq!(gauge(&t, &at(4_000))[0].style, t.accent());
         assert_eq!(gauge(&t, &at(75_000))[0].style, t.warning(), "amber from 30% left");
         assert_eq!(gauge(&t, &at(95_000))[0].style, t.error(), "red from 10% left");
         let guessed = StatusView { window_guessed: true, ..at(4_000) };
         assert!(gauge(&t, &guessed)[1].content.contains("~96% left"));
+    }
+
+    #[test]
+    fn bars_fill_dot_by_dot_and_marks_breathe() {
+        let t = crate::tui::text::Theme { color: true, light: false, accent: None, depth: Default::default() };
+        let bar = |pct| fill_bar(&t, pct, 4, t.accent()).iter().map(|s| s.content.to_string()).collect::<String>();
+        assert_eq!(bar(0), "⣀⣀⣀⣀", "an empty bar is its faint track");
+        assert_eq!(bar(50), "⣿⣿⣀⣀");
+        assert_eq!(bar(60), "⣿⣿⣄⣀", "a cell part full fills by dots");
+        assert_eq!(bar(100), "⣿⣿⣿⣿");
+        assert!(text::width(&bar(37)) == 4, "always its width");
+        // The mark's colour: dimmer nearly empty than full; untouched without 24-bit colour.
+        let empty = breathing(&t, t.accent(), Duration::ZERO);
+        let full = breathing(&t, t.accent(), FILL_STEP * 7);
+        assert_ne!(empty.fg, full.fg);
+        assert_eq!(full.fg, t.accent().fg, "full is the colour itself");
+        let sixteen = crate::tui::text::Theme { depth: palette::Depth::Ansi16, ..t };
+        assert_eq!(breathing(&sixteen, t.accent(), Duration::ZERO), t.accent());
     }
 
     #[test]
@@ -2595,14 +2660,14 @@ mod tests {
         let frames: Vec<String> =
             (0..FILL.len() as u32).map(|i| mark(&a, start + FILL_STEP * i, "find the parser")).collect();
         assert_eq!(frames, FILL.map(String::from).to_vec());
-        assert_eq!(mark(&a, start + FILL_STEP * 2, "Add the field"), "◑");
-        assert_eq!(mark(&a, start + FILL_STEP * 3, "Add the field"), "◕");
+        assert_eq!(mark(&a, start + FILL_STEP * 2, "Add the field"), "⣄");
+        assert_eq!(mark(&a, start + FILL_STEP * 3, "Add the field"), "⣤");
         // Each mark keeps its own phase: a sub-agent that started later is a frame behind.
-        assert_eq!(filling(FILL_STEP * 9), filling(FILL_STEP));
+        assert_eq!(filling(FILL_STEP * (FILL.len() as u32 + 1)), filling(FILL_STEP));
         // Idle: the open step waits half full, and the agents section is gone.
         a.busy = false;
         a.running.clear();
-        assert_eq!(mark(&a, start + FILL_STEP * 3, "Add the field"), "◑");
+        assert_eq!(mark(&a, start + FILL_STEP * 3, "Add the field"), "⣤");
         assert!(!side(&a, 60, start).join("\n").contains("Agents"));
         // A server still connecting fills too, and keeps the window redrawing while idle.
         a.mcp.push(("linear".into(), "pending".into()));
