@@ -1421,29 +1421,49 @@ fn is_agent(name: &str) -> bool {
     matches!(name, "Task" | "Agent")
 }
 
-/// The time between frames of the sub-agent wave.
-const WAVE_STEP: Duration = Duration::from_millis(80);
+/// The time the sub-agent scanner's head takes per cell.
+const SCAN_STEP: Duration = Duration::from_millis(90);
 
-/// Frames in one full rise and fall of a dot.
-const WAVE_FRAMES: usize = 12;
+/// Cells in the sub-agent scanner: short, so it marks the row without crowding it.
+const SCAN_W: usize = 5;
 
-/// A dot at each of the four heights of a braille cell, bottom to top.
-const WAVE_DOTS: [&str; 4] = ["⡀", "⠄", "⠂", "⠁"];
+/// The scanner's colours, from the head back along its trail, then the unlit
+/// cells: KodAct's turquoise fading toward the page, in either theme.
+const SCAN_SHADES: [palette::Role; 5] =
+    [palette::TEAL, palette::TEAL_TRAIL[0], palette::TEAL_TRAIL[1], palette::TEAL_TRAIL[2], palette::HAIRLINE];
 
-/// A sub-agent's working sign: three lime dots bobbing up and down in a travelling
-/// wave, each a third of a cycle behind the one before, then a space.
-fn scanner(t: &text::Theme, ran: Duration) -> Vec<Span<'static>> {
-    let frame = (ran.as_millis() / WAVE_STEP.as_millis()) as usize;
-    let mut text = String::new();
-    for i in 0..3 {
-        let phase = (frame + WAVE_FRAMES - i * WAVE_FRAMES / 3 % WAVE_FRAMES) % WAVE_FRAMES;
-        let angle = phase as f64 / WAVE_FRAMES as f64 * std::f64::consts::TAU;
-        // 0 (bottom) to 3 (top), following a sine.
-        let height = ((angle.sin() + 1.0) * 1.5).round() as usize;
-        text.push_str(WAVE_DOTS[height.min(3)]);
+/// Where the scanner's head is at `frame`, sweeping one cell a step to the end and
+/// back, and which way it is going (true: right).
+fn scan_head(frame: usize) -> (usize, bool) {
+    let period = 2 * (SCAN_W - 1);
+    let i = frame % period;
+    if i < SCAN_W - 1 {
+        (i, true)
+    } else {
+        (period - i, false)
     }
-    text.push(' ');
-    vec![Span::styled(text, t.accent())]
+}
+
+/// A sub-agent's working sign: a row of small blocks with a bright turquoise head
+/// sweeping back and forth and a trail fading behind it (`■■■■■`), then a space.
+/// One text row, five cells wide. Without colour the head and trail are drawn
+/// in shapes (`■`, `▪`) over dots, so the motion still shows.
+fn scanner(t: &text::Theme, ran: Duration) -> Vec<Span<'static>> {
+    let (head, right) = scan_head((ran.as_millis() / SCAN_STEP.as_millis()) as usize);
+    let mut out = vec![];
+    for x in 0..SCAN_W {
+        // How far behind the head this cell is (0 is the head), on the side it came from.
+        let behind = if right { head.checked_sub(x) } else { x.checked_sub(head) };
+        let level = behind.map(|b| b.min(4)).unwrap_or(4);
+        let (sym, style) = if t.color {
+            ("■", Style::default().fg(SCAN_SHADES[level].color(t.depth, t.light)))
+        } else {
+            (["■", "▪", "▪", "·", "·"][level], if level == 0 { t.bold() } else { Style::default() })
+        };
+        out.push(Span::styled(sym, style));
+    }
+    out.push(Span::raw(" "));
+    out
 }
 
 /// The session row inside the default style's box, `room` columns: the mode in
@@ -2371,23 +2391,34 @@ mod tests {
         );
         assert!(rows.iter().any(|r| r.contains("Waiting for 5 agents…")), "{rows:#?}");
         assert!(!rows.iter().any(|r| r.contains("Running Task")), "{rows:#?}");
-        // The wave: three dots bobbing up and down, each behind the one before, in lime.
-        let t = crate::tui::text::Theme { color: true, light: false, accent: None, depth: Default::default() };
-        let at = |ms: u64| -> String {
-            scanner(&t, Duration::from_millis(ms)).iter().map(|s| s.content.to_string()).collect()
+        // The scanner: one row of five blocks, a bright turquoise head sweeping back and forth
+        // with a fading trail behind it.
+        let t = crate::tui::text::Theme {
+            color: true,
+            light: false,
+            accent: None,
+            depth: crate::tui::palette::Depth::True,
         };
-        let height = |c: char| WAVE_DOTS.iter().position(|d| d.starts_with(c)).unwrap();
-        let frames: Vec<Vec<usize>> =
-            (0..WAVE_FRAMES as u64).map(|f| at(f * 80).trim_end().chars().map(height).collect()).collect();
-        assert!(frames.iter().all(|f| f.len() == 3), "three dots: {frames:?}");
-        assert!(
-            frames.iter().any(|f| f[0] == 3) && frames.iter().any(|f| f[0] == 0),
-            "each rises to the top and falls to the bottom"
-        );
-        assert!(frames.windows(2).all(|w| w[0][0].abs_diff(w[1][0]) <= 1), "one height at a time: smooth");
-        assert_ne!(frames[0][0], frames[0][1], "the dots are out of step: a wave");
-        assert_eq!(at(0), at(WAVE_FRAMES as u64 * 80), "it repeats");
-        assert_eq!(scanner(&t, Duration::ZERO)[0].style, t.accent());
+        let heads: Vec<usize> = (0..8).map(|f| scan_head(f).0).collect();
+        assert_eq!(heads, [0, 1, 2, 3, 4, 3, 2, 1], "to the end and back, a cell a step");
+        let at = |f: u64| scanner(&t, SCAN_STEP * f as u32);
+        let frame = at(3);
+        let text: String = frame.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "■■■■■ ", "one row, five cells");
+        let head = Style::default().fg(crate::tui::palette::TEAL.color(t.depth, false));
+        assert_eq!(frame[3].style, head, "the head is the palette's turquoise");
+        assert_eq!(frame[3].style.fg, t.teal().fg, "the same teal as headings and plan mode");
+        assert_ne!(frame[2].style, frame[3].style, "a trail behind it, fading");
+        let unlit = Style::default().fg(crate::tui::palette::HAIRLINE.color(t.depth, false));
+        assert_eq!(frame[4].style, unlit, "ahead of it: unlit");
+        // Going back, the trail is on the other side.
+        let back = at(6);
+        assert_eq!(back[2].style, head);
+        assert_ne!(back[3].style, back[1].style, "the trail follows the head home");
+        // Without colour, shapes carry the motion.
+        let mono = crate::tui::text::Theme { color: false, ..t };
+        let text: String = scanner(&mono, SCAN_STEP * 3).iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "·▪▪■· ");
     }
 
     #[test]

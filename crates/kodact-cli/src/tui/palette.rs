@@ -123,6 +123,12 @@ pub const REMOVED: Role = role(0xff7a6b, 0xb8392e, Color::LightRed, Color::Red);
 /// The first companion to lime, a cool teal: second-level headings, numbers
 /// in lists, table headers, the second bullet level.
 pub const TEAL: Role = role(0x5fd8c4, 0x0e7568, Color::LightCyan, Color::Cyan);
+/// The teal's trail, fading toward the page (the sub-agent scanner).
+pub const TEAL_TRAIL: [Role; 3] = [
+    role(0x41a597, 0x3f9488, Color::Cyan, Color::Cyan),
+    role(0x2b7268, 0x7ab8af, Color::DarkGray, Color::Gray),
+    role(0x1d4943, 0xadd5cf, Color::DarkGray, Color::Gray),
+];
 /// The second companion, a soft violet: third-level headings, quote bars,
 /// the third bullet level, keywords in code.
 pub const VIOLET: Role = role(0xb4a2ff, 0x5a44c0, Color::LightMagenta, Color::Magenta);

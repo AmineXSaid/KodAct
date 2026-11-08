@@ -299,7 +299,10 @@ evals/harbor/run.sh subset
 
 The agent adds those certificates to the trust store of the container it runs
 in, including for any later `update-ca-certificates`, and turns on `native-tls`
-for `uv`. This changes the task environment, so:
+for `uv`. A file of only the proxy's certificates is enough (for example
+Zscaler's, exported from the Windows store): the bundle the tests get is the
+container's own roots plus these, so hosts the proxy lets through untouched
+(`download.pytorch.org` behind Zscaler) are trusted too. This changes the task environment, so:
 - these jobs are named `-hostca`;
 - their scores only compare KodAct builds with each other;
 - they aren't comparable with the leaderboard, and must not be submitted.

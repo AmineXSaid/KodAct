@@ -28,7 +28,8 @@ Configuration comes from the environment of the `harbor` process:
   is rewritten to this machine's address, found automatically or set here. The
   server must listen on that address (`0.0.0.0`), not only on `127.0.0.1`.
 - `KODACT_HARBOR_CA_BUNDLE`: a PEM file of extra certificate authorities to
-  trust inside the task container (behind a TLS-inspecting proxy). This
+  trust inside the task container (behind a TLS-inspecting proxy); the proxy's
+  certificates alone are enough, the container's own roots are kept. This
   changes the task environment: scores are for local comparisons only.
 
 The model comes from `harbor run -m provider/name`; the provider part is
@@ -88,8 +89,21 @@ for b in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /et
   if [ -f "$b" ]; then cat "$src" >> "$b"; fi
 done
 mkdir -p /etc/uv && printf 'native-tls = true\n' > /etc/uv/uv.toml
-mkdir -p "$(dirname %s)" && cp "$src" %s && chmod 644 %s
-""" % (REMOTE_CA, KEPT_CA, KEPT_CA, KEPT_CA)
+# The copy the tests are pointed at (verifier-ca.sh) replaces each tool's own roots, so it holds the
+# container's roots and the extra ones: a bundle of only a proxy's certificates would leave every
+# host the proxy lets through untouched (download.pytorch.org behind Zscaler) untrusted.
+kept=%s
+mkdir -p "$(dirname "$kept")"
+base=""
+for b in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+  if [ -s "$b" ]; then base="$b"; break; fi
+done
+if [ -z "$base" ] && command -v python3 >/dev/null 2>&1; then
+  base=$(python3 -c 'import certifi; print(certifi.where())' 2>/dev/null || true)
+fi
+if [ -n "$base" ] && [ -s "$base" ]; then cat "$base" "$src" > "$kept"; else cp "$src" "$kept"; fi
+chmod 644 "$kept"
+""" % (REMOTE_CA, KEPT_CA)
 
 
 async def upload_uv_cache(agent: BaseInstalledAgent, environment: BaseEnvironment) -> None:

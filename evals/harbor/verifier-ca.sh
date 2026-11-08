@@ -7,7 +7,8 @@
 # uv (rustls), pip and requests (certifi), huggingface_hub. Behind a TLS-inspecting proxy they
 # reject its certificate, and tasks such as pytorch-model-cli (Torch from download.pytorch.org)
 # and reshard-c4-data (the C4 dataset from huggingface.co) score 0 before any test runs.
-# These verifier variables (`harbor run --ve`) point each of those tools at the bundle.
+# These verifier variables (`harbor run --ve`) point each of those tools at the bundle, which the
+# agent keeps as the container's own roots plus the extra ones (a proxy-only bundle is enough).
 verifier_ca=()
 if [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ]; then
   for var in SSL_CERT_FILE REQUESTS_CA_BUNDLE CURL_CA_BUNDLE PIP_CERT GIT_SSL_CAINFO NODE_EXTRA_CA_CERTS; do
