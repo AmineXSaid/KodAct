@@ -477,16 +477,20 @@ pub const UNKNOWN_MODEL_PREFIX: &str = "KodAct doesn't know the model ";
 pub const LISTED_WINDOW_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl Session {
-    /// An unknown model: wait a moment ([`LISTED_WINDOW_WAIT`]) for the endpoint's model
-    /// list, which may report its window, so the first request and the startup notice use
-    /// it instead of the 200,000-token guess. The notice goes once the window is known.
+    /// A model with no window of its own: wait a moment ([`LISTED_WINDOW_WAIT`]) for the
+    /// endpoint's model list, which may report it, so the first request and the startup
+    /// notice use it instead of `KODACT_CONTEXT_WINDOW` or the 200,000-token guess. The
+    /// variable, one value for every model, then never stands in for a window the endpoint
+    /// gives, so a large model keeps its own. The notice goes once the window is known.
     pub async fn learn_window(&mut self) {
-        let Some(i) = self.warnings.iter().position(|w| w.starts_with(UNKNOWN_MODEL_PREFIX)) else { return };
-        let model = self.warnings[i][UNKNOWN_MODEL_PREFIX.len()..].split(':').next().unwrap_or("").to_string();
-        let provider = self.engine.provider();
-        let _ = tokio::time::timeout(LISTED_WINDOW_WAIT, provider.list_models()).await;
+        let model = self.engine.handle().model();
+        if kodact_api::models::window_unknown(&model) {
+            let provider = self.engine.provider();
+            let _ = tokio::time::timeout(LISTED_WINDOW_WAIT, provider.list_models()).await;
+        }
+        // Also when the listing came in before this call, from the request made at start.
         if kodact_api::models::limits_source(&model) == kodact_api::models::LimitsSource::Listed {
-            self.warnings.remove(i);
+            self.warnings.retain(|w| !w.starts_with(UNKNOWN_MODEL_PREFIX));
         }
     }
 }
@@ -885,9 +889,12 @@ pub fn build_session(
         None => settings.get("/autoCompactWindow").and_then(Value::as_u64),
     };
     warnings.extend(apply_model_limits(&settings));
-    if kodact_api::models::limits_source(&model) == kodact_api::models::LimitsSource::Guessed && opts.provider.is_none()
-    {
-        warnings.push(unknown_model_notice(&model, pricing.contains_key(&model)));
+    // No window of the model's own: KODACT_CONTEXT_WINDOW or the guess stands in, and the
+    // endpoint may still report the real one, which wins over both.
+    if kodact_api::models::window_unknown(&model) && opts.provider.is_none() {
+        if kodact_api::models::limits_source(&model) == kodact_api::models::LimitsSource::Guessed {
+            warnings.push(unknown_model_notice(&model, pricing.contains_key(&model)));
+        }
         // An OpenAI-compatible endpoint may report the window in its model list.
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let p = provider.clone();

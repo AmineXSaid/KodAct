@@ -307,13 +307,16 @@ pub fn listed_limits(id: &str, l: Limits) {
     }
 }
 
+/// Nothing about `id` itself gives its window yet: it is in no table, the user set no
+/// limits for it, and its endpoint has listed none. Until the endpoint's model list says
+/// otherwise, its window is `KODACT_CONTEXT_WINDOW` or the 200,000-token guess.
+pub fn window_unknown(id: &str) -> bool {
+    model_info(id).is_none() && !limit_map().read().unwrap().contains_key(id)
+}
+
 /// Where `id`'s limits come from.
 pub fn limits_source(id: &str) -> LimitsSource {
     if let Some((_, src)) = limit_map().read().unwrap().get(id) {
-        // KODACT_CONTEXT_WINDOW is the user's own setting: it wins over a listed window.
-        if *src == LimitsSource::Listed && default_window().is_some() {
-            return LimitsSource::Configured;
-        }
         return *src;
     }
     if model_info(id).is_some() {
@@ -328,20 +331,24 @@ pub fn limits_source(id: &str) -> LimitsSource {
 /// Info for a model, falling back to conservative defaults for unknown ids;
 /// configured or listed limits win over both.
 pub fn model_info_or_default(id: &str) -> ModelInfo {
+    info_with_fallback_window(id, default_window())
+}
+
+/// [`model_info_or_default`], with `KODACT_CONTEXT_WINDOW` given as `fallback`. A window
+/// that belongs to the model wins, in this order: the `modelLimits` setting for it, the
+/// window its endpoint lists for it, the built-in table. `fallback`, one value for every
+/// model, only fills in for a model with none of these, before the 200,000-token guess:
+/// set for a small model, it never shrinks a large one whose endpoint reports its window.
+fn info_with_fallback_window(id: &str, fallback: Option<u64>) -> ModelInfo {
     let mut info = base_info(id);
     if model_info(id).is_none() {
-        if let Some(w) = default_window() {
+        if let Some(w) = fallback {
             info.context_window = w;
         }
     }
-    if let Some((l, src)) = limit_map().read().unwrap().get(id) {
-        // A listed window gives way to KODACT_CONTEXT_WINDOW, the user's own setting.
-        let env_wins = *src == LimitsSource::Listed && default_window().is_some();
-        if let Some(w) = l.context_window.filter(|_| !env_wins) {
+    if let Some((l, _)) = limit_map().read().unwrap().get(id) {
+        if let Some(w) = l.context_window {
             info.context_window = w;
-        }
-        if env_wins {
-            info.context_window = default_window().unwrap_or(info.context_window);
         }
         if let Some(o) = l.max_output {
             info.max_output = o;
@@ -383,6 +390,41 @@ mod tests {
         let info = model_info_or_default(id);
         assert_eq!((info.context_window, info.max_output), (128_000, 8_192));
         assert_eq!(limits_source(id), LimitsSource::Configured);
+    }
+
+    /// `KODACT_CONTEXT_WINDOW` is one value for every model. Set for a small model, it must not
+    /// shrink a large one whose endpoint reports its window, nor stretch a small one (docs/goal.md,
+    /// "Fix, don't fit"); it still fills in for a model with no window of its own.
+    #[test]
+    fn a_models_own_window_wins_over_the_global_one_at_any_size() {
+        // Only a model with nothing of its own waits for its endpoint's list.
+        assert!(window_unknown("test-listed-later"));
+        listed_limits("test-listed-later", Limits { context_window: Some(1_000_000), max_output: None });
+        assert!(!window_unknown("test-listed-later"));
+        assert!(!window_unknown("claude-haiku-4-5"));
+        let set_for_a_small_model = Some(100_000);
+        listed_limits("test-listed-large", Limits { context_window: Some(1_000_000), max_output: None });
+        assert_eq!(info_with_fallback_window("test-listed-large", set_for_a_small_model).context_window, 1_000_000);
+        assert_eq!(limits_source("test-listed-large"), LimitsSource::Listed);
+        listed_limits("test-listed-small", Limits { context_window: Some(32_768), max_output: None });
+        assert_eq!(info_with_fallback_window("test-listed-small", Some(1_000_000)).context_window, 32_768);
+        // Nothing of its own: the global value, else the guess.
+        assert_eq!(info_with_fallback_window("test-unlisted", set_for_a_small_model).context_window, 100_000);
+        assert_eq!(info_with_fallback_window("test-unlisted", None).context_window, 200_000);
+        // A listing with only a reply limit: the global value still gives the window.
+        listed_limits("test-listed-reply-only", Limits { context_window: None, max_output: Some(8_192) });
+        let info = info_with_fallback_window("test-listed-reply-only", set_for_a_small_model);
+        assert_eq!((info.context_window, info.max_output), (100_000, 8_192));
+        // A known model keeps its table window.
+        let known = model_info("claude-haiku-4-5").expect("in the table").context_window;
+        assert_eq!(info_with_fallback_window("claude-haiku-4-5", set_for_a_small_model).context_window, known);
+        // modelLimits, the user's setting for this one model, wins over its listing.
+        configure_limits("test-configured-and-listed", Limits { context_window: Some(64_000), max_output: None });
+        listed_limits("test-configured-and-listed", Limits { context_window: Some(1_000_000), max_output: None });
+        assert_eq!(
+            info_with_fallback_window("test-configured-and-listed", set_for_a_small_model).context_window,
+            64_000
+        );
     }
 
     #[test]
