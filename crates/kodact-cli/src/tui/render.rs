@@ -214,7 +214,7 @@ fn boxed(title: Line<'static>, body: Vec<Line<'static>>, w: usize, border: Style
     out
 }
 
-/// `body` rows between blue corner marks, `w` columns wide: the frame
+/// `body` rows between lime corner marks, `w` columns wide: the frame
 /// style's way of setting a question apart.
 fn cornered(title: Line<'static>, body: Vec<Line<'static>>, w: usize, mark: Style) -> Vec<Line<'static>> {
     let inner = w.saturating_sub(4).max(1);
@@ -414,7 +414,7 @@ fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
     };
     use super::look::Look;
     match app.look {
-        // Blue corner marks around the question, no full frame.
+        // Lime corner marks around the question, no full frame.
         Look::Frame => cornered(title, rows, w, t.accent()),
         // A centred sheet, narrower than the terminal.
         Look::Status if w >= 60 => {
@@ -742,7 +742,7 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         context.push(Line::from(Span::styled(fit(&s.model, inner), t.dim())));
     }
 
-    // The plan: done steps quiet with a check, the active one filling in blue while
+    // The plan: done steps quiet with a check, the active one filling in lime while
     // the turn runs (half full while it waits), the rest open. A long step takes the
     // rows it needs while there is room, two when there isn't.
     let plan_rows = |most: usize| -> Vec<Line<'static>> {
@@ -828,7 +828,7 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
     };
 
     // The sub-agents at work, while any run, so delegated work stays in view after the
-    // conversation has scrolled past it: each filling in blue with what it was asked,
+    // conversation has scrolled past it: each filling in lime with what it was asked,
     // then its kind and its steps. While there is room, how long it has run and its
     // latest steps as a small tree; when there isn't, only the latest step.
     let working: Vec<&super::app::Running> = app.running.iter().filter(|r| is_agent(&r.name)).collect();
@@ -1038,7 +1038,7 @@ pub fn sidebar_moving(app: &App) -> bool {
 }
 
 /// The context gauge: a shape that fills as the conversation nears compaction
-/// (`○ ◔ ◑ ◕ ●`), then the room left: `◔ 72% left`. Blue while there is room,
+/// (`○ ◔ ◑ ◕ ●`), then the room left: `◔ 72% left`. Lime while there is room,
 /// amber from 30% left, red from 10%; `~` when the window is a guess.
 fn gauge(t: &text::Theme, s: &StatusView) -> Vec<Span<'static>> {
     let left = room_left(s);
@@ -1072,7 +1072,7 @@ fn status(app: &App, w: usize, now: Instant) -> Line<'static> {
     let folder = !app.status.cwd.is_empty() && left == super::short_path(&app.status.cwd);
     let left = if folder { keep_end(&left, (w / 2).max(8)) } else { fit(&left, w.saturating_sub(lead)) };
     // The folder always shows: its parents quiet, its own name brighter, then the
-    // branch after a blue mark, so where you are reads at a glance.
+    // branch after a lime mark, so where you are reads at a glance.
     let left_spans = if folder {
         let t = app.theme;
         let cut = left.rfind('/').map_or(0, |i| i + 1);
@@ -1444,7 +1444,7 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
     let (left, bw) = fb.map(|b| (b.left.min(w.saturating_sub(4)), b.w.min(w))).unwrap_or((0, w));
     let margin = " ".repeat(left);
     use super::look::Look;
-    // Bare and Ledger draw the input under a rule, without a box; Glow's box glows blue.
+    // Bare and Ledger draw the input under a rule, without a box; Glow's box glows lime.
     let open = matches!(app.look, Look::Bare | Look::Ledger);
     let border = match app.look {
         Look::Glow | Look::Frame => t.accent(),
@@ -1789,7 +1789,7 @@ mod tests {
         assert_eq!(rows[2], format!("╰{}╯", "─".repeat(58)));
         assert_eq!(rows[3], "  /p                                     opus · ⡀ 88% left");
         assert_eq!(v.cursor, Some((4, 1)));
-        // The placeholder is quiet but readable (muted, over 4.5:1); the prompt marker is KodAct's blue.
+        // The placeholder is quiet but readable (muted, over 4.5:1); the prompt marker is KodAct's lime.
         assert_eq!(buf[(6, 1)].fg, crate::tui::palette::MUTED.color(Default::default(), false));
         assert_eq!(buf[(2, 1)].fg, crate::tui::palette::BRAND.color(Default::default(), false));
     }
@@ -2154,7 +2154,7 @@ mod tests {
         a.status.session_tokens = 25_300;
         let (rows, buf) = draw(&live_view(&a, 110, 12), 110);
         let n = rows.len();
-        // The box: the text, a row of air, the session row; blue all round.
+        // The box: the text, a row of air, the session row; lime all round.
         assert!(rows[n - 6].starts_with('╭') && rows[n - 2].starts_with('╰'), "{rows:#?}");
         assert!(rows[n - 5].starts_with(&format!("│ ❯ {PLACEHOLDER}")), "{rows:#?}");
         assert!(
@@ -2448,7 +2448,7 @@ mod tests {
         assert_eq!(
             color,
             crate::tui::palette::BRAND.color(Default::default(), false),
-            "running is blue, as the spinner"
+            "running is lime, as the spinner"
         );
     }
 

@@ -277,8 +277,8 @@ with `{"text", "cwd"}`:
   how the conversation is written (`app.rs`), the approval's frame and the
   input (`render.rs`); colours (`/theme dark|light|none`) apply to all:
   - `frame` (Essentials): only what is used before the first message. The
-    mark beside the wordmark (`Kod` in paper, `Act` in Signal blue, over a
-    navy shadow); twice the size only on a first run in a folder (no earlier
+    mark beside the wordmark (`Kod` in paper, `Act` in lime, over an olive
+    shadow); twice the size only on a first run in a folder (no earlier
     conversation there) from 110 columns, normal size after that, so the
     input leads (without colour the letters alone; under 57 columns the
     name in one row). "From code to impact, on any model.", the
@@ -288,7 +288,7 @@ with `{"text", "cwd"}`:
     An MCP server that failed to start adds one line (`● figma didn't
     start · /mcp`). The status line shows the folder and branch and the
     keys that help now, on the front page too; the version is in
-    `/status`. Steps with a dot; approvals in blue corner marks; what you
+    `/status`. Steps with a dot; approvals in lime corner marks; what you
     sent is echoed as the panel is drawn, its edge in the mode it was sent
     in.
     The input is a raised panel rather than a box: the text on a row of
@@ -297,7 +297,7 @@ with `{"text", "cwd"}`:
     never dropped: a narrow panel loses the endpoint, then the context,
     then shortens the model. The
     panel's left edge and the mode's name take the mode's colour (Default
-    blue, Plan teal, Auto violet, Accept edits amber, Bypass permissions
+    lime, Plan teal, Auto violet, Accept edits amber, Bypass permissions
     red, Don't ask quiet). The status line under the panel keeps the folder
     and branch on its left (the panel names the mode), and on its right the
     keys that help now: `/`, `@`, `shift+tab` and `?` with nothing typed; `enter` and `shift+enter`
@@ -308,11 +308,11 @@ with `{"text", "cwd"}`:
     queue a message; esc stops the turn". In 16 colours the panel has no
     grey (the nearest is too light behind text), only its edge.
   - `glow`: centred, the wordmark lit from the top with sparks and a glowing
-    seam, a blue-framed input with the mode and model under it. Your words
+    seam, a lime-framed input with the mode and model under it. Your words
     on a tinted band, finished steps with a ✓, answers plain.
   - `card`: a card with the mark beside the wordmark and the session's
     model, tools and folder; turns headed `you · 14:02` and `kodact`.
-  - `ledger`: aligned left, the wordmark in blue outline, past work
+  - `ledger`: aligned left, the wordmark in lime outline, past work
     numbered beside this folder, the input docked at the bottom under a
     rule. A column of times and voices; steps as plain quiet lines.
   - `status`: the wordmark over boxed readouts of the model, tools and
@@ -337,9 +337,9 @@ with `{"text", "cwd"}`:
   scrollback, wrapped to its width.
 - **The front screen** (`brand::welcome`), printed once at the start,
   centred across the terminal and down the room above the input: the KodAct
-  wordmark (`Kod` in paper and `Act` in Signal blue, drawn in half blocks, 52
+  wordmark (`Kod` in paper and `Act` in lime, drawn in half blocks, 52
   columns by 5 rows; `KodAct` in one row on a narrower terminal) and the
-  mark (a step and a chevron in Signal blue, 20 columns by 6 rows: from code to impact), the tagline, and `/resume` with the newest other
+  mark (a step and a chevron in lime, 20 columns by 6 rows: from code to impact), the tagline, and `/resume` with the newest other
   conversation here. Until the first message, the input is a centred box at
   most 80 columns wide, with the mode, the model and its endpoint on the
   line under it, and the status line shows the version on its right. The
@@ -351,8 +351,8 @@ with `{"text", "cwd"}`:
 - **Markdown**, one line at a time (`text::Markdown::push`), so streamed
   text is drawn as it arrives:
   - headings `#` to `######` (a space after the hashes): level 1 bold in
-    blue, level 2 bold in teal, level 3 bold in violet, the rest bold;
-  - bullets `-`, `*`, `+` as `•`, `◦`, `▪` by indent level, in blue, teal
+    lime, level 2 bold in teal, level 3 bold in violet, the rest bold;
+  - bullets `-`, `*`, `+` as `•`, `◦`, `▪` by indent level, in lime, teal
     and violet; numbered items (`1.` or `1)`) with the number in teal;
     tasks `- [ ]` as `○` and `- [x]` as a green `✓` with the text struck through;
   - quotes `>` (nested `>>`) as a violet `│` per level, the text dim and
@@ -377,17 +377,16 @@ with `{"text", "cwd"}`:
   `PROMPT_FG`, so the two voices stay apart. Quiet text (`SUBTLE`) is at
   least 4.5:1 on the page and on the panel in both themes; the placeholder
   is `MUTED`. In 16 colours the terminal's own text colour is kept.
-- **Colours** (`palette.rs`): KodAct's ink, paper and Signal blue (from the
-  logo; lifted to `#4d8dff` on dark backgrounds), with teal and
-  violet beside it. Ink and paper for text and surfaces, blue for the brand
+- **Colours** (`palette.rs`): KodAct's ink, paper and lime, with teal and
+  violet beside it. Ink and paper for text and surfaces, lime for the brand
   and for what needs the person; teal and violet for the structure of an
   answer (headings, lists, quotes, table headers, inline code in peach,
-  code keywords violet, strings green, types teal, numbers amber); green, red
+  code keywords violet, strings lime, types teal, numbers amber); green, red
   and amber only where they mean done, failed or a warning.
 - **Wrapping** (`text::wrap`): a wrapped row continues under the text, past
   the line's indent and its marker (`• `, `› `, `↳ `, `- `, `1. `).
 - **Tool calls**: a dot, a verb and what the call works on (`app::tool_header`):
-  `Running cargo test` with a turning blue dot while it runs, then
+  `Running cargo test` with a turning lime dot while it runs, then
   `● Ran cargo test`, green when it worked and red when it failed. Verbs:
   Ran, Read, Edited, Wrote, Searched, Listed, Fetched, Searched the web,
   Delegated, Updated the plan, Used skill; any other tool is `Called`, with
@@ -437,7 +436,7 @@ with `{"text", "cwd"}`:
   - the session's title (its first prompt);
   - **Context**: the room left, the tokens used and the model;
   - **Plan** (`1/4`): the plan from TodoWrite, done steps quiet with `✓`, the
-    active one in blue, the rest open `○`;
+    active one in lime, the rest open `○`;
   - **MCP** (`2/3 up`, or `1 failed` in red): each server and what it
     brings, `● jira  12 tools` in green, a failed one `× figma  failed` in
     red, one still connecting `connecting`, a disabled one `○ … off`;

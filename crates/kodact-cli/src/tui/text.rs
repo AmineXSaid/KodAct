@@ -154,7 +154,7 @@ impl Theme {
         self.role(r)
     }
 
-    /// Teal, the blue's first companion. Bold without colour.
+    /// Teal, lime's first companion. Bold without colour.
     pub fn teal(&self) -> Style {
         if self.color {
             self.role(palette::TEAL)
@@ -163,7 +163,7 @@ impl Theme {
         }
     }
 
-    /// Violet, the blue's second companion. Plain without colour.
+    /// Violet, lime's second companion. Plain without colour.
     pub fn violet(&self) -> Style {
         self.role(palette::VIOLET)
     }
@@ -1278,14 +1278,14 @@ mod tests {
 
     #[test]
     fn every_kind_of_block_is_drawn() {
-        // Headings by level: blue, then teal, then violet.
+        // Headings by level: lime, then teal, then violet.
         let h1 = Markdown::default().line("# Title #", &T).unwrap();
         assert_eq!(plain(&h1), "Title");
         assert!(h1.spans[0].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(h1.spans[0].style.fg, T.brand_strong().fg);
         assert_eq!(Markdown::default().line("## Plan", &T).unwrap().spans[0].style.fg, T.teal().fg);
         assert_eq!(Markdown::default().line("### Step", &T).unwrap().spans[0].style.fg, T.violet().fg);
-        assert_ne!(T.teal().fg, T.accent().fg, "the second level is not blue again");
+        assert_ne!(T.teal().fg, T.accent().fg, "the second level is not lime again");
         assert_eq!(one("#hashtag"), "#hashtag", "no space, no heading");
         // Lists: bullets by level, numbers, tasks.
         assert_eq!(one("- one"), "• one");

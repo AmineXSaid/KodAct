@@ -1,5 +1,5 @@
 //! KodAct's name in the terminal: the KodAct wordmark and its mark (a step
-//! and a chevron, from code to impact, in Signal blue), drawn as pixels in half blocks
+//! and a chevron, from code to impact, in lime), drawn as pixels in half blocks
 //! (each cell is two pixels stacked, so the pixels come out square), and the
 //! two screens they head: the front screen and the first-run card.
 
@@ -40,8 +40,8 @@ pub const SHORT_TAGLINE: &str = "From code to impact, on any model.";
 /// The tagline under the wordmark.
 pub const TAGLINE: &str = "From code to impact: a coding agent on the model you choose.";
 
-/// The wordmark's pixel rows: `P` for "Kod" in paper, `G` for "Act" in blue,
-/// as in the logo.
+/// The wordmark's pixel rows: `P` for "Kod" in paper, `G` for "Act" in lime,
+/// so the name reads as what it does.
 fn wordmark_rows() -> Vec<String> {
     (0..10)
         .map(|y| {
@@ -88,15 +88,14 @@ pub fn mark_rows() -> Vec<String> {
 }
 
 /// The inks for a light or dark background: hex, and the ANSI colour for
-/// 16-colour terminals. Paper letters (ink on a light background), and
-/// Signal blue for "Act" and the mark: the logo's own blue on a light
-/// background, lifted (as the logo's dark version is) on a dark one.
+/// 16-colour terminals. Paper letters (ink on a light background), and lime
+/// for "Act" and the mark, deepened to an olive that reads on a light background.
 fn ink(c: char, light: bool) -> Option<(u32, Color)> {
     Some(match (c, light) {
-        ('P', false) => (0xf4f5f7, Color::White),
-        ('P', true) => (0x0b0c0e, Color::Black),
-        ('G' | 'M', false) => (0x4d8dff, Color::LightBlue),
-        ('G' | 'M', true) => (0x0a5cff, Color::Blue),
+        ('P', false) => (0xf2f0e9, Color::White),
+        ('P', true) => (0x101214, Color::Black),
+        ('G' | 'M', false) => (0xc6ff3d, Color::LightGreen),
+        ('G' | 'M', true) => (0x4a7200, Color::Green),
         _ => return None,
     })
 }
@@ -395,7 +394,7 @@ mod tests {
     const DARK: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True };
 
     #[test]
-    fn the_wordmark_is_kod_in_paper_and_act_in_blue() {
+    fn the_wordmark_is_kod_in_paper_and_act_in_lime() {
         let rows = wordmark_rows();
         assert_eq!(rows.len(), 10);
         assert!(rows.iter().all(|r| r.chars().count() == WORDMARK_W));
@@ -407,15 +406,15 @@ mod tests {
         assert_eq!(m.len(), 5, "five rows");
         assert!(m.iter().all(|l| l.spans.iter().map(|s| width(&s.content)).sum::<usize>() <= WORDMARK_W));
         let cells = |l: &Line| l.spans.iter().flat_map(|s| s.content.chars().map(move |_| s.style)).collect::<Vec<_>>();
-        let paper = Some(Color::Rgb(0xf4, 0xf5, 0xf7));
-        let blue = Some(Color::Rgb(0x4d, 0x8d, 0xff));
-        // The K's stem, at the left, in paper; the t's stem, at the right, in blue.
+        let paper = Some(Color::Rgb(0xf2, 0xf0, 0xe9));
+        let lime = Some(Color::Rgb(0xc6, 0xff, 0x3d));
+        // The K's stem, at the left, in paper; the t's stem, at the right, in lime.
         assert_eq!(cells(&m[0])[0].fg, paper);
-        assert!(cells(&m[4]).iter().rev().take(6).any(|s| s.fg == blue || s.bg == blue), "Act in blue");
-        // On a light background the paper letters are ink, and "Act" the logo's own blue.
+        assert!(cells(&m[4]).iter().rev().take(6).any(|s| s.fg == lime || s.bg == lime), "Act in lime");
+        // On a light background the paper letters are ink, and "Act" olive.
         let light = wordmark(&Theme { light: true, ..DARK });
-        assert_eq!(cells(&light[0])[0].fg, Some(Color::Rgb(0x0b, 0x0c, 0x0e)));
-        assert!(cells(&light[4]).iter().any(|s| s.fg == Some(Color::Rgb(0x0a, 0x5c, 0xff))));
+        assert_eq!(cells(&light[0])[0].fg, Some(Color::Rgb(0x10, 0x12, 0x14)));
+        assert!(cells(&light[4]).iter().any(|s| s.fg == Some(Color::Rgb(0x4a, 0x72, 0x00))));
     }
 
     #[test]
@@ -444,7 +443,7 @@ mod tests {
         assert!(m
             .iter()
             .flat_map(|l| &l.spans)
-            .all(|s| s.style.fg.is_none() || s.style.fg == Some(Color::Rgb(0x4d, 0x8d, 0xff))));
+            .all(|s| s.style.fg.is_none() || s.style.fg == Some(Color::Rgb(0xc6, 0xff, 0x3d))));
     }
 
     #[test]

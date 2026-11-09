@@ -17,13 +17,13 @@ type Px = Option<(u32, Color)>;
 /// How the wordmark is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Letters {
-    /// "Kod" in paper, "Act" in blue.
+    /// "Kod" in paper, "Act" in lime.
     Flat,
-    /// Paper and blue letters over a deep navy shadow, one pixel down and right.
+    /// Paper and lime letters over a dark olive shadow, one pixel down and right.
     Shadow,
-    /// Lit from above: ice blue at the top, a deep Signal blue at the foot.
+    /// Lit from above: bright lime at the top, a deeper green at the foot.
     Glow,
-    /// The letters' edges only, in blue.
+    /// The letters' edges only, in lime.
     Outline,
 }
 
@@ -121,12 +121,12 @@ const COMPACT: [&[&str; 8]; 6] = [
 /// Columns between the compact letters.
 const COMPACT_GAP: usize = 1;
 
-/// The compact wordmark's pixels: "Kod" in paper, "Act" in blue.
+/// The compact wordmark's pixels: "Kod" in paper, "Act" in lime.
 fn compact_grid(light: bool) -> Vec<Vec<Px>> {
-    let (paper, blue) = if light {
-        ((0x0b0c0e, Color::Black), (0x0a5cff, Color::Blue))
+    let (paper, lime) = if light {
+        ((0x101214, Color::Black), (0x4a7200, Color::Green))
     } else {
-        ((0xf4f5f7, Color::White), (0x4d8dff, Color::LightBlue))
+        ((0xf2f0e9, Color::White), (0xc6ff3d, Color::LightGreen))
     };
     (0..8)
         .map(|y| {
@@ -135,7 +135,7 @@ fn compact_grid(light: bool) -> Vec<Vec<Px>> {
                 if gi > 0 {
                     row.extend(std::iter::repeat_n(None, COMPACT_GAP));
                 }
-                let ink = if gi < 3 { paper } else { blue };
+                let ink = if gi < 3 { paper } else { lime };
                 row.extend(g[y].chars().map(|c| (c == 'X').then_some(ink)));
             }
             row
@@ -154,25 +154,25 @@ pub fn compact_w() -> usize {
 }
 
 /// The wordmark's pixels in one of its looks: 52 by 10, 53 by 11 with a
-/// shadow. "Kod" is paper (ink on a light background) and "Act" blue.
+/// shadow. "Kod" is paper (ink on a light background) and "Act" lime.
 fn wordmark_grid(look: Letters, light: bool) -> Vec<Vec<Px>> {
-    let (paper, blue, shadow) = if light {
-        ((0x0b0c0e, Color::Black), (0x0a5cff, Color::Blue), (0xb7c9ee, Color::Gray))
+    let (paper, lime, shadow) = if light {
+        ((0x101214, Color::Black), (0x4a7200, Color::Green), (0xa9c172, Color::Gray))
     } else {
-        ((0xf4f5f7, Color::White), (0x4d8dff, Color::LightBlue), (0x16306a, Color::Blue))
+        ((0xf2f0e9, Color::White), (0xc6ff3d, Color::LightGreen), (0x3d5a10, Color::Green))
     };
-    // The glow: ice at the top, settling to a deep Signal blue at the foot.
+    // The glow: bright at the top, settling to a deeper green at the foot.
     const GLOW: [(u32, Color); 10] = [
-        (0xe8f0ff, Color::White),
-        (0xc9dbff, Color::White),
-        (0xa6c5ff, Color::LightBlue),
-        (0x86b1ff, Color::LightBlue),
-        (0x6a9fff, Color::LightBlue),
-        (0x4d8dff, Color::LightBlue),
-        (0x3a7bf7, Color::Blue),
-        (0x2a6ae6, Color::Blue),
-        (0x1f5acc, Color::Blue),
-        (0x184aab, Color::Blue),
+        (0xf1ffc4, Color::White),
+        (0xe4ff9a, Color::LightGreen),
+        (0xd6ff6e, Color::LightGreen),
+        (0xc6ff3d, Color::LightGreen),
+        (0xb8f034, Color::LightGreen),
+        (0xa8de2c, Color::Green),
+        (0x97c925, Color::Green),
+        (0x86b31e, Color::Green),
+        (0x749c18, Color::Green),
+        (0x628512, Color::Green),
     ];
     let step = 7 + GAP;
     let base = 6 * 7 + 5 * GAP;
@@ -200,10 +200,10 @@ fn wordmark_grid(look: Letters, light: bool) -> Vec<Vec<Px>> {
                     Letters::Outline => {
                         let inside =
                             [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().all(|(dx, dy)| at(xi + dx, yi + dy).is_some());
-                        (!inside).then_some(blue)
+                        (!inside).then_some(lime)
                     }
                     _ if gi < 3 => Some(paper),
-                    _ => Some(blue),
+                    _ => Some(lime),
                 },
                 None if look == Letters::Shadow && at(xi - 1, yi - 1).is_some() => Some(shadow),
                 None => None,
@@ -223,7 +223,7 @@ pub fn wordmark_w(look: Letters) -> usize {
     WORDMARK_W + usize::from(look == Letters::Shadow)
 }
 
-/// KodAct's mark (a step and a chevron in Signal blue): [`MARK_W`] columns by 6 rows.
+/// KodAct's mark (a step and a chevron in lime): [`MARK_W`] columns by 6 rows.
 pub fn mark_art(t: &Theme) -> Vec<Line<'static>> {
     super::brand::mark(t)
 }
@@ -454,10 +454,10 @@ fn glow(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let ww = wordmark_w(Letters::Glow);
     if cols >= ww + 4 {
         // Sparks rising off the letters, at fixed places.
-        let spark = |hex: u32| Style::default().fg(ink(hex, Color::LightBlue, t));
+        let spark = |hex: u32| Style::default().fg(ink(hex, Color::Yellow, t));
         let rows: [&[(usize, &str, u32)]; 2] = [
-            &[(9, "·", 0x9cc0ff), (21, "˙", 0xe8f0ff), (33, "·", 0x4d8dff)],
-            &[(4, "˙", 0x3a7bf7), (15, "·", 0x9cc0ff), (27, "·", 0x6a9fff), (40, "˙", 0x4d8dff)],
+            &[(9, "·", 0xdcff85), (21, "˙", 0xf1ffc4), (33, "·", 0xc6ff3d)],
+            &[(4, "˙", 0xa8de2c), (15, "·", 0xdcff85), (27, "·", 0xb8f034), (40, "˙", 0xc6ff3d)],
         ];
         for r in rows {
             let mut spans = vec![];
@@ -476,15 +476,15 @@ fn glow(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
             .map(|i| {
                 let d = (i as f32 - n as f32 / 2.0).abs() / (n as f32 / 2.0);
                 let hex = if d < 0.2 {
-                    0xe8f0ff
+                    0xf1ffc4
                 } else if d < 0.5 {
-                    0x4d8dff
+                    0xc6ff3d
                 } else if d < 0.8 {
-                    0x1f5acc
+                    0x749c18
                 } else {
-                    0x0f1f40
+                    0x2a3a0c
                 };
-                Span::styled("━", if t.color { Style::default().fg(ink(hex, Color::LightBlue, t)) } else { t.subtle() })
+                Span::styled("━", if t.color { Style::default().fg(ink(hex, Color::Yellow, t)) } else { t.subtle() })
             })
             .collect();
         above.push(centred(Line::from(seam), cols));
@@ -547,7 +547,7 @@ fn mark_card(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     FrontPage { above: boxed(x, cw, rows, border), below, box_left: x, box_w: cw, ..Default::default() }
 }
 
-/// 4 · Aligned left: the name in blue outline, past work numbered beside this folder,
+/// 4 · Aligned left: the name in lime outline, past work numbered beside this folder,
 /// the input docked at the bottom.
 fn ledger(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let m = 8;

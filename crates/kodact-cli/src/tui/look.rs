@@ -8,7 +8,7 @@ pub enum Look {
     /// A framed welcome with the mark and what is connected; a timeline of steps.
     #[default]
     Frame,
-    /// Centred, the name glowing blue; quiet ✓ steps and a glowing prompt.
+    /// Centred, the name glowing lime; quiet ✓ steps and a glowing prompt.
     Glow,
     /// A card with the mark and the session; turns headed `you` and `kodact`.
     Card,

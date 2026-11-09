@@ -24,8 +24,6 @@ KodAct, *from code to impact*.
 
 ## Colours
 
-These are the terminal palette's colours (`crates/kodact-cli/src/tui/palette.rs`).
-
 | Colour | Hex | Where |
 | --- | --- | --- |
 | Signal blue | `#0a5cff` | The mark and "Act" on light backgrounds; the app icon's tile |
@@ -35,11 +33,9 @@ These are the terminal palette's colours (`crates/kodact-cli/src/tui/palette.rs`
 | Slate | `#5a5f69` | The tagline on light backgrounds |
 | Mist | `#9a9fa8` | The tagline on dark backgrounds |
 
-In the terminal the blue is flanked by a teal (`#4fd6c3`) and a violet
-(`#c09cff`) for the structure of an answer, with a warm peach (`#ffb38a`) for
-inline code as the one warm accent. The greys lean slightly blue, so the page
-and the brand sit together. Every text colour is at least 4.5:1 on the page
-and on the raised prompt panel, in both themes (a test in `palette.rs` checks).
+The terminal keeps KodAct's own palette (`crates/kodact-cli/src/tui/palette.rs`):
+ink, paper and lime (`#c6ff3d`, olive `#4a7200` on light backgrounds), with
+teal and violet beside it. It draws the same mark and letters in lime.
 
 ## Type
 

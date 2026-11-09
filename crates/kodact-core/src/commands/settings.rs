@@ -686,7 +686,7 @@ pub(super) fn advisor(d: &mut Driver, args: &str) -> Exec {
 /// The styles of the terminal UI: how its front page, chat and prompt are laid out.
 pub const STYLES: [(&str, &str); 6] = [
     ("frame", "The name and one panel that shows the mode, model and context; the keys that help now"),
-    ("glow", "Centred, the name glowing blue, quiet steps and a glowing prompt"),
+    ("glow", "Centred, the name glowing lime, quiet steps and a glowing prompt"),
     ("card", "A card with the mark and the session, one card per turn"),
     ("ledger", "Aligned left, past work numbered, times and voices down the side"),
     ("status", "Readouts of the session, a header bar, approvals over the thread"),
