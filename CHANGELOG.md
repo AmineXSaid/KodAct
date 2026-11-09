@@ -2,6 +2,15 @@
 
 ## 0.1.0 (unreleased)
 
+### A new look: from code to impact
+- KodAct's logo is a step and a chevron in Signal blue, with the name in
+  Outfit and the tagline "From code to impact" (`design/brand`). The
+  terminal follows it: the brand colour, the mode, the prompt mark, the
+  spinner and headings are blue (`#4d8dff` on dark backgrounds, the logo's
+  `#0a5cff` on light ones), the greys lean cool, and the front pages draw
+  the new mark. Every text colour is at least 4.5:1 on the page and the
+  prompt panel in both themes. kodact.exe carries the new icon.
+
 ### On crates.io
 - `cargo install kodact-cli` installs the `kodact` command (and
   `cargo install kodact-eval` the eval harness); the other `kodact-*` crates

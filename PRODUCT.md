@@ -58,9 +58,9 @@ plugins, so it can replace it.
 
 ## Brand Commitments
 
-- The name KodAct as a pixel-art wordmark ("Kod" in paper, "Act" in lime); the welcome
+- The name KodAct as a pixel-art wordmark ("Kod" in paper, "Act" in Signal blue); the welcome
   page shows the name alone, without the tile mark (the user's choice).
-- The lime accent as KodAct's signal colour (the input box, the mode, the prompt mark).
+- The Signal blue accent as KodAct's signal colour (the input box, the mode, the prompt mark).
 - Every command and shortcut works as today (`/` commands, `@` files, `!` shell, `?` shortcuts, the
   key bindings).
 - KodAct names only in the UI; nothing borrowed from the reference CLI's naming.

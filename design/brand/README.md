@@ -1,8 +1,8 @@
 # KodAct logo
 
-Kod is KodAct's logo and character: a block of code that does the work. Its
-arms are curly braces and its mouth is the text cursor. The name says the
-rest: KodAct, "Kod acts".
+The mark is two strokes on one slope: a step up from the left, then a chevron
+pointing right. Code goes in, impact comes out. The name says the rest:
+KodAct, *from code to impact*.
 
 ![KodAct](png/kodact-logo.png)
 
@@ -10,21 +10,17 @@ rest: KodAct, "Kod acts".
 
 | File | Use |
 | --- | --- |
-| `kodact-logo.svg` | The logo, on light backgrounds |
-| `kodact-logo-on-dark.svg` | The logo, on dark backgrounds |
+| `kodact-logo.svg` | The logo with its tagline, on light backgrounds |
+| `kodact-logo-on-dark.svg` | The logo with its tagline, on dark backgrounds |
 | `kodact-logo-stacked.svg`, `kodact-logo-stacked-on-dark.svg` | The logo stacked, for square spaces |
-| `kod.svg`, `kod-on-dark.svg` | Kod alone, in colour |
-| `kod-mark.svg`, `kod-mark-paper.svg` | Kod in one colour: ink, or paper on dark |
+| `kodact-mark.svg`, `kodact-mark-on-dark.svg` | The mark alone, in Signal blue |
+| `kodact-mark-ink.svg`, `kodact-mark-paper.svg` | The mark in one colour: ink, or paper on dark |
 | `kodact-wordmark.svg`, `kodact-wordmark-on-dark.svg` | The name alone |
-| `app-icon.svg` | App icon, 48 px and up |
-| `app-icon-small.svg` | App icon with bolder strokes, for 24 and 32 px |
-| `app-icon-16.svg` | App icon drawn pixel by pixel for 16 px |
+| `app-icon.svg` | App icon: the paper mark on a Signal-blue tile |
+| `app-icon-dark.svg` | App icon: the blue mark on an ink tile |
 | `kodact.ico` | Windows icon, 16 to 256 px; the copy in `crates/kodact-cli/assets/` is built into kodact.exe |
 | `favicon.ico` | Browser icon, 16, 32 and 48 px |
 | `png/` | The files above as PNG, with transparent backgrounds |
-
-On the app icon, the lime tile is Kod's body: what's left is its face, the
-braces, eyes and cursor.
 
 ## Colours
 
@@ -32,51 +28,51 @@ These are the terminal palette's colours (`crates/kodact-cli/src/tui/palette.rs`
 
 | Colour | Hex | Where |
 | --- | --- | --- |
-| Lime | `#c6ff3d` | Kod's body; "Act" on dark backgrounds |
-| Olive | `#4a7200` | "Act" on light backgrounds, where lime is too pale for text |
-| Ink | `#101214` | Outlines, the face, "Kod" on light backgrounds |
-| Paper | `#f2f0e9` | "Kod" on dark backgrounds, the light in Kod's eyes |
+| Signal blue | `#0a5cff` | The mark and "Act" on light backgrounds; the app icon's tile |
+| Signal blue, lifted | `#4d8dff` | The mark and "Act" on dark backgrounds, where `#0a5cff` falls under 4.5:1 |
+| Ink | `#0b0c0e` | "Kod" on light backgrounds; the dark tile |
+| Paper | `#ffffff` | "Kod" on dark backgrounds; the mark on the blue tile |
+| Slate | `#5a5f69` | The tagline on light backgrounds |
+| Mist | `#9a9fa8` | The tagline on dark backgrounds |
+
+In the terminal the blue is flanked by a teal (`#4fd6c3`) and a violet
+(`#c09cff`) for the structure of an answer, with a warm peach (`#ffb38a`) for
+inline code as the one warm accent. The greys lean slightly blue, so the page
+and the brand sit together. Every text colour is at least 4.5:1 on the page
+and on the raised prompt panel, in both themes (a test in `palette.rs` checks).
 
 ## Type
 
-"Kod" is JetBrains Mono Medium and "Act" is Archivo ExtraBold at 114% width:
-code type, then a heavy one, so the name reads as what it does. Both fonts
-are under the SIL Open Font License 1.1. The SVG files hold the letters as
-outlines, so nothing needs a font installed.
+| Use | Font |
+| --- | --- |
+| The name, "KodAct" | Outfit SemiBold (620), tracked −1.5% |
+| The tagline, FROM CODE TO IMPACT | Outfit Medium, capitals tracked wide, set to the name's width |
+| Code, and the terminal | JetBrains Mono |
+
+Outfit's geometric letters (the round o and d, the pointed A, the t's curled
+foot) match the mark's clean slopes; JetBrains Mono is the face KodAct is
+read in. Both fonts are under the SIL Open Font License 1.1. The SVG files
+hold the letters as outlines, so nothing needs a font installed. The
+terminal's pixel wordmark follows the same letters.
 
 ## Using it
 
-- Leave clear space around the logo of at least half the width of Kod's body.
-- Below 120 px wide, use Kod alone instead of the full logo. Below 24 px, use
-  the app icon, which has its own 16 px drawing.
+- Leave clear space around the logo of at least the height of "Kod"'s `o`.
+- Below 160 px wide, use the logo without its tagline (the wordmark), or the
+  mark alone. Below 48 px, use the app icon.
 - Use the plain files on light backgrounds and the `-on-dark` files on dark
-  ones. On a dark background, the plain version's ink braces disappear.
-- Don't recolour Kod, stretch it, add shadows or glows, or redraw its face.
-
-## Kod in the terminal
-
-Kod's face is plain text, so it works in any terminal, over SSH and in logs.
-The CLI doesn't use these faces yet.
-
-| State | Face |
-| --- | --- |
-| Ready | `{o_o}` |
-| Working | `{-_-}` |
-| Needs your OK | `{o_o}?` |
-| Done | `{^_^}` |
-| A step failed | `{>_<}` |
+  ones.
+- Don't recolour the mark, change its slope, stretch it, or add shadows or
+  glows.
 
 ## Editing
 
 The SVG files are the masters. `source/build_svgs.py` writes them all from one
-set of drawings:
+drawing, then the PNG and ICO files:
 
 ```bash
-pip install fonttools uharfbuzz
-# Archivo[wdth,wght].ttf and JetBrainsMono[wght].ttf from github.com/google/fonts (ofl/),
-# saved as archivo.ttf and jbmono.ttf in one folder
-python3 source/build_svgs.py <output folder> <font folder>
+pip install fonttools uharfbuzz cairosvg pillow
+# Outfit[wght].ttf from github.com/google/fonts (ofl/outfit), saved as outfit.ttf
+python3 source/build_svgs.py design/brand <font folder>
+cp design/brand/kodact.ico crates/kodact-cli/assets/kodact.ico
 ```
-
-The PNG files are the SVGs rendered at the sizes in their names; any SVG
-renderer gives the same result.

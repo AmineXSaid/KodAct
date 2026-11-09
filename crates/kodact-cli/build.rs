@@ -1,4 +1,4 @@
-//! On Windows, Kod, KodAct's logo (see `design/brand`), becomes kodact.exe's icon (`assets/kodact.rc`).
+//! On Windows, KodAct's app icon (the mark on a Signal-blue tile, see `design/brand`) becomes kodact.exe's icon (`assets/kodact.rc`).
 //! A build without a resource compiler fails here rather than ship no icon.
 
 fn main() {
