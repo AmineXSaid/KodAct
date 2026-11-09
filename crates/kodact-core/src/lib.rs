@@ -472,7 +472,6 @@ fn apply_model_limits(s: &LoadedSettings) -> Vec<String> {
 /// How [`unknown_model_notice`] starts, so `/doctor` can tell it apart.
 pub const UNKNOWN_MODEL_PREFIX: &str = "KodAct doesn't know the model ";
 
-/// Shown once when the session's model is in no table and nothing set its limits.
 /// How long a session waits, as it starts, for its endpoint to report an unknown
 /// model's context window.
 pub const LISTED_WINDOW_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
@@ -492,6 +491,7 @@ impl Session {
     }
 }
 
+/// Shown once when the session's model is in no table and nothing set its limits.
 pub fn unknown_model_notice(model: &str, priced: bool) -> String {
     let info = kodact_api::models::model_info_or_default(model);
     let price = if priced { "" } else { ", and has no price for it" };
