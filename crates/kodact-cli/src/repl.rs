@@ -209,7 +209,8 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, crate::exit::Fa
     let sink: Arc<dyn kodact_engine::EventSink> = Arc::new(PrintSink);
     let prompter: Arc<dyn kodact_engine::PermissionPrompter> = Arc::new(LinePrompter { lines: lines.clone() });
     let rebuild = (lo.clone(), sink.clone(), prompter.clone());
-    let session = kodact_core::build_session(lo, sink, prompter).map_err(crate::exit::Fail::from)?;
+    let mut session = kodact_core::build_session(lo, sink, prompter).map_err(crate::exit::Fail::from)?;
+    session.learn_window().await;
     for w in session.warnings.iter().chain(&mcp_warnings) {
         eprintln!("kodact: {w}");
     }

@@ -761,7 +761,13 @@ pub fn model_ids(body: &Value) -> Vec<String> {
 /// The limits a model-list entry reports, under the names gateways use
 /// (OpenRouter `context_length`, vLLM `max_model_len`, LiteLLM `max_input_tokens`, ...).
 pub fn listed_limits(entry: &Value) -> crate::models::Limits {
-    let first = |paths: &[&str]| paths.iter().find_map(|p| entry.pointer(p).and_then(Value::as_u64)).filter(|n| *n > 0);
+    // A whole number, also when a gateway sends it as text ("32768") or a decimal (32768.0).
+    let count = |v: &Value| -> Option<u64> {
+        v.as_u64()
+            .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0 && *f > 0.0 && *f < 1e12).map(|f| f as u64))
+            .or_else(|| v.as_str().and_then(|s| s.trim().replace('_', "").parse().ok()))
+    };
+    let first = |paths: &[&str]| paths.iter().find_map(|p| entry.pointer(p).and_then(count)).filter(|n| *n > 0);
     crate::models::Limits {
         context_window: first(&[
             "/context_length",
@@ -1036,6 +1042,15 @@ mod tests {
         assert_eq!((l.context_window, l.max_output), (Some(163_840), Some(8192)));
         assert_eq!(listed_limits(&body["data"][1]).context_window, Some(32_768));
         assert_eq!(listed_limits(&body["data"][2]), crate::models::Limits::default());
+        // Text and decimals are read as numbers; nothing else is.
+        for (v, want) in
+            [(json!("32768"), Some(32_768)), (json!(32_768.0), Some(32_768)), (json!(" 131_072 "), Some(131_072))]
+        {
+            assert_eq!(listed_limits(&json!({"id": "x", "max_model_len": v})).context_window, want);
+        }
+        for v in [json!(0), json!(-1), json!(32_768.5), json!("lots"), json!(null), json!([1])] {
+            assert_eq!(listed_limits(&json!({"id": "x", "max_model_len": v})).context_window, None, "{v}");
+        }
         record_listed_limits(&body);
         assert_eq!(crate::models::model_info_or_default("vllm-model").context_window, 32_768);
     }

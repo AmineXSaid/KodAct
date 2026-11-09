@@ -292,7 +292,7 @@ async fn run_print(cli_prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
     let (mcp, mcp_warnings) = kodact_core::connect_mcp(&lo).await;
     lo.mcp = Some(mcp.clone());
     let rebuild = (lo.clone(), sink.clone(), prompter.clone());
-    let session = match build_session(lo, sink, prompter) {
+    let mut session = match build_session(lo, sink, prompter) {
         Ok(s) => s,
         Err(e) => {
             let f = Fail::from(e);
@@ -306,6 +306,8 @@ async fn run_print(cli_prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
             eprintln!("{} {w}", term::yellow("kodact: warning:"));
         }
     }
+    // The endpoint's window for an unknown model, before the first request uses a guess.
+    session.learn_window().await;
     *sink_id.lock().unwrap() = session.session_id.clone();
     if !o.quiet {
         for w in &session.warnings {

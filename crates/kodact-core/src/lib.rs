@@ -473,6 +473,25 @@ fn apply_model_limits(s: &LoadedSettings) -> Vec<String> {
 pub const UNKNOWN_MODEL_PREFIX: &str = "KodAct doesn't know the model ";
 
 /// Shown once when the session's model is in no table and nothing set its limits.
+/// How long a session waits, as it starts, for its endpoint to report an unknown
+/// model's context window.
+pub const LISTED_WINDOW_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+impl Session {
+    /// An unknown model: wait a moment ([`LISTED_WINDOW_WAIT`]) for the endpoint's model
+    /// list, which may report its window, so the first request and the startup notice use
+    /// it instead of the 200,000-token guess. The notice goes once the window is known.
+    pub async fn learn_window(&mut self) {
+        let Some(i) = self.warnings.iter().position(|w| w.starts_with(UNKNOWN_MODEL_PREFIX)) else { return };
+        let model = self.warnings[i][UNKNOWN_MODEL_PREFIX.len()..].split(':').next().unwrap_or("").to_string();
+        let provider = self.engine.provider();
+        let _ = tokio::time::timeout(LISTED_WINDOW_WAIT, provider.list_models()).await;
+        if kodact_api::models::limits_source(&model) == kodact_api::models::LimitsSource::Listed {
+            self.warnings.remove(i);
+        }
+    }
+}
+
 pub fn unknown_model_notice(model: &str, priced: bool) -> String {
     let info = kodact_api::models::model_info_or_default(model);
     let price = if priced { "" } else { ", and has no price for it" };

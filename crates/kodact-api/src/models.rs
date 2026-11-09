@@ -310,6 +310,10 @@ pub fn listed_limits(id: &str, l: Limits) {
 /// Where `id`'s limits come from.
 pub fn limits_source(id: &str) -> LimitsSource {
     if let Some((_, src)) = limit_map().read().unwrap().get(id) {
+        // KODACT_CONTEXT_WINDOW is the user's own setting: it wins over a listed window.
+        if *src == LimitsSource::Listed && default_window().is_some() {
+            return LimitsSource::Configured;
+        }
         return *src;
     }
     if model_info(id).is_some() {
@@ -330,9 +334,14 @@ pub fn model_info_or_default(id: &str) -> ModelInfo {
             info.context_window = w;
         }
     }
-    if let Some((l, _)) = limit_map().read().unwrap().get(id) {
-        if let Some(w) = l.context_window {
+    if let Some((l, src)) = limit_map().read().unwrap().get(id) {
+        // A listed window gives way to KODACT_CONTEXT_WINDOW, the user's own setting.
+        let env_wins = *src == LimitsSource::Listed && default_window().is_some();
+        if let Some(w) = l.context_window.filter(|_| !env_wins) {
             info.context_window = w;
+        }
+        if env_wins {
+            info.context_window = default_window().unwrap_or(info.context_window);
         }
         if let Some(o) = l.max_output {
             info.max_output = o;
