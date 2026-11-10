@@ -156,6 +156,16 @@ fn next_step_reminder(line: &str) -> String {
     )
 }
 
+/// For a one-shot run that is not unattended ([`EngineConfig::one_shot`]).
+fn one_shot_todo_reminder(open: &[String]) -> String {
+    format!(
+        "<system-reminder>\nThis run ends with your reply and takes no further input, and todo items are not \
+         completed:\n{}\nFinish what you can now. If an item is blocked, needs an answer from the person, or no \
+         longer applies, update the list with TodoWrite and say plainly what is left and why.\n</system-reminder>",
+        open.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n")
+    )
+}
+
 fn todo_reminder(open: &[String]) -> String {
     format!(
         "<system-reminder>\nThe run is about to end with todo items not completed:\n{}\nFinish them now. If one no \
@@ -167,7 +177,7 @@ fn todo_reminder(open: &[String]) -> String {
 /// Unattended runs (GOALS pillar 2): the first wait before a failed model call is tried again.
 const API_RETRY_FIRST_WAIT: Duration = Duration::from_secs(5);
 /// The longest wait between two tries.
-const API_RETRY_MAX_WAIT: Duration = Duration::from_secs(60);
+const API_RETRY_MAX_WAIT: Duration = kodact_api::MAX_RETRY_WAIT;
 /// Without `--max-time`, how many times a failed call is tried again.
 const API_RETRY_ATTEMPTS: u32 = 10;
 /// With `--max-time`, the most tries, and the time kept after a wait for the model to wrap up.
@@ -213,6 +223,14 @@ pub struct EngineConfig {
     pub is_subagent: bool,
     /// The verification loop; `None` turns it off. Never runs in sub-agents.
     pub verify: Option<crate::verify::VerifyConfig>,
+    /// Tell the model, with an edit's result, when the file it wrote no longer parses
+    /// (`verification.syntaxCheck`, on with the verification loop). Sub-agents keep it.
+    pub edit_diagnostics: bool,
+    /// The run ends with this turn and takes no further input (`-p` with its prompt given up
+    /// front): a turn about to end with todo items open is sent back once, since a script gets
+    /// what the turn left. Not for a session with a person or a host at the other end, where
+    /// stopping to ask is right.
+    pub one_shot: bool,
     /// After a `max_tokens` stop, raise the output cap to [`ESCALATED_OUTPUT_TOKENS`]
     /// for the rest of the turn (off when the user set the cap).
     pub escalate_output: bool,
@@ -288,6 +306,8 @@ impl Default for EngineConfig {
             auto_compact: true,
             is_subagent: false,
             verify: None,
+            edit_diagnostics: false,
+            one_shot: false,
             escalate_output: true,
             fast: false,
         }
@@ -671,6 +691,9 @@ pub struct TurnResult {
     pub auth_failed: bool,
     /// Tool calls the model made in this turn.
     pub tool_calls: u32,
+    /// Where the turn's changes stand: checked, failed, or not run (`None` with the
+    /// verification loop off).
+    pub verification: Option<crate::verify::Verified>,
 }
 
 pub struct Engine {
@@ -1107,12 +1130,12 @@ impl Engine {
             .collect()
     }
 
-    /// How long to wait before trying a failed model call again, or `None` to give up. Only
-    /// unattended runs retry: a person at the prompt decides for themselves. A stream that
-    /// broke before its first event counts as a lost connection; an endpoint that says it is
-    /// down for maintenance is waited out; and a "model not found" after the model has already
-    /// answered in this run is the endpoint losing it for a moment, not a wrong name.
-    fn api_retry_wait(&self, e: &ApiError, retries: u32) -> Option<Duration> {
+    /// How long to wait before trying a failed model call again, or `None` to give up, in every
+    /// run. A stream that broke before its first event counts as a lost connection; an endpoint
+    /// that says it is down for maintenance is waited out; and a "model not found" after the
+    /// model has already answered in this run is the endpoint losing it for a moment, not a
+    /// wrong name. A spent quota is not waited for (`is_retryable` says no).
+    pub(crate) fn api_retry_wait(&self, e: &ApiError, retries: u32) -> Option<Duration> {
         let answered = || self.state.messages.iter().any(|m| m.role == kodact_types::Role::Assistant);
         let passes = e.is_retryable()
             || e.is_outage()
@@ -1129,6 +1152,18 @@ impl Engine {
             if retries >= max {
                 return None;
             }
+        }
+        // The endpoint asks for longer than a retry sleeps. Sooner, it refuses again: ten tries a
+        // minute apart would spend ten minutes to show the same error. So the wait is taken in
+        // full or not at all. A person at the prompt is told how long and decides; an unattended
+        // run waits when the wait fits its time (`--max-time`), or, with no limit set, the time
+        // its retries would have taken anyway.
+        if let Some(asked) = e.long_wait() {
+            let fits = match &self.cfg.time_limit {
+                Some(t) => t.remaining() > asked + API_RETRY_RESERVE,
+                None => self.cfg.autonomous && asked <= API_RETRY_MAX_WAIT * API_RETRY_ATTEMPTS,
+            };
+            return fits.then_some(asked);
         }
         let backoff = self.cfg.api_retry_wait.saturating_mul(1 << retries.min(6));
         let retry_after = match e {
@@ -1895,6 +1930,7 @@ impl Engine {
             fatal: false,
             auth_failed: false,
             tool_calls: 0,
+            verification: None,
         }
     }
 
@@ -1982,7 +2018,11 @@ impl Engine {
             return self.run_turn(prompt).await;
         }
         self.handle.set_turn_running(true);
-        let result = self.run_turn(prompt).await;
+        let mut result = self.run_turn(prompt).await;
+        // A turn a hook blocked before it began did nothing to report on.
+        if result.prompt_blocked.is_none() {
+            result.verification = self.verification_state().await;
+        }
         self.handle.set_turn_running(false);
         self.handle.end_turn_overrides();
         result
@@ -2417,14 +2457,45 @@ impl Engine {
                 // The model acted: a later reasoning-only cut-off starts a new stretch.
                 reasoning_cutoffs = 0;
                 turn.tool_calls += tool_uses.len() as u32;
-                let results = crate::exec::run_tools(&self.shared, &tool_uses, &cancel, self.mode_str()).await;
+                // A call the model was already told would fail the same way is answered, not run.
+                let refused: Vec<Option<crate::stuck::Refused>> = tool_uses
+                    .iter()
+                    .map(|(_, name, input)| {
+                        let files_only = self.depends_on_files_only(name);
+                        self.guard.would_repeat(name, input, files_only).filter(|_| self.cfg.reminders)
+                    })
+                    .collect();
+                let to_run: Vec<(String, String, Value)> =
+                    tool_uses.iter().zip(&refused).filter(|(_, r)| r.is_none()).map(|(c, _)| c.clone()).collect();
+                let mut ran = crate::exec::run_tools(&self.shared, &to_run, &cancel, self.mode_str()).await.into_iter();
+                let writes_now = self.shared.history.writes_len();
+                let mut results: Vec<crate::exec::CallResult> = tool_uses
+                    .iter()
+                    .zip(&refused)
+                    .map(|((id, ..), r)| match r {
+                        Some(r) => {
+                            self.system_event("loop_guard", r.record());
+                            let mut c = crate::exec::CallResult::plain(id, kodact_tools::ToolOutput::error(r.text()));
+                            c.writes_after = writes_now;
+                            c
+                        }
+                        None => ran.next().unwrap_or_else(|| {
+                            crate::exec::CallResult::plain(
+                                id,
+                                kodact_tools::ToolOutput::error(kodact_tools::INTERRUPTED),
+                            )
+                        }),
+                    })
+                    .collect();
                 if self.verifying() {
                     self.track_verification(&tool_uses, &results).await;
                 }
                 let stuck: Vec<crate::stuck::Stuck> = tool_uses
                     .iter()
                     .zip(&results)
-                    .filter(|(_, r)| r.denial.is_none())
+                    .zip(&refused)
+                    .filter(|((_, r), refused)| r.denial.is_none() && refused.is_none())
+                    .map(|(pair, _)| pair)
                     .filter_map(|((_, name, input), r)| {
                         // Could the call have changed files? Then a command run after it may give a
                         // new result, and the guard doesn't call a repeat of it a loop.
@@ -2436,6 +2507,9 @@ impl Engine {
                         self.guard.observe(name, input, &r.output.text_content(), r.output.is_error, may_change)
                     })
                     .collect();
+                if self.cfg.edit_diagnostics {
+                    self.diagnose_edits(&tool_uses, &mut results).await;
+                }
                 let mut interrupted = cancel.is_cancelled();
                 for r in results {
                     if let Some(d) = r.denial {
@@ -2556,6 +2630,24 @@ impl Engine {
                     todo_reminders += 1;
                     self.system_event("todo_reminder", json!({"open": open}));
                     self.push_user(Message::user_text(todo_reminder(&open)), true, None, true);
+                    continue;
+                }
+            }
+
+            // A one-shot run that isn't unattended: sent back once on open todos. Unattended
+            // runs have their own, firmer reminders above.
+            if self.cfg.one_shot
+                && !self.cfg.autonomous
+                && !self.cfg.is_subagent
+                && self.cfg.reminders
+                && todo_reminders == 0
+                && stop_reason != Some(StopReason::Refusal)
+            {
+                let open = self.unfinished_todos();
+                if !open.is_empty() {
+                    todo_reminders += 1;
+                    self.system_event("todo_reminder", json!({"open": open, "one_shot": true}));
+                    self.push_user(Message::user_text(one_shot_todo_reminder(&open)), true, None, true);
                     continue;
                 }
             }
@@ -2863,6 +2955,35 @@ impl Engine {
         (text, kept)
     }
 
+    /// Is this tool's result decided by the call and the files alone? Then a call that failed
+    /// the same way three times, with no file changed since, fails again. A name no tool has is
+    /// one of them: sending it again never finds a tool.
+    fn depends_on_files_only(&self, name: &str) -> bool {
+        matches!(name, "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | "Read" | "Glob" | "Grep" | "LS")
+            || self.shared.tools.get(name).is_none()
+    }
+
+    /// Diagnostics after edits (GOALS pillar 3): a file an edit left unparseable is said with the
+    /// edit's result ([`crate::diagnose`]). Nothing is added when the file parses.
+    async fn diagnose_edits(&mut self, calls: &[(String, String, Value)], results: &mut [crate::exec::CallResult]) {
+        let root = self.shared.tool_ctx.project_dir.clone();
+        for ((_, name, input), r) in calls.iter().zip(results.iter_mut()) {
+            if !matches!(name.as_str(), "Edit" | "MultiEdit" | "Write") || r.output.is_error || r.denial.is_some() {
+                continue;
+            }
+            let Some(raw) = input.get("file_path").and_then(Value::as_str) else { continue };
+            let path = kodact_tools::expand_path(raw, &root);
+            let Some(d) = crate::diagnose::check(&path).await else { continue };
+            let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
+            self.system_event("diagnostics", json!({"file": shown, "parser": d.parser}));
+            let text = d.text(&shown);
+            match &mut r.output.content {
+                kodact_types::ToolResultContent::Text(s) => s.push_str(&text),
+                kodact_types::ToolResultContent::Blocks(b) => b.push(ContentBlock::text(text.trim_start())),
+            }
+        }
+    }
+
     fn verifying(&self) -> bool {
         self.cfg.verify.is_some() && !self.cfg.is_subagent
     }
@@ -2935,6 +3056,44 @@ impl Engine {
         }
     }
 
+    /// Where the turn's changes stand now (`None` when the verification loop is off): what the
+    /// reminder is decided on, and what the result reports.
+    async fn verification_state(&self) -> Option<crate::verify::Verified> {
+        use crate::verify::Verified;
+        if !self.verifying() {
+            return None;
+        }
+        let writes = self.shared.history.writes_len();
+        let root = &self.shared.tool_ctx.project_dir;
+        let history = &self.shared.history;
+        let read_since_change = |p: &std::path::Path| {
+            crate::verify::is_data_file(p) && {
+                let last = history.last_write_len(p);
+                self.verify.read_back.iter().any(|(arg, at)| *at >= last && crate::verify::names_file(p, arg))
+            }
+        };
+        let files: Vec<String> = history
+            .writes_since(self.verify.write_mark)
+            .iter()
+            .filter(|p| !read_since_change(p))
+            .map(|p| p.strip_prefix(root).unwrap_or(p).display().to_string())
+            .collect();
+        let shell = files.is_empty()
+            && self.verify.shell_may_have_changed
+            && self.verify.fingerprint.is_some()
+            && self.worktree_fingerprint().await != self.verify.fingerprint;
+        Some(if !files.is_empty() || shell {
+            Verified::Unchecked { files, shell }
+        } else {
+            match &self.verify.last_check {
+                Some((command, true)) => Verified::Failed { command: command.clone() },
+                Some((command, false)) => Verified::Passed { command: command.clone() },
+                None if writes > 0 => Verified::ReadBack,
+                None => Verified::NoChanges,
+            }
+        })
+    }
+
     /// The reminder to send before the turn may end, if one is due.
     async fn verification_reminder(&mut self) -> Option<String> {
         let vc = self.cfg.verify.clone()?;
@@ -2963,33 +3122,12 @@ impl Engine {
                 return None;
             }
         }
-        let root = &self.shared.tool_ctx.project_dir;
-        let history = &self.shared.history;
-        let read_since_change = |p: &std::path::Path| {
-            crate::verify::is_data_file(p) && {
-                let last = history.last_write_len(p);
-                self.verify.read_back.iter().any(|(arg, at)| *at >= last && crate::verify::names_file(p, arg))
+        let reminder = match self.verification_state().await? {
+            crate::verify::Verified::Unchecked { files, shell } => crate::verify::Reminder::Unchecked { files, shell },
+            crate::verify::Verified::Failed { command } if writes > 0 => {
+                crate::verify::Reminder::LastCheckFailed { command }
             }
-        };
-        let files: Vec<String> = history
-            .writes_since(self.verify.write_mark)
-            .iter()
-            .filter(|p| !read_since_change(p))
-            .map(|p| p.strip_prefix(root).unwrap_or(p).display().to_string())
-            .collect();
-        let shell = files.is_empty()
-            && self.verify.shell_may_have_changed
-            && self.verify.fingerprint.is_some()
-            && self.worktree_fingerprint().await != self.verify.fingerprint;
-        let reminder = if !files.is_empty() || shell {
-            crate::verify::Reminder::Unchecked { files, shell }
-        } else {
-            match &self.verify.last_check {
-                Some((command, true)) if writes > 0 => {
-                    crate::verify::Reminder::LastCheckFailed { command: command.clone() }
-                }
-                _ => return None,
-            }
+            _ => return None,
         };
         self.verify.reminders += 1;
         self.verify.reminded_at = Some((writes, self.worktree_fingerprint().await));
@@ -3043,6 +3181,7 @@ impl Engine {
             fatal: false,
             auth_failed: false,
             tool_calls: turn.tool_calls,
+            verification: None,
         }
     }
 

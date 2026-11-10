@@ -452,6 +452,7 @@ fn apply_key(d: &mut Driver, name: &str, value: &Option<Value>) -> Result<Option
             } else {
                 crate::verify_config(&settings, &d.info.cwd, d.engine.cfg.autonomous)
             };
+            d.engine.cfg.edit_diagnostics = crate::edit_diagnostics(&settings, d.engine.cfg.verify.is_some());
             // The prompt's "run these checks" line follows.
             d.prompt.env.checks = d.engine.cfg.verify.as_ref().map(|v| v.commands.clone()).unwrap_or_default();
             d.rebuild_system();

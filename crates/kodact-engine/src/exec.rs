@@ -39,7 +39,7 @@ pub(crate) struct CallResult {
 }
 
 impl CallResult {
-    fn plain(id: &str, output: ToolOutput) -> Self {
+    pub(crate) fn plain(id: &str, output: ToolOutput) -> Self {
         CallResult { id: id.to_string(), output, denial: None, interrupt_turn: false, stop: None, writes_after: 0 }
     }
 }

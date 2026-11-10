@@ -89,6 +89,9 @@ pub struct LaunchOptions {
     pub max_time: Option<std::time::Duration>,
     /// `--autonomous` (or the `autonomous` setting): an unattended run.
     pub autonomous: bool,
+    /// Print mode with its prompt given up front (`-p`, no input stream): the run ends with the
+    /// turn, and nobody can answer after it.
+    pub one_shot: bool,
     pub json_schema: Option<Value>,
     pub resume: Resume,
     pub fork_session: bool,
@@ -275,6 +278,13 @@ pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
         Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
         None => settings.bool("/reminders").unwrap_or(true),
     }
+}
+
+/// Whether an edit's result says when the file no longer parses: on with the verification loop
+/// (so `KODACT_VERIFY=0` and `verification.enabled` turn it off too), unless
+/// `verification.syntaxCheck` is false.
+pub(crate) fn edit_diagnostics(settings: &LoadedSettings, verifying: bool) -> bool {
+    verifying && settings.bool("/verification/syntaxCheck") != Some(false)
 }
 
 /// The verification loop's settings: `verification.{enabled, commands,
@@ -1019,6 +1029,8 @@ pub fn build_session(
         autocompact_window,
         auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
         is_subagent: false,
+        edit_diagnostics: edit_diagnostics(&settings, verify.is_some()),
+        one_shot: opts.one_shot,
         verify,
         escalate_output: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").is_none(),
         fast: settings.bool("/fastMode").unwrap_or(false),

@@ -63,7 +63,18 @@ KodAct has, others lack:
 
 ## Proposals, ranked
 
-Each follows `KODACT.md`. Step 5 (measure before and after) is owed for all.
+Each follows `KODACT.md`. All five are implemented (see CHANGELOG, "Checks on
+the agent's work"). Step 5 (measure before and after with `kodact-eval`) is
+still owed for all: no API key was available where they were written.
+
+What was built differs from the proposal in two places:
+- **3** is the parse check only (the language's own parser on the edited
+  file). Running a project command after each edit was left to `PostToolUse`
+  hooks, which already do it; types and other files remain "To build".
+- **4** refuses only calls whose result depends on the call and the files
+  alone (file tools, an unknown tool name). Shell, web and MCP calls can fail
+  three times and work the fourth, so they are still only reminded. The
+  count of ignored reminders in transcripts was not measured first.
 
 ### 1. Retry: tell quota from throttle, and respect a long wait
 

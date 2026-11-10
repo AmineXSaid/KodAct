@@ -158,6 +158,7 @@ impl SessionView {
             fatal: false,
             auth_failed: false,
             tool_calls: 0,
+            verification: None,
         }
     }
 

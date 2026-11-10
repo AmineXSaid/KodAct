@@ -158,6 +158,9 @@ pub struct RunRecord {
     /// Replies that were all reasoning, each answered with a reminder to act (`act_reminder`).
     #[serde(default)]
     pub act_reminders: u64,
+    /// Edits whose result said the file no longer parses (`diagnostics`).
+    #[serde(default)]
+    pub edit_diagnostics: u64,
     /// Compactions of the conversation (`compact_boundary`).
     #[serde(default)]
     pub compactions: u64,
@@ -169,6 +172,11 @@ pub struct RunRecord {
     pub compact_fallbacks: u64,
     pub agent_error: bool,
     pub stop_reason: Option<String>,
+    /// What the result said of the changes (`verification.status`): `passed`, `failed`,
+    /// `unchecked`, `read_back` or `no_changes`. Beside `passed` it shows whether a false
+    /// finish was announced by KodAct itself (`unchecked`, `failed`) or slipped past a check.
+    #[serde(default)]
+    pub verification: Option<String>,
     pub timed_out: bool,
     pub check_output: String,
     pub workspace: PathBuf,
@@ -197,6 +205,9 @@ pub struct Summary {
     /// Replies that were all reasoning per run: each took up to a whole output budget for nothing.
     #[serde(default)]
     pub act_reminders_per_run: f64,
+    /// Edits per run that left a file unparseable and were told so with their result.
+    #[serde(default)]
+    pub edit_diagnostics_per_run: f64,
     /// Compactions per run, and failed summary attempts per run (each a model call for nothing).
     #[serde(default)]
     pub compactions_per_run: f64,
@@ -238,6 +249,7 @@ pub fn summarize(runs: &[RunRecord]) -> Summary {
         verify_reminders_per_run: runs.iter().map(|r| r.verify_reminders as f64).sum::<f64>() / n,
         loop_guards_per_run: runs.iter().map(|r| r.loop_guards as f64).sum::<f64>() / n,
         act_reminders_per_run: runs.iter().map(|r| r.act_reminders as f64).sum::<f64>() / n,
+        edit_diagnostics_per_run: runs.iter().map(|r| r.edit_diagnostics as f64).sum::<f64>() / n,
         compactions_per_run: runs.iter().map(|r| r.compactions as f64).sum::<f64>() / n,
         compact_failures_per_run: runs.iter().map(|r| r.compact_failures as f64).sum::<f64>() / n,
     }
@@ -354,12 +366,14 @@ pub struct StreamFacts {
     pub verify_reminders: u64,
     pub loop_guards: u64,
     pub act_reminders: u64,
+    pub edit_diagnostics: u64,
     pub compactions: u64,
     pub compact_failures: u64,
     pub compact_fallbacks: u64,
     pub api_error: bool,
     pub is_error: bool,
     pub stop_reason: Option<String>,
+    pub verification: Option<String>,
     pub saw_result: bool,
 }
 
@@ -384,6 +398,7 @@ pub fn parse_stream(lines: &[Value]) -> StreamFacts {
             Some("system") if v["subtype"] == "verification" => f.verify_reminders += 1,
             Some("system") if v["subtype"] == "loop_guard" => f.loop_guards += 1,
             Some("system") if v["subtype"] == "act_reminder" => f.act_reminders += 1,
+            Some("system") if v["subtype"] == "diagnostics" => f.edit_diagnostics += 1,
             Some("system") if v["subtype"] == "compact_boundary" => f.compactions += 1,
             Some("system") if v["subtype"] == "compact_failed" => f.compact_failures += 1,
             Some("system") if v["subtype"] == "compact_fallback" => f.compact_fallbacks += 1,
@@ -394,6 +409,7 @@ pub fn parse_stream(lines: &[Value]) -> StreamFacts {
                 f.turns = v["num_turns"].as_u64().unwrap_or(0);
                 f.is_error = v["is_error"].as_bool().unwrap_or(true);
                 f.stop_reason = v["stop_reason"].as_str().map(str::to_string);
+                f.verification = v["verification"]["status"].as_str().map(str::to_string);
                 if v["subtype"] == "error_during_execution" {
                     f.api_error = true;
                 }
@@ -517,11 +533,13 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         verify_reminders: facts.verify_reminders,
         loop_guards: facts.loop_guards,
         act_reminders: facts.act_reminders,
+        edit_diagnostics: facts.edit_diagnostics,
         compactions: facts.compactions,
         compact_failures: facts.compact_failures,
         compact_fallbacks: facts.compact_fallbacks,
         agent_error,
         stop_reason: facts.stop_reason,
+        verification: facts.verification,
         timed_out,
         check_output,
         workspace: ws,
@@ -551,11 +569,13 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
                     verify_reminders: 0,
                     loop_guards: 0,
                     act_reminders: 0,
+                    edit_diagnostics: 0,
                     compactions: 0,
                     compact_failures: 0,
                     compact_fallbacks: 0,
                     agent_error: true,
                     stop_reason: None,
+                    verification: None,
                     timed_out: false,
                     check_output: format!("harness error: {e:#}"),
                     workspace: PathBuf::new(),
@@ -599,7 +619,8 @@ pub fn render_markdown(r: &Report) -> String {
          | Pass rate | {} |\n| Cost per task | ${:.4} |\n| Cost per passed task | {} |\n| Turns per task | {:.1} |\n\
          | Wall time per task | {:.1}s |\n| Recovery rate | {} |\n| False-finish rate | {} |\n| Invalid-call rate | {} |\n\
          | Verification reminders per task | {:.2} |\n| Loop warnings per task | {:.2} |\n\
-         | Reasoning-only replies per task | {:.2} |\n| Compactions per task | {:.2} |\n\
+         | Reasoning-only replies per task | {:.2} |\n| Edits told they broke the syntax, per task | {:.2} |\n\
+         | Compactions per task | {:.2} |\n\
          | Failed summaries per task | {:.2} |\n\n",
         r.label,
         s.runs,
@@ -615,6 +636,7 @@ pub fn render_markdown(r: &Report) -> String {
         s.verify_reminders_per_run,
         s.loop_guards_per_run,
         s.act_reminders_per_run,
+        s.edit_diagnostics_per_run,
         s.compactions_per_run,
         s.compact_failures_per_run,
     );
@@ -628,10 +650,10 @@ pub fn render_markdown(r: &Report) -> String {
             s.mean_turns
         ));
     }
-    out.push_str("\n## Runs\n\n| Task | Run | Pass | False finish | Turns | Cost | Tool errors | Time | Reminders (verify/loop/act) | Compactions (done/failed/note) |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+    out.push_str("\n## Runs\n\n| Task | Run | Pass | False finish | Turns | Cost | Tool errors | Time | Reminders (verify/loop/act) | Compactions (done/failed/note) | Changes |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for x in &r.runs {
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | ${:.4} | {}/{} | {:.1}s | {}/{}/{} | {}/{}/{} |\n",
+            "| {} | {} | {} | {} | {} | ${:.4} | {}/{} | {:.1}s | {}/{}/{} | {}/{}/{} | {} |\n",
             x.task,
             x.run,
             if x.passed { "yes" } else { "no" },
@@ -646,7 +668,8 @@ pub fn render_markdown(r: &Report) -> String {
             x.act_reminders,
             x.compactions,
             x.compact_failures,
-            x.compact_fallbacks
+            x.compact_fallbacks,
+            x.verification.as_deref().unwrap_or("")
         ));
     }
     out
@@ -785,11 +808,13 @@ mod tests {
             verify_reminders: 0,
             loop_guards: 0,
             act_reminders: 0,
+            edit_diagnostics: 0,
             compactions: 0,
             compact_failures: 0,
             compact_fallbacks: 0,
             agent_error: false,
             stop_reason: Some("end_turn".into()),
+            verification: None,
             timed_out: false,
             check_output: String::new(),
             workspace: PathBuf::new(),
@@ -823,19 +848,21 @@ mod tests {
             json!({"type": "system", "subtype": "verification", "kind": "unchecked"}),
             json!({"type": "system", "subtype": "loop_guard", "kind": "repeated_failure", "after_changes": true}),
             json!({"type": "system", "subtype": "act_reminder", "kind": "reasoning_cutoff", "reasoning_chars": 8000}),
+            json!({"type": "system", "subtype": "diagnostics", "file": "a.py", "parser": "python3"}),
             json!({"type": "system", "subtype": "compact_failed", "trigger": "auto", "reason": "empty_summary"}),
             json!({"type": "system", "subtype": "compact_failed", "trigger": "auto", "reason": "empty_summary"}),
             json!({"type": "system", "subtype": "compact_fallback", "trigger": "auto"}),
             json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"trigger": "auto"}}),
-            json!({"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.05, "num_turns": 3, "stop_reason": "end_turn"}),
+            json!({"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.05, "num_turns": 3, "stop_reason": "end_turn", "verification": {"status": "unchecked", "files": ["a.py"]}}),
         ];
         let f = parse_stream(&lines);
         assert_eq!((f.verify_reminders, f.loop_guards), (1, 1));
         assert_eq!((f.compactions, f.compact_failures, f.compact_fallbacks), (1, 2, 1));
-        assert_eq!(f.act_reminders, 1);
+        assert_eq!((f.act_reminders, f.edit_diagnostics), (1, 1));
         assert_eq!((f.tool_calls, f.tool_errors, f.turns), (2, 1, 3));
         assert!(f.saw_result && !f.is_error && !f.api_error);
         assert_eq!(f.cost_usd, 0.05);
+        assert_eq!(f.verification.as_deref(), Some("unchecked"));
     }
 
     #[test]

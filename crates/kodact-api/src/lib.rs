@@ -88,6 +88,10 @@ impl ApiError {
         if self.is_outage() {
             return false;
         }
+        // Spent credit is a billing matter, not a key to sign in with again.
+        if self.is_quota() {
+            return false;
+        }
         match self {
             ApiError::MissingCredentials => true,
             ApiError::Http { status, kind, .. } => {
@@ -120,8 +124,53 @@ impl ApiError {
         }
     }
 
+    /// A limit that a short wait doesn't lift: spent credit, a spending cap, a billing problem.
+    /// Told from a throttle by what the endpoint says, in the words the providers and gateways
+    /// use; a 429 that says none of this is a throttle and is waited out.
+    pub fn is_quota(&self) -> bool {
+        const PHRASES: &[&str] = &[
+            "insufficient_quota",
+            "credit balance",
+            "insufficient credit",
+            "insufficient balance",
+            "insufficient funds",
+            "out of credits",
+            "billing hard limit",
+            "spend limit",
+            "spending limit",
+            "payment required",
+        ];
+        match self {
+            ApiError::Http { status: 402, .. } => true,
+            ApiError::Http { status: 403 | 429, kind, message, .. } => {
+                let m = message.to_ascii_lowercase();
+                matches!(kind.as_str(), "billing_error" | "insufficient_quota") || PHRASES.iter().any(|p| m.contains(p))
+            }
+            _ => false,
+        }
+    }
+
+    /// The wait the endpoint asks for, when it is longer than a retry sleeps ([`MAX_RETRY_WAIT`]).
+    /// Trying again sooner fails the same way, so the caller decides: wait it in full, or stop
+    /// and say how long.
+    pub fn long_wait(&self) -> Option<Duration> {
+        match self {
+            ApiError::Http { retry_after: Some(d), .. } if *d > MAX_RETRY_WAIT => Some(*d),
+            _ => None,
+        }
+    }
+
+    /// Whether a provider may sleep and send the same request again on its own: retryable, and
+    /// not asked to wait longer than a retry sleeps.
+    pub fn retries_quickly(&self) -> bool {
+        self.is_retryable() && self.long_wait().is_none()
+    }
+
     /// Whether retrying the same request may succeed.
     pub fn is_retryable(&self) -> bool {
+        if self.is_quota() {
+            return false;
+        }
         match self {
             ApiError::Http { status, .. } => matches!(status, 408 | 409 | 429 | 500..=599),
             ApiError::Network { .. } => true,
@@ -134,6 +183,9 @@ impl ApiError {
     pub fn is_unrecoverable(&self) -> bool {
         if self.is_outage() {
             return false;
+        }
+        if self.is_quota() {
+            return true;
         }
         match self {
             ApiError::MissingCredentials => true,
@@ -162,6 +214,11 @@ impl ApiError {
             _ => None,
         };
         Some(match self {
+            e if e.is_quota() => {
+                "The account's credit or spending limit is used up: waiting a moment won't lift it. Check the \
+                 plan and billing of the endpoint, or switch model or endpoint."
+                    .into()
+            }
             // Gemini refuses a bad key with a 400 (API_KEY_INVALID), named by its kind.
             e @ ApiError::Http { .. } if e.is_auth_failure() => match origin {
                 Some(o) => o.auth_hint(),
@@ -171,6 +228,10 @@ impl ApiError {
                 Some(o) => o.not_found_hint(),
                 None => "Check the model name (--model or KODACT_MODEL) and the endpoint URL.".into(),
             },
+            e if e.long_wait().is_some() => format!(
+                "The endpoint asks to wait {} before the next request: try again then, or switch model or endpoint.",
+                human_wait(e.long_wait().unwrap_or_default())
+            ),
             ApiError::Http { status: 413, .. } => {
                 "The request is too large: run /compact or start a new session.".into()
             }
@@ -353,10 +414,24 @@ pub trait Provider: Send + Sync {
     }
 }
 
+/// The longest a retry sleeps before sending the same request again. A `retry-after` beyond it
+/// is not shortened to it (the request would be refused again): see [`ApiError::long_wait`].
+pub const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
+
+/// A wait in words: "45s", "12m", "2h 05m".
+pub fn human_wait(d: Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        0..=89 => format!("{}s", s.max(1)),
+        90..=5_399 => format!("{}m", s.div_ceil(60)),
+        _ => format!("{}h {:02}m", s / 3600, (s % 3600).div_ceil(60).min(59)),
+    }
+}
+
 /// Exponential backoff with an upper bound; honours `retry-after` when given.
 pub fn backoff_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
     if let Some(d) = retry_after {
-        return d.min(Duration::from_secs(60));
+        return d.min(MAX_RETRY_WAIT);
     }
     let base = 500u64.saturating_mul(1u64 << attempt.min(6));
     Duration::from_millis(base.min(32_000))
@@ -423,5 +498,52 @@ mod outage_tests {
             "not retried unless the engine knows the model answered"
         );
         assert!(!http(400, "bad request").is_model_missing());
+    }
+
+    #[test]
+    fn a_spent_quota_is_told_from_a_throttle() {
+        let throttle = http(429, "Rate limit reached for requests per minute");
+        assert!(throttle.is_retryable() && !throttle.is_quota() && !throttle.is_unrecoverable());
+        // Gemini words a per-minute throttle this way too: not enough to call it a quota.
+        assert!(http(429, "You exceeded your current quota, please retry in 12s").is_retryable());
+        for spent in [
+            http(429, "You exceeded your current quota. code: insufficient_quota"),
+            http(429, "Your credit balance is too low to access the API"),
+            http(402, "Payment Required"),
+            http(403, "Insufficient balance"),
+            http(429, "Monthly spend limit reached"),
+        ] {
+            assert!(spent.is_quota() && !spent.is_retryable() && spent.is_unrecoverable(), "{spent}");
+            assert!(spent.describe().contains("credit or spending limit"), "{}", spent.describe());
+        }
+        let kind = ApiError::Http {
+            status: 429,
+            kind: "insufficient_quota".into(),
+            message: "quota".into(),
+            retry_after: None,
+            url: String::new(),
+            origin: None,
+        };
+        assert!(kind.is_quota());
+    }
+
+    #[test]
+    fn a_long_wait_is_not_shortened_to_a_retry() {
+        let after = |secs| ApiError::Http {
+            status: 429,
+            kind: "rate_limit_error".into(),
+            message: "slow down".into(),
+            retry_after: Some(std::time::Duration::from_secs(secs)),
+            url: String::new(),
+            origin: None,
+        };
+        assert!(after(30).retries_quickly() && after(30).long_wait().is_none());
+        assert!(after(60).retries_quickly(), "the cap itself is still a retry");
+        let long = after(48 * 60);
+        assert!(long.is_retryable() && !long.retries_quickly());
+        assert_eq!(long.long_wait(), Some(std::time::Duration::from_secs(2880)));
+        assert!(long.describe().contains("asks to wait 48m"), "{}", long.describe());
+        assert_eq!(super::human_wait(std::time::Duration::from_secs(45)), "45s");
+        assert_eq!(super::human_wait(std::time::Duration::from_secs(7500)), "2h 05m");
     }
 }

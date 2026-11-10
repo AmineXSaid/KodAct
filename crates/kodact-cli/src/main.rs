@@ -128,6 +128,7 @@ fn launch_options(o: &Opts) -> Result<LaunchOptions, Fail> {
         max_budget_usd: o.max_budget_usd,
         max_time: o.max_time,
         autonomous: o.autonomous,
+        one_shot: o.print && o.input_format != InputFormat::StreamJson,
         json_schema,
         resume,
         fork_session: o.fork_session,

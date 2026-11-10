@@ -963,7 +963,7 @@ impl Provider for OpenAiProvider {
                     tracing::warn!(error = %e, "the endpoint refused a parameter; sending again without it");
                     adaptations += 1;
                 }
-                Err(e) if e.is_retryable() && attempt < self.config.max_retries => {
+                Err(e) if e.retries_quickly() && attempt < self.config.max_retries => {
                     let retry_after = match &e {
                         ApiError::Http { retry_after, .. } => *retry_after,
                         _ => None,

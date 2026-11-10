@@ -360,7 +360,7 @@ impl Provider for MessagesProvider {
             };
             match res {
                 Ok(r) => break r,
-                Err(e) if e.is_retryable() && attempt < self.config.max_retries => {
+                Err(e) if e.retries_quickly() && attempt < self.config.max_retries => {
                     let wait = backoff_delay(
                         attempt,
                         match &e {

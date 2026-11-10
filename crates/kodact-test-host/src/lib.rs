@@ -100,6 +100,11 @@ impl MockApi {
                                     .to_string();
                             format!("HTTP/1.1 {status} Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len())
                         }
+                        MockTurn::Throttled { message, retry_after } => {
+                            let body = serde_json::json!({"type": "error", "error": {"type": "rate_limit_error", "message": message}})
+                                .to_string();
+                            format!("HTTP/1.1 429 Error\r\ncontent-type: application/json\r\nretry-after: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", retry_after.as_secs(), body.len())
+                        }
                         MockTurn::StreamError { kind, message } => {
                             let err = serde_json::json!({"type": "error", "error": {"type": kind, "message": message}})
                                 .to_string();

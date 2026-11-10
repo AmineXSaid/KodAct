@@ -74,7 +74,11 @@ Each pillar lists what KodAct does about it and what shows that it works.
 ### 2. Failure recovery
 
 - **Done** (contract C13):
-  - API retries with backoff, fallback models, and interrupt with rewind.
+  - API retries with backoff, fallback models, and interrupt with rewind. A
+    429 or an outage is waited out in every run. A spent quota is told from a
+    throttle and not retried, and a `retry-after` longer than a retry sleeps
+    is taken in full when it fits the run's time, or stated and the turn
+    ends: never shortened to a minute and tried again.
   - Edit's "not found" error gives the next step:
     - text that matches except for whitespace, quoted with line numbers;
     - Read's line-number prefixes copied into `old_string`;
@@ -82,7 +86,10 @@ Each pillar lists what KodAct does about it and what shows that it works.
     Ambiguous matches name their lines.
   - Stuck-loop detection: the same failing call three times, the same result
     three times, edits that undo each other, or five failures in a row each
-    trigger one reminder to change approach.
+    trigger one reminder to change approach. After the reminder, the same
+    failing call to a tool whose result depends only on the call and the
+    files (file tools, an unknown tool name) is answered without being run,
+    until something changes; shell, web and MCP calls are only reminded.
   - Truncated output:
     - a tool call cut off by `max_tokens` is answered with an error, not
       sent as a failed turn;
@@ -115,8 +122,15 @@ Each pillar lists what KodAct does about it and what shows that it works.
     model alone.
   - It is on by default; `KODACT_VERIFY=0` turns this one off, and
     `kodact-eval` records `verify_reminders` per run.
-- **To build:** LSP diagnostics and formatter feedback after edits (the
-  OpenCode pattern).
+  - the result states where the changes stand (`verification.status`:
+    `passed`, `failed`, `unchecked`, `read_back`, `no_changes`), for scripts
+    to gate on; `kodact-eval` records it per run, so a false finish shows as
+    announced (`unchecked`, `failed`) or as slipped past a check (`passed`);
+  - a file an edit leaves unparseable is said with the edit's result, by the
+    language's own parser when installed (`verification.syntaxCheck`;
+    `edit_diagnostics` per run, task `syntax-after-edit`).
+- **To build:** LSP diagnostics (types, other files) and formatter feedback
+  after edits (the OpenCode pattern).
 - **Measured by:** false-finish rate and pass rate (tasks `fix-median`,
   `slugify-trap`, `invoice-rounding`).
 
@@ -156,6 +170,9 @@ Each pillar lists what KodAct does about it and what shows that it works.
     limit with an error result (`stop_reason: "max_time"`), a call in flight
     included. Benchmark tasks have hard time limits; a run cut off mid-change
     scores nothing;
+  - a `-p` run with its prompt given up front ends with its turn: about to
+    end with todo items open, it is sent back once (not in a session with a
+    person or a host, where stopping to ask is right);
   - resumable sessions, and unattended headless runs.
 - **To build:**
   - a notes file;

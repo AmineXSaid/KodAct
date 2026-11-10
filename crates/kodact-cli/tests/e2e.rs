@@ -618,6 +618,78 @@ async fn retries_transient_errors() {
     assert_eq!(api.requests().len(), 2);
 }
 
+/// A spent quota is said at once, in an everyday run too; a 429 asking for a short wait is
+/// waited out; one asking for longer than a retry sleeps is told with the wait, not tried
+/// again a minute apart.
+#[tokio::test]
+async fn a_quota_is_not_retried_and_a_long_wait_is_stated() {
+    let print = |api: &MockApi, e: &Env, retries: &str| {
+        let mut c = command(&kodact_bin(), &e.cwd, &e.home, &api.url, &["-p", "hi"]);
+        c.env("KODACT_MAX_RETRIES", retries).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        c
+    };
+    let e = env();
+    let spent = MockTurn::HttpError {
+        status: 429,
+        kind: "insufficient_quota".into(),
+        message: "You exceeded your current quota, please check your plan and billing details".into(),
+    };
+    let api = MockApi::start(vec![spent, MockTurn::text("never asked")]).await;
+    let out = tokio::time::timeout(Duration::from_secs(30), print(&api, &e, "5").output()).await.unwrap().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert_eq!(api.requests().len(), 1, "no retry: {err}");
+    assert!(err.contains("credit or spending limit"), "{err}");
+
+    let throttled = |secs| MockTurn::Throttled { message: "slow down".into(), retry_after: Duration::from_secs(secs) };
+    let api = MockApi::start(vec![throttled(1), MockTurn::text("after the wait")]).await;
+    let out = tokio::time::timeout(Duration::from_secs(30), print(&api, &e, "5").output()).await.unwrap().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "after the wait");
+    assert_eq!(api.requests().len(), 2);
+
+    let api = MockApi::start(vec![throttled(48 * 60), MockTurn::text("never asked")]).await;
+    let out = tokio::time::timeout(Duration::from_secs(30), print(&api, &e, "5").output()).await.unwrap().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert_eq!(api.requests().len(), 1, "not tried again sooner: {err}");
+    assert!(err.contains("asks to wait 48m"), "{err}");
+}
+
+/// `-p --output-format json`: the result says where the changes stand, and a one-shot run
+/// about to end with todo items open is sent back once.
+#[tokio::test]
+async fn print_reports_verification_and_nudges_open_todos() {
+    let e = env();
+    let todos = json!({"todos": [
+        {"content": "write notes.py", "status": "completed", "activeForm": "writing"},
+        {"content": "run it", "status": "pending", "activeForm": "running"},
+    ]});
+    let api = MockApi::start(vec![
+        MockTurn::tools(&[
+            ("TodoWrite", todos),
+            ("Write", json!({"file_path": e.cwd.join("notes.py"), "content": "print('hi'\n"})),
+        ]),
+        MockTurn::text("Wrote the file."),
+        MockTurn::text("Left: running it."),
+        MockTurn::text("Not run here."),
+    ])
+    .await;
+    let args = ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions", "write notes"];
+    let (code, out, err) = run(&e, &api, &args, None).await;
+    assert_eq!(code, 0, "stderr: {err}");
+    let v: Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["verification"], json!({"status": "unchecked", "files": ["notes.py"]}), "{out}");
+    let reqs = api.requests();
+    assert_eq!(reqs.len(), 4, "the todo reminder, then the verification reminder");
+    let sent = |i: usize| reqs[i]["messages"].as_array().unwrap().last().unwrap().to_string();
+    assert!(sent(2).contains("takes no further input") && sent(2).contains("run it"), "{}", sent(2));
+    assert!(sent(3).contains("no check has run since the last change"), "{}", sent(3));
+    // The edit's own result said the file doesn't parse, when this machine has Python.
+    if std::process::Command::new("python3").arg("--version").output().is_ok() {
+        assert!(sent(1).contains("notes.py does not parse"), "{}", sent(1));
+    }
+}
+
 #[tokio::test]
 async fn host_sets_thinking_tokens() {
     let e = env();

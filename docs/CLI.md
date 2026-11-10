@@ -331,7 +331,24 @@ Measures the harness; see `evals/README.md`. `run` writes `report.json` and
  "total_cost_usd": 0.0421, "usage": {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
  "modelUsage": {"<model>": {"inputTokens": 0, "outputTokens": 0, "costUSD": 0.0}},
  "permission_denials": [{"tool_name": "Bash", "tool_use_id": "…", "tool_input": {}}],
- "errors": [], "structured_output": null, "uuid": "uuid", "exit_code": 0}
+ "errors": [], "structured_output": null,
+ "verification": {"status": "passed", "command": "cargo test"}, "uuid": "uuid", "exit_code": 0}
+```
+
+`verification` says where the turn's changes stand when it ends, so a script
+or a CI job can tell checked work from work nobody ran without reading the
+answer. It is absent with the verification loop off.
+
+| `status` | Meaning | Also carries |
+| --- | --- | --- |
+| `no_changes` | The turn changed no file | |
+| `passed` | A check ran after the last change and passed | `command` |
+| `read_back` | Only plain data files changed (an answer, a table), each read back after its last change | |
+| `failed` | The last check failed, and nothing changed after it | `command` |
+| `unchecked` | Changes no check has run on since | `files`, and `shell: true` when they came from shell commands |
+
+```bash
+kodact -p "fix the failing test" --output-format json | jq -e '.verification.status == "passed"'
 ```
 
 `exit_code` appears in `json` mode only. A turn whose last replies held only
@@ -580,6 +597,15 @@ say in its answer what it verified (contract C12 in `docs/ARCHITECTURE.md`).
 Each reminder costs one more model call; it's recorded as `system/verification`
 in stream-json and in the session.
 
+**After an edit**, a file that no longer parses is said with the edit's own
+result ("notes.py does not parse (python3): …"), not turns later when a check
+runs on it. It uses the language's own parser on that one file, when it is
+installed: Python, JavaScript (`node --check`), shell (`sh -n`, `bash -n`),
+Ruby, PHP, and JSON (files with comments are left alone). Nothing is added
+when the file parses or its language has no parser here. It says nothing of
+types or other files: the project's checks do, and a `PostToolUse` hook can
+run a type checker after edits. Recorded as `system/diagnostics`.
+
 **Check commands** come from `verification.commands`, or are detected from the
 project's manifests: `cargo build` and `cargo test`; the package.json
 `typecheck`, `lint`, `build` and `test` scripts, run with the lockfile's
@@ -593,6 +619,22 @@ listed in the system prompt's environment section.
 | `verification.enabled` | `true` | `false` turns the loop off (as does `KODACT_VERIFY=0`) |
 | `verification.commands` | detected | The project's check commands |
 | `verification.maxReminders` | `1` | Reminders per user turn |
+| `verification.syntaxCheck` | `true` | `false` stops the parse check after edits (off too with the loop off) |
+
+**The loop guard** (`system/loop_guard`) reminds the model once when it
+repeats itself: the same failing call three times, the same result three
+times, edits that undo each other, five failures in a row. After that
+reminder, the same failing call to a file tool (Read, Edit, MultiEdit, Write,
+NotebookEdit, Glob, Grep, LS, or a tool name that doesn't exist) is answered
+"Not run: …" with the last error, without running it, until a call that may
+change files has run. Shell commands, web and MCP tools are never refused:
+they can fail three times and work the fourth (a server still starting).
+
+**A `-p` run with open todos:** a run whose prompt is given up front ends with
+its turn and takes no further input, so a turn about to end with TodoWrite
+items open is sent back once to finish them or say what is left
+(`system/todo_reminder`). Not in the terminal UI or over stream-json input,
+where stopping to ask is right. `--autonomous` has its own, firmer reminders.
 
 ## Security
 
@@ -729,6 +771,16 @@ is not done.
 **Retries:** only failures before any streamed output are retried, at most
 `KODACT_MAX_RETRIES` times, with exponential backoff. They cover HTTP 408, 409,
 429 and 5xx (honouring `retry-after`) and connection failures.
+
+Two answers are not retried, because trying again sooner fails the same way:
+- **a spent quota**: a 402, or a 429 or 403 that says so (`insufficient_quota`,
+  a billing error, "credit balance", "spend limit"…). The error is shown at
+  once with what to do. A 429 that says none of this is a throttle and is
+  waited out;
+- **a `retry-after` longer than a minute**: KodAct says how long the endpoint
+  asks ("asks to wait 48m") and ends the turn. An unattended run takes the
+  wait in full when it fits: within `--max-time` with a minute left to wrap
+  up, or, with no limit, up to ten minutes.
 
 **Errors** state what failed, the cause, and the next step. For example:
 `could not connect to http://…/v1/messages: Connection refused. Check KODACT_BASE_URL, your network connection and proxy settings.`

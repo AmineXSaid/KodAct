@@ -1,0 +1,34 @@
+{
+  "version": 3,
+  "defaults": {
+    "retries": 2,
+    "timeout_ms": 1500
+  },
+  "services": [
+    {
+      "name": "auth",
+      "port": 8081,
+      "owner": "platform",
+      "depends_on": []
+    },
+    {
+      "name": "db",
+      "port": 5432,
+      "owner": "platform",
+      "depends_on": []
+    },
+    {
+      "name": "catalog",
+      "port": 8083,
+      "owner": "shop",
+      "depends_on": ["auth", "db"],
+      "limits": {"rps": 200, "burst": [250, 300]}
+    },
+    {
+      "name": "search",
+      "port": 8084,
+      "owner": "shop",
+      "depends_on": ["catalog"]
+    }
+  ]
+}

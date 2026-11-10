@@ -24,6 +24,8 @@ pub enum MockTurn {
     Message { message: ApiMessage, delay: Duration },
     /// Fail the request before streaming.
     HttpError { status: u16, kind: String, message: String },
+    /// Refuse the request with a 429 that asks to wait `retry_after`.
+    Throttled { message: String, retry_after: Duration },
     /// Stream a `message_start` and then an `error` event.
     StreamError { kind: String, message: String },
 }
@@ -260,6 +262,16 @@ impl Provider for MockProvider {
                     kind,
                     message,
                     retry_after: None,
+                    url: String::new(),
+                    origin: None,
+                })
+            }
+            MockTurn::Throttled { message, retry_after } => {
+                return Err(ApiError::Http {
+                    status: 429,
+                    kind: "rate_limit_error".into(),
+                    message,
+                    retry_after: Some(retry_after),
                     url: String::new(),
                     origin: None,
                 })

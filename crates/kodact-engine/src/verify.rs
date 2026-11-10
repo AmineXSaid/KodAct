@@ -749,6 +749,50 @@ pub(crate) fn names_file(path: &Path, arg: &str) -> bool {
     is_changed(arg, std::slice::from_ref(&path.to_path_buf()))
 }
 
+/// Where a turn's changes stand when it ends: the `verification` field of the result, so a
+/// script or a CI job can tell checked work from work nobody ran, without reading the answer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Verified {
+    /// The turn changed no file.
+    NoChanges,
+    /// A check ran after the last change and passed.
+    Passed { command: String },
+    /// The only changes are plain data files, read back after their last change.
+    ReadBack,
+    /// The last check failed, and nothing changed after it.
+    Failed { command: String },
+    /// Changes no check has run on since: the files the edit tools wrote, or (`shell`) files
+    /// changed through shell commands.
+    Unchecked { files: Vec<String>, shell: bool },
+}
+
+impl Verified {
+    pub fn status(&self) -> &'static str {
+        match self {
+            Verified::NoChanges => "no_changes",
+            Verified::Passed { .. } => "passed",
+            Verified::ReadBack => "read_back",
+            Verified::Failed { .. } => "failed",
+            Verified::Unchecked { .. } => "unchecked",
+        }
+    }
+
+    pub fn record(&self) -> Value {
+        let mut v = serde_json::json!({"status": self.status()});
+        match self {
+            Verified::Passed { command } | Verified::Failed { command } => v["command"] = command.as_str().into(),
+            Verified::Unchecked { files, shell } => {
+                v["files"] = serde_json::json!(files);
+                if *shell {
+                    v["shell"] = true.into();
+                }
+            }
+            _ => {}
+        }
+        v
+    }
+}
+
 /// What the model is reminded of.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Reminder {
@@ -1037,6 +1081,25 @@ mod tests {
         ] {
             assert!(is_check(yes, none, &changed), "{yes}");
         }
+    }
+
+    #[test]
+    fn the_result_states_where_the_changes_stand() {
+        assert_eq!(Verified::NoChanges.record(), serde_json::json!({"status": "no_changes"}));
+        assert_eq!(
+            Verified::Passed { command: "cargo test".into() }.record(),
+            serde_json::json!({"status": "passed", "command": "cargo test"})
+        );
+        assert_eq!(
+            Verified::Unchecked { files: vec!["a.rs".into()], shell: false }.record(),
+            serde_json::json!({"status": "unchecked", "files": ["a.rs"]})
+        );
+        assert_eq!(
+            Verified::Unchecked { files: vec![], shell: true }.record(),
+            serde_json::json!({"status": "unchecked", "files": [], "shell": true})
+        );
+        assert_eq!(Verified::Failed { command: "make".into() }.record()["status"], "failed");
+        assert_eq!(Verified::ReadBack.status(), "read_back");
     }
 
     #[test]

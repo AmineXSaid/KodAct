@@ -2,6 +2,30 @@
 
 ## 0.1.0 (unreleased)
 
+### Checks on the agent's work
+From `docs/VERIFICATION_COMPARISON.md`, a comparison with four other CLIs.
+- **A spent quota is not retried.** A 402, or a 429 or 403 that says the
+  credit or spending limit is used up, is shown at once with what to do,
+  instead of ten tries a minute apart. A plain 429 is still waited out.
+- **A long `retry-after` is not shortened.** When the endpoint asks for more
+  than a minute, KodAct says how long ("asks to wait 48m") and ends the turn.
+  Unattended runs take the wait in full when it fits `--max-time`, or up to
+  ten minutes with no limit.
+- **The result says whether the changes were checked:** `verification.status`
+  in the `json` and stream-json result is `passed`, `failed`, `unchecked`,
+  `read_back` or `no_changes`, with the check's command or the unchecked
+  files. A script can gate on it.
+- **A file an edit breaks is said at once.** When a file no longer parses
+  after an Edit, MultiEdit or Write, the edit's result says so, using the
+  language's own parser when installed (Python, JavaScript, shell, Ruby, PHP,
+  JSON). `verification.syntaxCheck: false` turns it off.
+- **The loop guard stops a repeat it warned about.** After its reminder, the
+  same failing call to a file tool is answered "Not run" with the last error
+  until something changes. Shell, web and MCP calls are never refused.
+- **`-p` runs don't end quietly with todos open.** A run that takes no further
+  input is sent back once to finish its open TodoWrite items or say what is
+  left.
+
 ### A new mark: from code to impact
 - KodAct's mark is a step and a chevron, "from code to impact", and the
   front pages draw it, in KodAct's lime. The taglines say "From code to
