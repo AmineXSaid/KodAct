@@ -109,11 +109,11 @@ Each pillar lists what KodAct does about it and what shows that it works.
     was not;
   - one reminder per set of changes, and an answer or data file read back
     after its last change counts as checked (task `answer-file`).
-  - All of KodAct's reminders to the model (this one, the loop guard, the act,
-    attempt, next-step and todo reminders, the budget and time wrap-up) are
-    off by default: a run is the model and the CLI alone. `"reminders": true`
-    or `KODACT_REMINDERS=1` turns them on, for A/B runs.
-  - With them on, `KODACT_VERIFY=0` turns this one off, and
+  - `"reminders": false` or `KODACT_REMINDERS=0` turns all of KodAct's
+    reminders off (this one, the loop guard, the act, attempt, next-step and
+    todo reminders, the budget and time wrap-up), for A/B runs against the
+    model alone.
+  - It is on by default; `KODACT_VERIFY=0` turns this one off, and
     `kodact-eval` records `verify_reminders` per run.
 - **To build:** LSP diagnostics and formatter feedback after edits (the
   OpenCode pattern).

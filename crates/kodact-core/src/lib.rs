@@ -268,12 +268,12 @@ pub struct Session {
 }
 
 /// KodAct's own nudges to the model (verification, loop guard, act, attempt, next-step, todo,
-/// budget and time wrap-up, background commands): off unless `"reminders": true` in settings
-/// or `KODACT_REMINDERS=1`. Off, a run is the model and the CLI alone.
+/// budget and time wrap-up, background commands): on unless `"reminders": false` in settings
+/// or `KODACT_REMINDERS=0`, which leave a run to the model and the CLI alone (for A/B runs).
 pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
     match env_nonempty("KODACT_REMINDERS") {
-        Some(v) => matches!(v.as_str(), "1" | "true" | "on" | "yes"),
-        None => settings.bool("/reminders").unwrap_or(false),
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/reminders").unwrap_or(true),
     }
 }
 

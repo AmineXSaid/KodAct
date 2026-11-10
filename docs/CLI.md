@@ -427,7 +427,7 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_SANDBOX` | Same as `--sandbox` |
 | `KODACT_SHELL` | The shell commands run in: a full path, or a name on PATH (bash, sh, zsh, pwsh, powershell). Also read from the settings `env` block. See "Shells" below |
 | `KODACT_VERIFY` | `0` turns the verification loop off |
-| `KODACT_REMINDERS` | `1` turns KodAct's own reminders to the model back on (off by default; see `reminders`) |
+| `KODACT_REMINDERS` | `0` turns KodAct's own reminders to the model off (on by default; see `reminders`) |
 | `KODACT_DISABLE_CRON` | `1` turns scheduled prompts off (`/loop`, `CronCreate`, ...) |
 | `MCP_TIMEOUT`, `MCP_TOOL_TIMEOUT` | MCP connect and call timeouts, in milliseconds (30 s, 10 min) |
 | `KODACT_NO_INPUT` | Same as `--no-input` |
@@ -589,8 +589,8 @@ listed in the system prompt's environment section.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `reminders` | `false` | `true` turns on KodAct's own reminders to the model: the verification reminder, the loop guard, the act, attempt, next-step and todo reminders, the budget and time wrap-up, and the warning about background commands. Off, the model works on its own between tool results; only what you and the CLI did is told to it (plan mode, a mode switch, attached files, a subtask's result). `KODACT_REMINDERS=1` does the same. |
-| `verification.enabled` | `true` | `false` turns the loop off (as does `KODACT_VERIFY=0`), when `reminders` is on |
+| `reminders` | `true` | KodAct's own reminders to the model: the verification reminder, the loop guard, the act, attempt, next-step and todo reminders, the budget and time wrap-up, and the warning about background commands. Off, the model works on its own between tool results, and only what you and the CLI did is told to it (plan mode, a mode switch, attached files, a subtask's result). `false` (or `KODACT_REMINDERS=0`) turns them all off. |
+| `verification.enabled` | `true` | `false` turns the loop off (as does `KODACT_VERIFY=0`) |
 | `verification.commands` | detected | The project's check commands |
 | `verification.maxReminders` | `1` | Reminders per user turn |
 

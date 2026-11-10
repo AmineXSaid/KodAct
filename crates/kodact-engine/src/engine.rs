@@ -180,7 +180,7 @@ pub struct EngineConfig {
     /// act, attempt, next-step and todo reminders, the budget and time wrap-up, and the
     /// background-command warning. Off, the model works on its own between tool results, and
     /// only what the person and the CLI did is told to it (plan mode, a mode switch, attached
-    /// files, a subtask's result). The CLI leaves them off unless `reminders` is set.
+    /// files, a subtask's result). On by default; `reminders: false` turns them off.
     pub reminders: bool,
     pub model: String,
     pub fallback_models: Vec<String>,
