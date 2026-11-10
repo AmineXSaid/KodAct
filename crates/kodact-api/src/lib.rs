@@ -212,6 +212,7 @@ impl ApiError {
             "input is too long",
             "reduce the length",
             "too large for the model",
+            "available context size", // llama.cpp
         ];
         match self {
             ApiError::Http { status: 400 | 413 | 422, kind, message, .. } => {
@@ -225,6 +226,61 @@ impl ApiError {
             _ => false,
         }
     }
+
+    /// What a refusal for length says about the model: its context window and the size of the
+    /// prompt it refused, when the server states them. vLLM and OpenAI: "maximum context length
+    /// is 100000 tokens ... your prompt contains at least 68001 input tokens" (or "your messages
+    /// resulted in N tokens"); llama.cpp: "request (N tokens) exceeds the available context size
+    /// (M tokens)"; the Messages API: "prompt is too long: N tokens > M maximum". Gateways such as
+    /// LiteLLM pass these words on. Any size is read; nothing is assumed about the server.
+    pub fn reported_limits(&self) -> ReportedLimits {
+        if !self.is_prompt_too_long() {
+            return ReportedLimits::default();
+        }
+        let m = match self {
+            ApiError::Http { message, .. } | ApiError::Stream { message, .. } => message.to_ascii_lowercase(),
+            _ => return ReportedLimits::default(),
+        };
+        let pick = |pats: &[(&str, &str)]| pats.iter().find_map(|(before, after)| number_between(&m, before, after));
+        let window = pick(&[
+            ("maximum context length is ", "token"),
+            ("maximum context length of ", "token"),
+            ("available context size (", "token"),
+            ("context window of ", "token"),
+            (" tokens > ", "maximum"),
+        ])
+        .filter(|w| (1_000..=1_000_000_000).contains(w));
+        let prompt = pick(&[
+            ("prompt contains at least ", "input token"),
+            ("your messages resulted in ", "token"),
+            ("request (", "token"),
+            ("prompt is too long: ", "token"),
+        ]);
+        ReportedLimits { window, prompt }
+    }
+}
+
+/// See [`ApiError::reported_limits`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReportedLimits {
+    pub window: Option<u64>,
+    pub prompt: Option<u64>,
+}
+
+/// The whole number right after `before` in `m`, when `after` follows it (spaces, commas and
+/// underscores inside the number are skipped).
+fn number_between(m: &str, before: &str, after: &str) -> Option<u64> {
+    let mut rest = m;
+    while let Some(i) = rest.find(before) {
+        let tail = &rest[i + before.len()..];
+        let len = tail.find(|c: char| !(c.is_ascii_digit() || c == ',' || c == '_')).unwrap_or(tail.len());
+        let digits: String = tail[..len].chars().filter(char::is_ascii_digit).collect();
+        if !digits.is_empty() && tail[len..].trim_start().starts_with(after) {
+            return digits.parse().ok();
+        }
+        rest = tail;
+    }
+    None
 }
 
 /// A source of model turns.
@@ -308,7 +364,7 @@ pub fn backoff_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
 
 #[cfg(test)]
 mod outage_tests {
-    use super::ApiError;
+    use super::{ApiError, ReportedLimits};
 
     fn http(status: u16, message: &str) -> ApiError {
         ApiError::Http {
@@ -319,6 +375,39 @@ mod outage_tests {
             url: String::new(),
             origin: None,
         }
+    }
+
+    /// The window and prompt size a refusal states, in each server's words, at any size.
+    #[test]
+    fn a_refusal_for_length_gives_the_window_and_the_prompt() {
+        // The run of 2026-11-10 (path-tracing): LiteLLM passing on vLLM's refusal, escaped.
+        let litellm = r#"{"detail":"litellm.ContextWindowExceededError: litellm.BadRequestError: ContextWindowExceededError: Hosted_vllmException - {\"error\":{\"message\":\"This model's maximum context length is 100000 tokens. However, you requested 32000 output tokens and your prompt contains at least 68001 input tokens, for a total of at least 100001 tokens. Please reduce the length of the input prompt or the number of requested output tokens. (parameter=input_tokens, value=68001)\"}}"}"#;
+        assert_eq!(
+            http(400, litellm).reported_limits(),
+            ReportedLimits { window: Some(100_000), prompt: Some(68_001) }
+        );
+        let openai = "This model's maximum context length is 128000 tokens. However, your messages resulted in 130512 tokens. Please reduce the length of the messages.";
+        assert_eq!(
+            http(400, openai).reported_limits(),
+            ReportedLimits { window: Some(128_000), prompt: Some(130_512) }
+        );
+        let llama = "the request exceeds the available context size, try increasing it: request (8193 tokens) exceeds the available context size (8192 tokens)";
+        assert_eq!(http(400, llama).reported_limits(), ReportedLimits { window: Some(8_192), prompt: Some(8_193) });
+        let messages = "prompt is too long: 1000001 tokens > 1000000 maximum";
+        assert_eq!(
+            http(400, messages).reported_limits(),
+            ReportedLimits { window: Some(1_000_000), prompt: Some(1_000_001) }
+        );
+        let huge = "This model's maximum context length is 10,000,000 tokens. However, your messages resulted in 10,000,500 tokens.";
+        assert_eq!(http(400, huge).reported_limits().window, Some(10_000_000));
+        // A refusal that names no size, and errors of another kind, say nothing.
+        assert_eq!(http(400, "input is too long for requested model").reported_limits(), ReportedLimits::default());
+        assert_eq!(http(500, openai).reported_limits(), ReportedLimits::default());
+        assert_eq!(
+            http(400, "maximum context length is 12 tokens").reported_limits().window,
+            None,
+            "not a real window"
+        );
     }
 
     #[test]

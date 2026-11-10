@@ -123,6 +123,14 @@ case("env-small-listing-large-print", "print_context", fields(max_model_len=1_00
 case("env-only-print", "print_context", fields(), {"window": 65536, "notice": False}, env={"KODACT_CONTEXT_WINDOW": "65536"})
 case("latency-5s-print-prompt", "print_prompt", {"models": {"fields": {"max_model_len": W}, "delay": 5}}, {"secs_le": 4.5})
 case("value-string-print", "print_context", fields(max_model_len="32768"), {"window": W})
+# 6b. Learned without a setting: LiteLLM's /model/info, and a refusal that states the window.
+case("model-info-print", "print_context", {"models": {"fields": {}, "model_info": {"max_input_tokens": 100000, "max_output_tokens": 32000}}}, {"window": 100000, "notice": False})
+case("model-info-large-tui", "tui", {"models": {"fields": {}, "model_info": {"max_input_tokens": 1000000}}}, {"window": 1000000, "notice": False})
+# path-tracing, 2026-11-10: no window listed; a 100k model refused 32,000 on a 68,001-token prompt.
+# The refusal gives the window and the prompt: the request goes again, fitted, with no compaction.
+case("refusal-learned-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"window": 100000, "prompt_tokens": 68001}}, {"max_tokens_eq": [32000, 29999], "summaries": 0, "exit": 0})
+# A large model that is never refused keeps the whole cap.
+case("no-refusal-large-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"window": 1000000, "prompt_tokens": 68001}}, {"max_tokens_eq": [32000], "summaries": 0, "exit": 0})
 # 7. The reply limit.
 case("max-output-4096-print-prompt", "print_prompt", fields(max_model_len=W, max_output_tokens=4096), {"max_tokens_le": 4096})
 case("max-output-over-window-print-prompt", "print_prompt", fields(max_model_len=8192, max_output_tokens=100000), {"max_tokens_le": 8192})
@@ -142,6 +150,8 @@ def check(res, exp):
         mt = [m for m in res.get("max_tokens", []) if m]
         if not mt or max(mt) > exp["max_tokens_le"]: bad.append(f"max_tokens {mt} > {exp['max_tokens_le']}")
     if "summaries" in exp and res.get("summaries") != exp["summaries"]: bad.append(f"summaries {res.get('summaries')} != {exp['summaries']}")
+    if "max_tokens_eq" in exp and res.get("max_tokens") != exp["max_tokens_eq"]: bad.append(f"max_tokens {res.get('max_tokens')} != {exp['max_tokens_eq']}")
+    if "exit" in exp and res.get("exit") != exp["exit"]: bad.append(f"exit {res.get('exit')} != {exp['exit']}")
     if "summaries_ge" in exp and (res.get("summaries") or 0) < exp["summaries_ge"]: bad.append(f"summaries {res.get('summaries')} < {exp['summaries_ge']}")
     return bad
 

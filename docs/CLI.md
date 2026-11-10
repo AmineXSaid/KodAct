@@ -381,7 +381,14 @@ the context window to compact in time, and prices to show costs.
   a 200,000-token guess. The variable is one value for every model, so a window
   that belongs to the model wins over it: set for a small model, it never
   shrinks a large one whose endpoint reports its window. To change one model's
-  window, use `modelLimits`. `evals/context-window/` tests this end to end.
+  window, use `modelLimits`. A LiteLLM gateway that lists no window in its
+  model list is also asked at `/model/info` (`model_info.max_input_tokens`).
+  And when the endpoint refuses a request as too long and states its window
+  ("maximum context length is 100000 tokens"), KodAct uses that window from
+  then on, the same as a listed one, and sends the request again sized to fit;
+  it compacts only when the prompt itself doesn't fit. So a model's window is
+  learned whatever its size, with no setting. `evals/context-window/` tests
+  this end to end.
 - `modelPricing`: `{"<model id>": {"input": 0.3, "output": 1.2}}`, USD per
   million tokens.
 - Without these, KodAct assumes 200,000 tokens of context and 32,000 of output,

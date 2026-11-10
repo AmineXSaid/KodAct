@@ -63,7 +63,11 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - each model's own window: `modelLimits`, then what its endpoint lists, then
     the built-in table. `KODACT_CONTEXT_WINDOW`, one value for every model, only
     fills in for a model with none of these, so a value set for a small model
-    never shrinks a large one (`evals/context-window/`, in every mode).
+    never shrinks a large one (`evals/context-window/`, in every mode);
+  - a window the endpoint states anywhere is learned: its model list,
+    LiteLLM's `/model/info`, or a refusal for length ("maximum context length
+    is N tokens"), after which the request goes again sized to fit, instead of
+    compacting on a guessed window.
 - **Measured by:** pass rate and cost on long tasks, and context tokens per
   turn (task `log-needle`).
 

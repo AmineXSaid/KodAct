@@ -307,6 +307,16 @@ pub fn listed_limits(id: &str, l: Limits) {
     }
 }
 
+/// The window `id`'s endpoint stated when it refused a request as too long. It counts as the
+/// endpoint's own word, like its model list: it wins over `KODACT_CONTEXT_WINDOW`, the table
+/// and the guess, never over `modelLimits`. True when it changes the window KodAct uses.
+pub fn reported_window(id: &str, window: u64) -> bool {
+    let before = model_info_or_default(id).context_window;
+    let max_output = limit_map().read().unwrap().get(id).and_then(|(l, _)| l.max_output);
+    listed_limits(id, Limits { context_window: Some(window), max_output });
+    model_info_or_default(id).context_window != before
+}
+
 /// Nothing about `id` itself gives its window yet: it is in no table, the user set no
 /// limits for it, and its endpoint has listed none. Until the endpoint's model list says
 /// otherwise, its window is `KODACT_CONTEXT_WINDOW` or the 200,000-token guess.

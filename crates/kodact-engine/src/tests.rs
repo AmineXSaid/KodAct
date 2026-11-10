@@ -1615,6 +1615,52 @@ async fn requests_ask_for_no_more_reply_than_the_window_holds() {
     }
 }
 
+/// path-tracing, 2026-11-10: the gateway listed no window, so KodAct used its 200,000 guess
+/// and a 100,000-token model refused 32,000 reply tokens on a 68,001-token prompt. The refusal
+/// states the window and the prompt: they are used at once, the request goes again sized to
+/// fit, and nothing is compacted.
+#[tokio::test]
+async fn a_refusal_that_states_the_window_is_learned_and_the_request_sent_again() {
+    let refusal = "This model's maximum context length is 100000 tokens. However, you requested 32000 output \
+        tokens and your prompt contains at least 68001 input tokens, for a total of at least 100001 tokens.";
+    let h = Harness::new(vec![
+        MockTurn::text("one").with_usage(usage(60_000)),
+        MockTurn::HttpError { status: 400, kind: "BadRequestError".into(), message: refusal.into() },
+        MockTurn::text("answered"),
+    ]);
+    let cfg = EngineConfig { model: "learn-window-from-refusal".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("first")).await;
+    let r = e.submit(prompt("second")).await;
+    assert_eq!(r.result.as_deref(), Some("answered"));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 3, "sent again once, no summary request");
+    assert_eq!(reqs[1].max_tokens, 32_000, "the guess asked for the whole cap");
+    assert_eq!(reqs[2].max_tokens, 100_000 - 68_001 - 2_000, "the retry fits the stated window");
+    assert_eq!(kodact_api::models::model_info_or_default("learn-window-from-refusal").context_window, 100_000);
+    let t = h.transcript_text();
+    assert!(t.contains("context_window_learned") && !t.contains("compact_boundary"), "{t}");
+}
+
+/// A refusal whose prompt doesn't fit even the stated window isn't sent again: it compacts, as before.
+#[tokio::test]
+async fn a_refusal_whose_prompt_overflows_the_stated_window_compacts() {
+    let refusal =
+        "This model's maximum context length is 32768 tokens. However, your messages resulted in 40000 tokens.";
+    let h = Harness::new(vec![
+        MockTurn::text("one").with_usage(usage(100)),
+        MockTurn::HttpError { status: 400, kind: "BadRequestError".into(), message: refusal.into() },
+        MockTurn::text("<summary>compressed</summary>"),
+        MockTurn::text("answered after compaction"),
+    ]);
+    let cfg = EngineConfig { model: "learn-window-overflow".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("first")).await;
+    let r = e.submit(prompt("second")).await;
+    assert_eq!(r.result.as_deref(), Some("answered after compaction"));
+    assert_eq!(kodact_api::models::model_info_or_default("learn-window-overflow").context_window, 32_768);
+}
+
 /// The requests kept are sized from the model's window, not from one endpoint: a large window
 /// keeps a long task whole; a small one keeps its beginning and says how much is cut.
 #[test]

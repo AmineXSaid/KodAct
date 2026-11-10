@@ -1471,6 +1471,7 @@ impl Engine {
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
                 self.record_compact_failure(trigger, &reason, None);
+                self.learn_from_refusal(model, &e, false);
                 return Err(reason);
             }
         };
@@ -1527,6 +1528,35 @@ impl Engine {
         self.state.counted = self.state.messages.len();
         self.forget_seen_results();
         CompactInfo { trigger: trigger.into(), pre_tokens, summary }
+    }
+
+    /// A refusal for length that states the model's window: use it from now on, for every request
+    /// to `model` (reply budgets, compaction). `measured` is set when the refused request carried
+    /// the whole conversation, so the prompt size it states is the conversation's. True when the
+    /// window KodAct used was wrong, so the request is worth sending again, sized to fit, before
+    /// anything is compacted. Any window is taken as stated, small or large.
+    fn learn_from_refusal(&mut self, model: &str, e: &ApiError, measured: bool) -> bool {
+        let reported = e.reported_limits();
+        if measured {
+            if let Some(p) = reported.prompt {
+                self.state.context_tokens = p;
+                self.state.counted = self.state.messages.len();
+            }
+        }
+        let Some(window) = reported.window else { return false };
+        if !kodact_api::models::reported_window(model, window) {
+            return false;
+        }
+        self.system_event(
+            "context_window_learned",
+            json!({"model": model, "window": window, "prompt": reported.prompt}),
+        );
+        self.notice(
+            NoticeLevel::Warning,
+            format!("{model}'s endpoint gives its context window as {window} tokens: using it from now on."),
+        );
+        // Sending it again only helps when the prompt itself fits, with room for a reply.
+        reported.prompt.is_none_or(|p| p.saturating_add(u64::from(MIN_REPLY)) <= window)
     }
 
     /// A summary attempt that failed, recorded as `system/compact_failed`: why, and what the reply
@@ -1762,6 +1792,7 @@ impl Engine {
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
                 self.record_compact_failure("partial", &reason, None);
+                self.learn_from_refusal(&model, &e, false);
                 return Err(reason);
             }
         };
@@ -2097,6 +2128,8 @@ impl Engine {
         let mut fallbacks = self.cfg.fallback_models.clone().into_iter();
         let mut stop_hook_active = false;
         let mut compacted_for_length = false;
+        // A refusal that gave the model's real window: sent again once, sized to it.
+        let mut learned_window = false;
         let mut last_text: Option<String> = None;
         let mut continuations = 0;
         let mut reasoning_cutoffs = 0;
@@ -2187,6 +2220,10 @@ impl Engine {
                         Some("interrupted".into()),
                         None,
                     );
+                }
+                StreamOutcome::Failed(e) if !learned_window && self.learn_from_refusal(&model, &e, true) => {
+                    learned_window = true;
+                    continue;
                 }
                 StreamOutcome::Failed(e) if e.is_prompt_too_long() && !compacted_for_length => {
                     compacted_for_length = true;
