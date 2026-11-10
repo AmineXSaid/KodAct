@@ -1842,7 +1842,7 @@ async fn doctor_names_an_unknown_model_once_as_a_note() {
         |name: &str| out.lines().find(|l| l[5..].starts_with(&format!("{name} "))).unwrap_or_default().to_string();
     assert_eq!(row("session"), "FAIL session      hooks: bad matcher", "{out}");
     let model = row("model");
-    assert!(model.starts_with("note model        test-unpriced-model: limits guessed (200,000 context"), "{model}");
+    assert!(model.starts_with("note model        test-unpriced-model: limits guessed (1,000,000 context"), "{model}");
     assert!(model.contains("no price, so costs show as unknown"), "{model}");
     assert_eq!(out.matches("doesn't know").count(), 0, "{out}");
 }
@@ -1851,7 +1851,7 @@ async fn doctor_names_an_unknown_model_once_as_a_note() {
 fn unknown_model_notice_says_how_to_set_limits() {
     let n = crate::unknown_model_notice("deep-thinking", false);
     assert!(
-        n.starts_with("KodAct doesn't know the model deep-thinking: it assumes a 200,000-token context window"),
+        n.starts_with("KodAct doesn't know the model deep-thinking: it assumes a 1,000,000-token context window"),
         "{n}"
     );
     assert!(n.contains("\"modelLimits\"") && n.contains("modelPricing") && n.contains("KODACT_CONTEXT_WINDOW"), "{n}");

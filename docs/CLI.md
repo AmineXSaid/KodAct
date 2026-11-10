@@ -395,7 +395,7 @@ the context window to compact in time, and prices to show costs.
   for that list as it starts, so the first request uses the window; a slower
   list still sets it for the requests after. Order: `modelLimits`, then the
   endpoint's list, then the built-in table, then `KODACT_CONTEXT_WINDOW`, then
-  a 200,000-token guess. The variable is one value for every model, so a window
+  a 1,000,000-token guess. The variable is one value for every model, so a window
   that belongs to the model wins over it: set for a small model, it never
   shrinks a large one whose endpoint reports its window. To change one model's
   window, use `modelLimits`. A LiteLLM gateway that lists no window in its
@@ -408,7 +408,9 @@ the context window to compact in time, and prices to show costs.
   this end to end.
 - `modelPricing`: `{"<model id>": {"input": 0.3, "output": 1.2}}`, USD per
   million tokens.
-- Without these, KodAct assumes 200,000 tokens of context and 32,000 of output,
+- Without these, KodAct assumes 1,000,000 tokens of context (so a large model is
+  never held to a small guess; a smaller model's first refusal gives its real
+  window) and 32,000 of output,
   says so once at startup, shows the cost as `cost ?` (or `$1.20+` when only
   part of it is known) and marks `/usage`'s context figure as a guess.
 

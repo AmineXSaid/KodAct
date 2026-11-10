@@ -499,7 +499,7 @@ pub const LISTED_WINDOW_WAIT: std::time::Duration = std::time::Duration::from_se
 impl Session {
     /// A model with no window of its own: wait a moment ([`LISTED_WINDOW_WAIT`]) for the
     /// endpoint's model list, which may report it, so the first request and the startup
-    /// notice use it instead of `KODACT_CONTEXT_WINDOW` or the 200,000-token guess. The
+    /// notice use it instead of `KODACT_CONTEXT_WINDOW` or the 1,000,000-token guess. The
     /// variable, one value for every model, then never stands in for a window the endpoint
     /// gives, so a large model keeps its own. The notice goes once the window is known.
     pub async fn learn_window(&mut self) {

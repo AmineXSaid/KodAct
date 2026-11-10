@@ -85,8 +85,8 @@ case("field-model_info-tui", "tui", fields(model_info={"max_input_tokens": W}), 
 case("field-max_model_len-print", "print_context", fields(max_model_len=W), {"window": W, "notice": False})
 case("field-max_model_len-print-prompt", "print_prompt", fields(max_model_len=W), {"max_tokens_le": W - 6000})
 # 2. Nothing reported: the guess, said once.
-case("none-tui", "tui", fields(), {"window": 200000, "notice": True})
-case("none-print", "print_context", fields(), {"window": 200000, "notice": True})
+case("none-tui", "tui", fields(), {"window": 1000000, "notice": True})
+case("none-print", "print_context", fields(), {"window": 1000000, "notice": True})
 # 3. Latency of the model list.
 for d in [0.3, 1.0, 2.5]:
     case(f"latency-{d}s-tui", "tui", {"models": {"fields": {"max_model_len": W}, "delay": d}}, {"window": W, "notice": False, "ready_le": d + 2.5})
@@ -100,13 +100,13 @@ case("slow-chat-tui", "tui", {"models": {"fields": {"max_model_len": W}}, "chat"
 for name, m in [("401", {"status": 401, "raw": '{"error":{"message":"bad key"}}'}), ("404", {"status": 404, "raw": "not found", "ctype": "text/plain"}),
                 ("500", {"status": 500, "raw": '{"error":"boom"}'}), ("bad-json", {"raw": "{not json"}), ("html", {"raw": "<html>login</html>", "ctype": "text/html"}),
                 ("empty-data", {"raw": '{"data": []}'}), ("no-data-key", {"raw": '{"models": []}'})]:
-    case(f"broken-{name}-tui", "tui", {"models": m}, {"window": 200000, "notice": True, "ready_le": 4.5})
-case("refused-tui", "tui", {}, {"window": 200000, "ready_le": 4.5}, base="http://127.0.0.1:1/v1")
-case("refused-print", "print_context", {}, {"window": 200000, "secs_le": 6}, base="http://127.0.0.1:1/v1")
-case("model-not-listed-tui", "tui", {"models": {"omit_model": True, "extra": [{"id": "other", "max_model_len": 8192}]}}, {"window": 200000})
+    case(f"broken-{name}-tui", "tui", {"models": m}, {"window": 1000000, "notice": True, "ready_le": 4.5})
+case("refused-tui", "tui", {}, {"window": 1000000, "ready_le": 4.5}, base="http://127.0.0.1:1/v1")
+case("refused-print", "print_context", {}, {"window": 1000000, "secs_le": 6}, base="http://127.0.0.1:1/v1")
+case("model-not-listed-tui", "tui", {"models": {"omit_model": True, "extra": [{"id": "other", "max_model_len": 8192}]}}, {"window": 1000000})
 case("many-models-tui", "tui", {"models": {"fields": {"max_model_len": W}, "extra": [{"id": f"m{i}", "max_model_len": 4096} for i in range(5000)]}}, {"window": W, "ready_le": 4.5})
 # 5. Odd values.
-for name, v, want in [("zero", 0, 200000), ("negative", -1, 200000), ("string", "32768", W), ("float", 32768.0, W),
+for name, v, want in [("zero", 0, 1000000), ("negative", -1, 1000000), ("string", "32768", W), ("float", 32768.0, W),
                       ("huge-10M", 10_000_000, 10_000_000), ("tiny-1000", 1000, 1000)]:
     case(f"value-{name}-tui", "tui", fields(max_model_len=v), {"window": want} if want else {})
 # 6. Who wins.

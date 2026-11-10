@@ -319,7 +319,7 @@ pub fn reported_window(id: &str, window: u64) -> bool {
 
 /// Nothing about `id` itself gives its window yet: it is in no table, the user set no
 /// limits for it, and its endpoint has listed none. Until the endpoint's model list says
-/// otherwise, its window is `KODACT_CONTEXT_WINDOW` or the 200,000-token guess.
+/// otherwise, its window is `KODACT_CONTEXT_WINDOW` or the 1,000,000-token guess.
 pub fn window_unknown(id: &str) -> bool {
     model_info(id).is_none() && !limit_map().read().unwrap().contains_key(id)
 }
@@ -347,7 +347,7 @@ pub fn model_info_or_default(id: &str) -> ModelInfo {
 /// [`model_info_or_default`], with `KODACT_CONTEXT_WINDOW` given as `fallback`. A window
 /// that belongs to the model wins, in this order: the `modelLimits` setting for it, the
 /// window its endpoint lists for it, the built-in table. `fallback`, one value for every
-/// model, only fills in for a model with none of these, before the 200,000-token guess:
+/// model, only fills in for a model with none of these, before the 1,000,000-token guess:
 /// set for a small model, it never shrinks a large one whose endpoint reports its window.
 fn info_with_fallback_window(id: &str, fallback: Option<u64>) -> ModelInfo {
     let mut info = base_info(id);
@@ -367,11 +367,17 @@ fn info_with_fallback_window(id: &str, fallback: Option<u64>) -> ModelInfo {
     info
 }
 
+/// The window assumed for a model nothing gives one for (no table entry, `modelLimits`,
+/// listing, `KODACT_CONTEXT_WINDOW` or refusal yet). Large, so a large model is never held to a
+/// small guess; a smaller model's endpoint refuses the first request that doesn't fit, stating
+/// its window, which KodAct then uses ([`reported_window`]).
+pub const GUESSED_WINDOW: u64 = 1_000_000;
+
 fn base_info(id: &str) -> ModelInfo {
     model_info(id).cloned().unwrap_or(ModelInfo {
         id: "unknown",
         display_name: "Custom model",
-        context_window: 200_000,
+        context_window: GUESSED_WINDOW,
         max_output: 32_000,
         input_price: 0.0,
         output_price: 0.0,
@@ -392,7 +398,7 @@ mod tests {
     fn configured_limits_win_over_listed_and_defaults() {
         let id = "test-unknown-model-limits";
         assert_eq!(limits_source(id), LimitsSource::Guessed);
-        assert_eq!(model_info_or_default(id).context_window, 200_000);
+        assert_eq!(model_info_or_default(id).context_window, GUESSED_WINDOW);
         listed_limits(id, Limits { context_window: Some(64_000), max_output: None });
         assert_eq!((model_info_or_default(id).context_window, limits_source(id)), (64_000, LimitsSource::Listed));
         configure_limits(id, Limits { context_window: Some(128_000), max_output: Some(8_192) });
@@ -420,7 +426,7 @@ mod tests {
         assert_eq!(info_with_fallback_window("test-listed-small", Some(1_000_000)).context_window, 32_768);
         // Nothing of its own: the global value, else the guess.
         assert_eq!(info_with_fallback_window("test-unlisted", set_for_a_small_model).context_window, 100_000);
-        assert_eq!(info_with_fallback_window("test-unlisted", None).context_window, 200_000);
+        assert_eq!(info_with_fallback_window("test-unlisted", None).context_window, GUESSED_WINDOW);
         // A listing with only a reply limit: the global value still gives the window.
         listed_limits("test-listed-reply-only", Limits { context_window: None, max_output: Some(8_192) });
         let info = info_with_fallback_window("test-listed-reply-only", set_for_a_small_model);
