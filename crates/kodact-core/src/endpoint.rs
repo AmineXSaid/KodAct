@@ -72,7 +72,7 @@ impl Resolution {
         self.backend.unwrap_or(Backend::Messages)
     }
 
-    /// "KODACT_OPENAI_BASE_URL" or "openai.baseUrl in <file>".
+    /// Where the base URL came from: `"KODACT_OPENAI_BASE_URL"` or `"openai.baseUrl in <file>"`.
     pub fn url_origin(&self) -> String {
         match (self.url_from, &self.url_file) {
             (Some(s), Some(f)) => format!("{s} in {}", f.display()),

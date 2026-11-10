@@ -370,15 +370,18 @@ them.
 **Models KodAct doesn't know** (a gateway's or a local server's): KodAct needs
 the context window to compact in time, and prices to show costs.
 - `modelLimits`: `{"<model id>": {"contextWindow": 131072, "maxOutputTokens": 8192}}`.
-  `KODACT_CONTEXT_WINDOW` sets the window for every model without one.
+  `KODACT_CONTEXT_WINDOW` sets the window for every model without one of its own.
 - An OpenAI-compatible endpoint's model list is read for the window when it
   reports one (`context_length`, `max_model_len`, `max_input_tokens`, ...;
   a whole number, also as text or a decimal). For a model KodAct doesn't know,
   every mode (the terminal UI, `-p` and the line prompt) waits up to 3 seconds
   for that list as it starts, so the first request uses the window; a slower
-  list still sets it for the requests after. Order: `modelLimits`, then
-  `KODACT_CONTEXT_WINDOW`, then the endpoint's list, then the built-in table,
-  then a 200,000-token guess. `evals/context-window/` tests this end to end.
+  list still sets it for the requests after. Order: `modelLimits`, then the
+  endpoint's list, then the built-in table, then `KODACT_CONTEXT_WINDOW`, then
+  a 200,000-token guess. The variable is one value for every model, so a window
+  that belongs to the model wins over it: set for a small model, it never
+  shrinks a large one whose endpoint reports its window. To change one model's
+  window, use `modelLimits`. `evals/context-window/` tests this end to end.
 - `modelPricing`: `{"<model id>": {"input": 0.3, "output": 1.2}}`, USD per
   million tokens.
 - Without these, KodAct assumes 200,000 tokens of context and 32,000 of output,
@@ -407,7 +410,7 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_MODEL` | Default model |
 | `KODACT_TUI` | `inline` keeps the interactive UI in an inline viewport at the bottom of the terminal, writing output into its scrollback as it happens; by default the UI takes the whole window and prints the conversation into the scrollback when it closes |
 | `KODACT_MAX_OUTPUT_TOKENS` | Per-request output cap |
-| `KODACT_CONTEXT_WINDOW` | Context window, in tokens, for models KodAct doesn't know (see `modelLimits`) |
+| `KODACT_CONTEXT_WINDOW` | Context window, in tokens, for a model with none of its own: not in `modelLimits`, the endpoint's list or the built-in table |
 | `KODACT_MAX_THINKING_TOKENS` | Thinking budget |
 | `KODACT_MAX_RETRIES` | API retries (default 3) |
 | `KODACT_MAX_CONCURRENT_REQUESTS` | Model requests in flight at once for the whole session (default 4; also `maxConcurrentRequests`) |

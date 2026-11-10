@@ -110,12 +110,16 @@ for name, v, want in [("zero", 0, 200000), ("negative", -1, 200000), ("string", 
                       ("huge-10M", 10_000_000, 10_000_000), ("tiny-1000", 1000, 1000)]:
     case(f"value-{name}-tui", "tui", fields(max_model_len=v), {"window": want} if want else {})
 # 6. Who wins.
-case("env-and-listing-tui", "tui", fields(max_model_len=W), {"window": 65536}, env={"KODACT_CONTEXT_WINDOW": "65536"})
+# KODACT_CONTEXT_WINDOW is one value for every model: a window the endpoint reports for the model
+# wins over it, so a value set for a small model never shrinks a large one (docs/goal.md).
+case("env-and-listing-tui", "tui", fields(max_model_len=W), {"window": W}, env={"KODACT_CONTEXT_WINDOW": "65536"})
+case("env-small-listing-large-tui", "tui", fields(max_model_len=1_000_000), {"window": 1_000_000, "notice": False}, env={"KODACT_CONTEXT_WINDOW": "100000"})
 case("modelLimits-and-listing-tui", "tui", fields(max_model_len=W), {"window": 100000}, settings={"modelLimits": {"probe-model": {"contextWindow": 100000}}})
 # A known model served with a smaller window: the endpoint knows its own deployment.
 case("known-model-and-listing-tui", "tui", {"model": "claude-haiku-4-5", "models": {"fields": {"max_model_len": W}}}, {"window": W}, model="claude-haiku-4-5")
 case("known-model-and-listing-print-prompt", "print_prompt", {"model": "claude-haiku-4-5", "models": {"fields": {"max_model_len": W}}}, {}, model="claude-haiku-4-5")
-case("env-and-listing-print", "print_context", fields(max_model_len=W), {"window": 65536, "notice": False}, env={"KODACT_CONTEXT_WINDOW": "65536"})
+case("env-and-listing-print", "print_context", fields(max_model_len=W), {"window": W, "notice": False}, env={"KODACT_CONTEXT_WINDOW": "65536"})
+case("env-small-listing-large-print", "print_context", fields(max_model_len=1_000_000), {"window": 1_000_000, "notice": False}, env={"KODACT_CONTEXT_WINDOW": "100000"})
 case("env-only-print", "print_context", fields(), {"window": 65536, "notice": False}, env={"KODACT_CONTEXT_WINDOW": "65536"})
 case("latency-5s-print-prompt", "print_prompt", {"models": {"fields": {"max_model_len": W}, "delay": 5}}, {"secs_le": 4.5})
 case("value-string-print", "print_context", fields(max_model_len="32768"), {"window": W})

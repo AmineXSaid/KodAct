@@ -59,7 +59,11 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - memory files and the task list re-attached after compaction;
   - the person's requests carried word for word through every compaction and
     a resume, within a tenth of the model's window, whatever the summary kept
-    (task `deliverable-after-compaction`).
+    (task `deliverable-after-compaction`);
+  - each model's own window: `modelLimits`, then what its endpoint lists, then
+    the built-in table. `KODACT_CONTEXT_WINDOW`, one value for every model, only
+    fills in for a model with none of these, so a value set for a small model
+    never shrinks a large one (`evals/context-window/`, in every mode).
 - **Measured by:** pass rate and cost on long tasks, and context tokens per
   turn (task `log-needle`).
 
