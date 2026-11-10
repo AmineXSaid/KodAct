@@ -98,10 +98,14 @@ Each pillar lists what KodAct does about it and what shows that it works.
     - no request asks for more reply than the model's window has left after
       its prompt, so endpoints that count the reply against the window don't
       refuse it; on a large window the cap goes out unchanged.
-- **To build:** recovery after a crash (resume an interrupted turn from the
-  transcript).
+  - A turn the process died in is told on resume: the transcript records
+    where each turn starts and ends, so resuming a session whose last turn
+    never ended (a kill, a crash, a closed terminal) tells the model which
+    tool calls returned nothing and to look at the real state before
+    continuing, instead of trusting or repeating them (`system/turn_recovered`).
+    A turn that ended, an interrupt included, says nothing.
 - **Measured by:** recovery rate, and turns wasted after the first error
-  (tasks `build-recovery`, `makefile-tabs`).
+  (tasks `build-recovery`, `makefile-tabs`, `resume-after-kill`).
 
 ### 3. Verification
 
@@ -129,8 +133,14 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - a file an edit leaves unparseable is said with the edit's result, by the
     language's own parser when installed (`verification.syntaxCheck`;
     `edit_diagnostics` per run, task `syntax-after-edit`).
-- **To build:** LSP diagnostics (types, other files) and formatter feedback
-  after edits (the OpenCode pattern).
+  - with `verification.lsp` (off by default: a language server is a
+    long-running process), a file that parses is sent to its language's
+    server after an edit, and the errors the edit introduced are said with
+    the edit's result: an undefined name, a wrong argument, a caller in
+    another state than the edit left it. Errors the file already had are not
+    repeated; a missing or silent server adds nothing (task `lsp-after-edit`).
+- **To build:** formatter feedback after edits (the OpenCode pattern), and
+  language-server errors in files other than the one edited.
 - **Measured by:** false-finish rate and pass rate (tasks `fix-median`,
   `slugify-trap`, `invoice-rounding`).
 
@@ -139,6 +149,12 @@ Each pillar lists what KodAct does about it and what shows that it works.
 - **Done:** precise errors, read-before-write, CRLF-safe Edit, parallel
   read-only batches, results returned in call order, and repair of invalid
   tool-call JSON (open-weight models' most common invalid call).
+  With `edit.lineRanges` (off by default until measured), Edit can also name
+  the lines to replace (`start_line`, `end_line`, and `anchor`, the text of
+  the first line) instead of retyping them as `old_string`: a large
+  replacement costs a few tokens of input and can't fail on whitespace. The
+  anchor catches line numbers that moved since the model read them, before
+  anything is written (task `rewrite-block`).
 - **To build:**
   - tool descriptions tuned against the eval suite;
   - structured results everywhere;
@@ -174,6 +190,12 @@ Each pillar lists what KodAct does about it and what shows that it works.
     end with todo items open, it is sent back once (not in a session with a
     person or a host, where stopping to ask is right);
   - resumable sessions, and unattended headless runs.
+  - isolated sub-agents: `isolation: "worktree"` on a Task call runs the
+    agent in its own git worktree (a copy of HEAD on a new branch under
+    `.kodact/worktrees/`), so agents changing files in parallel can't
+    overwrite each other or the session's tree. The result names the branch
+    and directory when the agent changed something; an untouched copy is
+    removed (task `parallel-plugins`).
 - **To build:**
   - a notes file;
   - checkpoints the model can roll back to itself.

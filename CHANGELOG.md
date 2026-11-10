@@ -2,6 +2,23 @@
 
 ## 0.1.0 (unreleased)
 
+### Four gaps closed from a source comparison with other harnesses
+- **A session killed mid-turn says so when resumed.** The transcript records
+  where each turn starts and ends. Resuming one whose last turn never ended
+  tells the model which tool calls returned nothing and to check the real
+  state before continuing.
+- **Sub-agents can work in their own worktree.** `isolation: "worktree"` on
+  a Task call gives the agent a copy of the last commit on a new branch, so
+  agents changing files in parallel can't overwrite each other. The result
+  names the branch when something changed.
+- **Language-server errors after an edit** (`verification.lsp`, off by
+  default). With a server installed for the file's language, the errors an
+  edit introduced are added to its result; errors the file already had are
+  not repeated.
+- **Edit by line range** (`edit.lineRanges`, off by default). Edit can name
+  the lines to replace, with the first line's text as an anchor, instead of
+  retyping them.
+
 ### Checks on the agent's work
 From `docs/VERIFICATION_COMPARISON.md`, a comparison with four other CLIs.
 - **A spent quota is not retried.** A 402, or a 429 or 403 that says the

@@ -226,6 +226,9 @@ pub struct EngineConfig {
     /// Tell the model, with an edit's result, when the file it wrote no longer parses
     /// (`verification.syntaxCheck`, on with the verification loop). Sub-agents keep it.
     pub edit_diagnostics: bool,
+    /// Ask the edited file's language server what the edit broke (`verification.lsp`, off by
+    /// default). Needs `edit_diagnostics`; not in sub-agents, which would each start servers.
+    pub lsp: Option<crate::lsp::LspConfig>,
     /// The run ends with this turn and takes no further input (`-p` with its prompt given up
     /// front): a turn about to end with todo items open is sent back once, since a script gets
     /// what the turn left. Not for a session with a person or a host at the other end, where
@@ -307,6 +310,7 @@ impl Default for EngineConfig {
             is_subagent: false,
             verify: None,
             edit_diagnostics: false,
+            lsp: None,
             one_shot: false,
             escalate_output: true,
             fast: false,
@@ -708,6 +712,9 @@ pub struct Engine {
     /// The person's requests from the parts of the conversation compaction replaced, oldest
     /// first: each later compaction carries them on, word for word.
     carried_requests: Vec<String>,
+    /// The session's language servers (`verification.lsp`), started on the first edit that
+    /// has one.
+    lsp: Option<crate::lsp::Lsp>,
     /// The run reached its `--max-time` limit: the turn that was cut ends as the limit, not as
     /// an interruption.
     time_up: Arc<std::sync::atomic::AtomicBool>,
@@ -820,6 +827,7 @@ impl Engine {
             output_cap: None,
             reattach_context: false,
             carried_requests: vec![],
+            lsp: None,
             time_up: Default::default(),
             reminders: vec![],
             start_source: "startup".into(),
@@ -992,6 +1000,9 @@ impl Engine {
         }
         self.shared.transcript.continue_from(loaded);
         self.carried_requests = loaded.requests.clone().unwrap_or_default();
+        if loaded.cut_off && !self.cfg.is_subagent {
+            self.recover_cut_off_turn();
+        }
         // The plan survives a resume: the last TodoWrite list becomes the current one.
         let last_todos = self.state.messages.iter().rev().flat_map(|m| m.tool_uses().collect::<Vec<_>>()).find_map(
             |(_, name, input)| {
@@ -1001,6 +1012,53 @@ impl Engine {
         if let Some(todos) = last_todos.or_else(|| loaded.todos.clone()) {
             *self.shared.tool_ctx.todos.lock().unwrap() = todos;
         }
+    }
+
+    /// The resumed conversation's last turn never ended: KodAct was killed or crashed in it
+    /// (GOALS pillar 2). The model is told with the next prompt which calls have no result,
+    /// so it checks what they did instead of trusting or blindly repeating them.
+    fn recover_cut_off_turn(&mut self) {
+        let answered: HashSet<&str> = self
+            .state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let pending: Vec<String> = self
+            .state
+            .messages
+            .iter()
+            .flat_map(|m| m.tool_uses().collect::<Vec<_>>())
+            .filter(|(id, _, _)| !answered.contains(id))
+            .map(|(_, name, _)| name.to_string())
+            .collect();
+        let mut text = String::from(
+            "The previous turn of this conversation did not end: KodAct was stopped or crashed while it was \
+             running, so the work it was doing may be half done.",
+        );
+        if !pending.is_empty() {
+            text.push_str(&format!(
+                " These tool calls were under way and returned nothing: {}. Each may have run fully, partly \
+                 or not at all.",
+                pending.join(", ")
+            ));
+        }
+        text.push_str(
+            " Before continuing, look at the current state (the files concerned, `git status` in a repository, \
+             any process that should be running) and carry on from what is really there; don't assume a step \
+             was done, and don't repeat one that was.",
+        );
+        self.reminders.push(text);
+        self.notice(
+            NoticeLevel::Warning,
+            "The last turn of this session was cut off (KodAct was stopped or crashed mid-turn). The next prompt \
+             continues from the state it left.",
+        );
+        self.system_event("turn_recovered", json!({"pending": pending}));
     }
 
     /// The current task list, for re-attaching after compaction (GOALS pillar 5).
@@ -2014,11 +2072,19 @@ impl Engine {
     /// next step ([`EngineHandle::steer`]); any it ended before reaching are left for the
     /// host to run next ([`EngineHandle::take_steers`]).
     pub async fn submit(&mut self, prompt: MessageContent) -> TurnResult {
+        // The transcript says when a turn is open, so a resume can tell a turn the process
+        // died in from one that ended (GOALS pillar 2). Written to the file only: hosts get
+        // the turn's `result`.
         if self.cfg.is_subagent {
-            return self.run_turn(prompt).await;
+            self.shared.transcript.append_system("turn_start", json!({}));
+            let result = self.run_turn(prompt).await;
+            self.shared.transcript.append_system("turn_end", json!({"stop_reason": result.stop_reason}));
+            return result;
         }
         self.handle.set_turn_running(true);
+        self.shared.transcript.append_system("turn_start", json!({}));
         let mut result = self.run_turn(prompt).await;
+        self.shared.transcript.append_system("turn_end", json!({"stop_reason": result.stop_reason}));
         // A turn a hook blocked before it began did nothing to report on.
         if result.prompt_blocked.is_none() {
             result.verification = self.verification_state().await;
@@ -2973,9 +3039,19 @@ impl Engine {
             }
             let Some(raw) = input.get("file_path").and_then(Value::as_str) else { continue };
             let path = kodact_tools::expand_path(raw, &root);
-            let Some(d) = crate::diagnose::check(&path).await else { continue };
+            let mut d = crate::diagnose::check(&path).await;
+            if d.is_none() && !self.cfg.is_subagent {
+                if let Some(cfg) = self.cfg.lsp.clone() {
+                    let original =
+                        r.output.structured.as_ref().and_then(|s| s.get("originalFile")).and_then(Value::as_str);
+                    let lsp = self.lsp.get_or_insert_with(|| crate::lsp::Lsp::new(cfg, &root));
+                    d = lsp.check(&path, original).await;
+                }
+            }
+            let Some(d) = d else { continue };
             let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
-            self.system_event("diagnostics", json!({"file": shown, "parser": d.parser}));
+            let source = if d.from_server { "lsp" } else { "parser" };
+            self.system_event("diagnostics", json!({"file": shown, "parser": d.parser, "source": source}));
             let text = d.text(&shown);
             match &mut r.output.content {
                 kodact_types::ToolResultContent::Text(s) => s.push_str(&text),

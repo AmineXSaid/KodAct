@@ -10,6 +10,7 @@ mod diagnose;
 mod engine;
 mod events;
 mod exec;
+pub mod lsp;
 pub mod prompts;
 pub mod request;
 mod snapshot;

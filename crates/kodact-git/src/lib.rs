@@ -161,6 +161,21 @@ pub fn is_dirty(dir: &Path) -> bool {
     git(dir, &["status", "--porcelain"]).map(|s| !s.is_empty()).unwrap_or(false)
 }
 
+/// The commit HEAD points at.
+pub fn head(dir: &Path) -> Option<String> {
+    git(dir, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string())
+}
+
+/// Delete a branch that carries nothing beyond what is merged (`git branch -d`).
+pub fn delete_branch(repo: &Path, branch: &str) -> Result<(), String> {
+    let out = git_cmd().args(["branch", "-d", branch]).current_dir(repo).output().map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 pub fn remove_worktree(repo: &Path, path: &Path) -> Result<(), String> {
     let out = git_cmd().args(["worktree", "remove"]).arg(path).current_dir(repo).output().map_err(|e| e.to_string())?;
     if out.status.success() {

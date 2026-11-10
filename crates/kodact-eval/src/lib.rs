@@ -50,6 +50,23 @@ pub struct TaskSpec {
     /// A message sent while the agent works, as a desktop host sends one.
     #[serde(default)]
     pub steer: Option<SteerSpec>,
+    /// Kill kodact mid-turn, then continue the session in a new process.
+    #[serde(default)]
+    pub crash: Option<CrashSpec>,
+}
+
+/// Kill kodact (as a crash or a closed terminal does) once the agent has made
+/// `after_tool_calls` tool calls, then run `kodact -p <resume> --continue` in the same
+/// workspace. A run that ends before that many calls is not killed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrashSpec {
+    pub after_tool_calls: usize,
+    #[serde(default = "default_resume")]
+    pub resume: String,
+}
+
+fn default_resume() -> String {
+    "Continue.".into()
 }
 
 /// A message sent mid-turn (`priority: "next"`) once the agent has made `after_tool_calls`
@@ -445,6 +462,7 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
     }
 
     let steer = task.spec.steer.as_ref();
+    let crash = task.spec.crash.as_ref();
     let mut cmd = Command::new(&opts.kodact);
     cmd.arg("-p");
     // A task that steers talks to kodact over stdin, as a host does.
@@ -473,6 +491,7 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
     }
     let transcript_path = run_dir.join("transcript.jsonl");
     let mut transcript = tokio::fs::File::create(&transcript_path).await?;
+    let mut killed = false;
     let collect = async {
         let mut lines = tokio::io::BufReader::new(stdout).lines();
         let mut parsed = vec![];
@@ -481,6 +500,11 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
             let _ = transcript.write_all(format!("{l}\n").as_bytes()).await;
             if let Ok(v) = serde_json::from_str::<Value>(&l) {
                 calls += tool_uses(&v);
+                if crash.is_some_and(|c| calls >= c.after_tool_calls) && v["type"] != "result" {
+                    parsed.push(v);
+                    killed = true;
+                    break;
+                }
                 // The steer goes once the agent is that far in, or as the next turn if the
                 // turn ended first; then stdin closes and kodact exits when the work is done.
                 if let (Some(s), Some(mut w)) = (steer, stdin.take()) {
@@ -503,15 +527,46 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         s
     });
     let timeout = Duration::from_secs(task.spec.timeout_secs);
-    let (parsed, timed_out) = match tokio::time::timeout(timeout, collect).await {
+    let (mut parsed, mut timed_out) = match tokio::time::timeout(timeout, collect).await {
         Ok(p) => (p, false),
         Err(_) => {
             let _ = child.kill().await;
             (vec![], true)
         }
     };
+    if killed {
+        // Mid-turn, with a tool call under way: nothing gets to wind down.
+        let _ = child.kill().await;
+    }
     let _ = child.wait().await;
-    let stderr_text = err_task.await.unwrap_or_default();
+    let mut stderr_text = err_task.await.unwrap_or_default();
+    if let (true, Some(c)) = (killed, crash) {
+        let mut cmd = Command::new(&opts.kodact);
+        cmd.arg("-p")
+            .arg(&c.resume)
+            .args(["--continue", "--output-format", "stream-json", "--verbose"])
+            .args(&opts.args)
+            .args(&task.spec.args)
+            .current_dir(&ws)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        for (k, v) in &opts.env {
+            cmd.env(k, v);
+        }
+        let left = timeout.saturating_sub(started.elapsed());
+        let child = cmd.spawn().with_context(|| format!("cannot start {}", opts.kodact.display()))?;
+        match tokio::time::timeout(left, child.wait_with_output()).await {
+            Ok(Ok(out)) => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let _ = transcript.write_all(text.as_bytes()).await;
+                parsed.extend(text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()));
+                stderr_text.push_str(&String::from_utf8_lossy(&out.stderr));
+            }
+            _ => timed_out = true,
+        }
+    }
     let _ = std::fs::write(run_dir.join("stderr.txt"), &stderr_text);
     let wall_secs = started.elapsed().as_secs_f64();
     let facts = parse_stream(&parsed);

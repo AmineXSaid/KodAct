@@ -280,6 +280,15 @@ pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// Whether Edit may name the lines to replace instead of retyping them: `edit.lineRanges`, or
+/// `KODACT_EDIT_LINES` (for A/B runs). Off by default until it is measured.
+pub(crate) fn line_edits(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_EDIT_LINES") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/edit/lineRanges").unwrap_or(false),
+    }
+}
+
 /// Whether an edit's result says when the file no longer parses: on with the verification loop
 /// (so `KODACT_VERIFY=0` and `verification.enabled` turn it off too), unless
 /// `verification.syntaxCheck` is false.
@@ -778,6 +787,8 @@ pub fn build_session(
     let mut tools = ToolRegistry::new();
     kodact_tools::builtin::register_core(&mut tools);
     kodact_tools::builtin::set_shell(&mut tools, &shell);
+    let line_edits = line_edits(&settings);
+    kodact_tools::builtin::set_line_edits(&mut tools, line_edits);
     let web_tools = web_tools(&provider, &settings, &session_model(&opts, &settings));
     for t in &web_tools {
         tools.register(t.clone());
@@ -973,6 +984,7 @@ pub fn build_session(
         env: tool_ctx.env.clone(),
         sandbox: tool_ctx.sandbox.clone(),
         shell: shell.clone(),
+        line_edits,
         agent_slots: Arc::new(tokio::sync::Semaphore::new(
             env_nonempty("KODACT_MAX_PARALLEL_AGENTS")
                 .and_then(|v| v.trim().parse::<usize>().ok())
@@ -1030,6 +1042,7 @@ pub fn build_session(
         auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
         is_subagent: false,
         edit_diagnostics: edit_diagnostics(&settings, verify.is_some()),
+        lsp: kodact_engine::lsp::LspConfig::from_setting(settings.get("/verification/lsp")),
         one_shot: opts.one_shot,
         verify,
         escalate_output: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").is_none(),

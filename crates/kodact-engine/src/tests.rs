@@ -2542,3 +2542,65 @@ async fn a_message_the_turn_ended_before_reaching_is_left_for_the_next() {
     assert_eq!(left.len(), usize::from(queued));
     assert!(!handle.turn_running());
 }
+
+/// A turn the process died in (here: its future dropped mid-tool, so nothing after it runs)
+/// is told to the model on resume, with the call that never returned; a turn that ended is not.
+#[tokio::test]
+async fn a_turn_cut_off_mid_tool_is_told_on_resume() {
+    let h = Harness::new(vec![
+        MockTurn::tool("Mut", json!({"tag": "migrate", "ms": 60_000})),
+        MockTurn::text("checked and finished"),
+        MockTurn::text("nothing more"),
+    ]);
+    let path = SessionStore::new(h.dir.path().join("store")).session_path(&h.cwd(), SID).unwrap();
+    {
+        let mut e = h.engine();
+        let cut = tokio::time::timeout(Duration::from_millis(300), e.submit(prompt("run the migration"))).await;
+        assert!(cut.is_err(), "the turn was still in its tool call");
+    }
+    let loaded = kodact_session::LoadedSession::load(&path, None).unwrap();
+    assert!(loaded.cut_off);
+    let mut e = h.engine();
+    e.restore(&loaded);
+    let r = e.submit(prompt("continue")).await;
+    assert_eq!(r.result.as_deref(), Some("checked and finished"));
+    let sent = serde_json::to_string(&h.provider.requests()[1].messages).unwrap();
+    assert!(sent.contains("did not end"), "{sent}");
+    assert!(sent.contains("returned nothing: Mut"), "{sent}");
+    assert!(sent.contains("Tool call was interrupted before it returned."), "the call is answered for the API");
+    assert!(h.transcript_text().contains("\"turn_recovered\""));
+
+    // That turn ended: the next resume says nothing.
+    let loaded = kodact_session::LoadedSession::load(&path, None).unwrap();
+    assert!(!loaded.cut_off);
+    let mut e = h.engine();
+    e.restore(&loaded);
+    e.submit(prompt("anything else?")).await;
+    let sent = serde_json::to_string(&h.provider.requests()[2].messages.last()).unwrap();
+    assert!(!sent.contains("did not end"), "{sent}");
+}
+
+/// With `verification.lsp`, an edit that leaves the file parsing but wrong is told what its
+/// language server found, with the edit's own result; a sub-agent starts no server.
+#[tokio::test]
+async fn an_edit_result_carries_the_language_servers_errors() {
+    let Some(py) = crate::lsp::tests::python() else { return };
+    let h = Harness::new(vec![]);
+    let cwd = h.cwd();
+    std::fs::create_dir_all(&cwd).unwrap();
+    let script = h.dir.path().join("fake_server.py");
+    std::fs::write(&script, crate::lsp::tests::FAKE).unwrap();
+    let lsp = crate::lsp::LspConfig::from_setting(Some(&json!({"servers": {"zz": [py, script]}})));
+    for is_subagent in [false, true] {
+        let file = cwd.join(if is_subagent { "b.zz" } else { "a.zz" });
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": file, "content": "fine\nBAD call\n"})));
+        h.provider.push(MockTurn::text("done"));
+        let cfg = EngineConfig { edit_diagnostics: true, lsp: lsp.clone(), is_subagent, ..Default::default() };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("write it")).await;
+        let res = tool_results(&e);
+        let told = res[0].1.contains("the language server") && res[0].1.contains(":2: error: undefined name");
+        assert_eq!(told, !is_subagent, "{res:?}");
+    }
+    assert!(h.transcript_text().contains("\"source\":\"lsp\""));
+}

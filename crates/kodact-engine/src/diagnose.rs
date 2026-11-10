@@ -25,13 +25,24 @@ const PYTHON: &str = "import ast,sys\np=sys.argv[1]\ntry:\n ast.parse(open(p,'rb
 /// What a file failed to parse with, and what the parser said.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Diagnostic {
-    pub parser: &'static str,
+    /// The parser or language server that said it.
+    pub parser: String,
     pub message: String,
+    /// From a language server (`verification.lsp`): errors in a file that parses.
+    pub from_server: bool,
 }
 
 impl Diagnostic {
     /// The text added to the edit's result.
     pub fn text(&self, file: &str) -> String {
+        if self.from_server {
+            return format!(
+                "\n\n<system-reminder>\nAfter this change, the language server ({}) reports errors this change \
+                 introduced in {file}:\n{}\nFix them before going on, unless a later edit you already planned \
+                 resolves them.\n</system-reminder>",
+                self.parser, self.message
+            );
+        }
         format!(
             "\n\n<system-reminder>\nAfter this change, {file} does not parse ({}):\n{}\nFix it before going \
              on, unless a later edit you already planned completes it.\n</system-reminder>",
@@ -80,7 +91,7 @@ pub(crate) async fn check(path: &Path) -> Option<Diagnostic> {
     let is_json = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("json"));
     if is_json {
         let text = tokio::fs::read_to_string(path).await.ok()?;
-        return check_json(&text).map(|message| Diagnostic { parser: "JSON", message });
+        return check_json(&text).map(|message| Diagnostic { parser: "JSON".into(), message, from_server: false });
     }
     for (program, args) in parsers(path) {
         let mut cmd = tokio::process::Command::new(program);
@@ -99,7 +110,7 @@ pub(crate) async fn check(path: &Path) -> Option<Diagnostic> {
         out.status.code()?;
         let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         let message = clip(&said);
-        return (!message.is_empty()).then_some(Diagnostic { parser: program, message });
+        return (!message.is_empty()).then(|| Diagnostic { parser: program.to_string(), message, from_server: false });
     }
     None
 }

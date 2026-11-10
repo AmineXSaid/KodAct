@@ -1,0 +1,8 @@
+{
+  "instruction": "Load the three batches into data.csv: run `python3 load.py batches/1.csv`, then batches/2.csv, then batches/3.csv, one command at a time. Every batch must end up in data.csv exactly once.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "recovery",
+  "tags": ["python", "resume", "crash"],
+  "timeout_secs": 600,
+  "crash": {"after_tool_calls": 2, "resume": "Continue."}
+}

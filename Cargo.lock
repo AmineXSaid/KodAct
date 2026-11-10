@@ -1188,6 +1188,7 @@ dependencies = [
  "kodact-api",
  "kodact-config",
  "kodact-engine",
+ "kodact-git",
  "kodact-hooks",
  "kodact-permissions",
  "kodact-platform",

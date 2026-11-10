@@ -622,6 +622,8 @@ listed in the system prompt's environment section.
 | `verification.commands` | detected | The project's check commands |
 | `verification.maxReminders` | `1` | Reminders per user turn |
 | `verification.syntaxCheck` | `true` | `false` stops the parse check after edits (off too with the loop off) |
+| `verification.lsp` | off | `true` asks the edited file's language server what the edit broke, and adds the errors the edit introduced to its result (errors only; the ones the file already had are left out). Servers used when installed: `rust-analyzer`, `pyright-langserver` (or `basedpyright-langserver`, `pylsp`), `typescript-language-server`, `gopls`, `clangd`. `{"servers": {"py": ["pylsp"], "rs": []}, "waitMs": 4000}` names the command per file extension (an empty list turns one off) and how long an answer is waited for. A server starts on the first edit of a file of its language and runs until the session ends; it needs `syntaxCheck` on. Not used by sub-agents. rust-analyzer runs without its cargo-based checks, which would hold the build lock your own builds need |
+| `edit.lineRanges` | `false` | `true` (or `KODACT_EDIT_LINES=1`) lets Edit name the lines to replace (`start_line`, `end_line`, `anchor`) instead of retyping them as `old_string`. The anchor is the text of the first line: an edit whose line numbers moved since the file was read is refused with the lines as they are now |
 
 **The loop guard** (`system/loop_guard`) reminds the model once when it
 repeats itself: the same failing call three times, the same result three

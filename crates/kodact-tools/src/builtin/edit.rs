@@ -35,6 +35,66 @@ pub fn apply_edit(content: &str, old: &str, new: &str, all: bool) -> Result<Stri
     }
 }
 
+/// Replace lines `start..=end` (1-based) of `content` with `new` (`edit.lineRanges`). `anchor`
+/// is the text of line `start` as the model last saw it: when the file's lines have moved since
+/// (an earlier edit, another program), the numbers no longer mean what the model thinks, and
+/// the edit is refused with the lines as they are now instead of landing on the wrong ones.
+pub fn apply_line_edit(content: &str, start: usize, end: usize, anchor: &str, new: &str) -> Result<String, String> {
+    let lines: Vec<&str> = content.split_inclusive('\n').collect();
+    let n = lines.len();
+    if start == 0 || end < start || end > n {
+        return Err(format!(
+            "Lines {start}-{end} are not a range in this file, which has {n} lines (numbered from 1; start_line \
+             must not be after end_line)."
+        ));
+    }
+    let bare = |l: &str| l.trim_end_matches(['\n', '\r']).trim().to_string();
+    let wanted = bare(strip_line_number(anchor).unwrap_or(anchor));
+    if bare(lines[start - 1]) != wanted {
+        let shown: Vec<&str> =
+            lines[start - 1..end.min(start + 19)].iter().map(|l| l.trim_end_matches(['\n', '\r'])).collect();
+        let at: Vec<usize> =
+            (0..n).filter(|&i| !wanted.is_empty() && bare(lines[i]) == wanted).map(|i| i + 1).collect();
+        let moved = match at.as_slice() {
+            [] => "That text is not a line of the file any more: Read the file again.".to_string(),
+            [k] => format!(
+                "That text is now line {k}: the line numbers moved, most likely because an earlier edit added or \
+                 removed lines above. Use the current numbers (line {k} and what follows), or Read the part again."
+            ),
+            many => format!(
+                "That text is on lines {}: Read the part you mean again and use its current numbers.",
+                many.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")
+            ),
+        };
+        return Err(format!(
+            "Line {start} is not the anchor text; no changes were made. {moved}\nLines {start}-{} are now:\n{}",
+            start + shown.len() - 1,
+            number_lines(&shown, start)
+        ));
+    }
+    let mut new = new.to_string();
+    // The replaced lines ended with a newline (all but a last line without one do): so does
+    // their replacement, unless it removes them.
+    if !new.is_empty() && !new.ends_with('\n') && lines[end - 1].ends_with('\n') {
+        new.push('\n');
+    }
+    if lines[start - 1..end].concat() == new {
+        return Err("No changes to make: new_string is exactly what those lines already are.".into());
+    }
+    Ok(format!("{}{new}{}", lines[..start - 1].concat(), lines[end..].concat()))
+}
+
+/// A few numbered lines around lines `at..at + count` of the new content.
+fn snippet_at(new_content: &str, at: usize, count: usize) -> String {
+    let lines: Vec<&str> = new_content.lines().collect();
+    let start = at.saturating_sub(4).max(1);
+    let end = (at + count + 4).min(lines.len());
+    if start > end || lines.is_empty() {
+        return String::new();
+    }
+    number_lines(&lines[start - 1..end], start)
+}
+
 /// `   12\t` (Read's line-number prefix) removed, if `line` has one.
 fn strip_line_number(line: &str) -> Option<&str> {
     let (num, rest) = line.split_once('\t')?;
@@ -182,7 +242,19 @@ fn write_result(ctx: &ToolContext, path: &std::path::Path, old: &str, new: &str)
     Ok(patch_hunks(old, new))
 }
 
-pub struct Edit;
+/// `line_ranges` (`edit.lineRanges`, off by default) also lets a call name the lines to
+/// replace instead of retyping them.
+#[derive(Default)]
+pub struct Edit {
+    pub line_ranges: bool,
+}
+
+const LINE_RANGE_HELP: &str = "\n\nInstead of `old_string`, you may name the lines to replace: `start_line` and \
+    `end_line` (the numbers Read shows, both included) and `anchor`, the text of line `start_line` as Read showed \
+    it, without the number. Those lines become `new_string` (empty removes them). Prefer this for replacing \
+    more than a few lines: nothing is retyped. Line numbers move when an edit adds or removes lines above; each \
+    result shows the new numbers around the change, and the anchor catches a stale number before anything is \
+    written.";
 
 #[async_trait::async_trait]
 impl Tool for Edit {
@@ -197,10 +269,27 @@ impl Tool for Edit {
            `replace_all` is true; add surrounding lines to make it unique.\n\
          - Copy text from Read output without the line-number prefix.\n\
          - An empty `old_string` on a missing or empty file creates it with `new_string`."
-            .into()
+            .to_string()
+            + if self.line_ranges { LINE_RANGE_HELP } else { "" }
     }
 
     fn input_schema(&self) -> Value {
+        if self.line_ranges {
+            return json!({
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "The absolute path to the file to modify"},
+                    "old_string": {"type": "string", "description": "The text to replace (omit when naming lines)"},
+                    "new_string": {"type": "string", "description": "The text to replace it with (must differ from what it replaces)"},
+                    "replace_all": {"type": "boolean", "default": false, "description": "Replace every occurrence of old_string"},
+                    "start_line": {"type": "integer", "minimum": 1, "description": "First line to replace, as numbered by Read"},
+                    "end_line": {"type": "integer", "minimum": 1, "description": "Last line to replace (included)"},
+                    "anchor": {"type": "string", "description": "The text of line start_line as Read showed it, without the line number"}
+                },
+                "required": ["file_path", "new_string"],
+                "additionalProperties": false
+            });
+        }
         json!({
             "type": "object",
             "properties": {
@@ -221,6 +310,26 @@ impl Tool for Edit {
     fn validate(&self, input: &Value, ctx: &ToolContext) -> Result<(), String> {
         crate::validate_required(&self.input_schema(), input)?;
         let path = expand_path(str_arg(input, "file_path"), &ctx.project_dir);
+        if self.line_ranges {
+            let by_lines = input.get("start_line").is_some();
+            match (by_lines, input.get("old_string").is_some()) {
+                (true, true) => return Err("Give either old_string or start_line/end_line/anchor, not both.".into()),
+                (false, false) => {
+                    return Err("Give old_string, or start_line, end_line and anchor to name the lines.".into())
+                }
+                (true, false) => {
+                    let missing: Vec<&str> =
+                        ["end_line", "anchor"].into_iter().filter(|k| input.get(k).is_none()).collect();
+                    if !missing.is_empty() {
+                        return Err(format!("start_line also needs {}.", missing.join(" and ")));
+                    }
+                    if !path.exists() {
+                        return Err(format!("File does not exist: {}", path.display()));
+                    }
+                }
+                (false, true) => {}
+            }
+        }
         if !path.exists() && !str_arg(input, "old_string").is_empty() {
             return Err(format!("File does not exist: {}", path.display()));
         }
@@ -235,6 +344,31 @@ impl Tool for Edit {
         // Files may use CRLF; match against normalised text and keep the style.
         let crlf = content.contains("\r\n");
         let norm = if crlf { content.replace("\r\n", "\n") } else { content.clone() };
+        if let (true, Some(start)) = (self.line_ranges, input.get("start_line").and_then(Value::as_u64)) {
+            let end = input.get("end_line").and_then(Value::as_u64).unwrap_or(start);
+            let (start, end, new) = (start as usize, end as usize, new_s.replace("\r\n", "\n"));
+            let updated = match apply_line_edit(&norm, start, end, str_arg(&input, "anchor"), &new) {
+                Ok(u) => u,
+                Err(e) => return ToolOutput::error(e),
+            };
+            let out = if crlf { updated.replace('\n', "\r\n") } else { updated.clone() };
+            return match write_result(ctx, &path, &content, &out) {
+                Ok(patch) => ToolOutput::text(format!(
+                    "The file {} has been updated: lines {start}-{end} replaced by {} line(s). Line numbers after \
+                     the change moved by {:+}. Here's the result of running `cat -n` on a snippet of the edited \
+                     file:\n{}",
+                    path.display(),
+                    new.lines().count(),
+                    new.lines().count() as i64 - (end - start + 1) as i64,
+                    snippet_at(&updated, start, new.lines().count())
+                ))
+                .with_structured(json!({
+                    "filePath": path, "startLine": start, "endLine": end, "newString": new_s,
+                    "originalFile": content, "structuredPatch": patch,
+                })),
+                Err(e) => ToolOutput::error(e),
+            };
+        }
         let updated = match apply_edit(&norm, &old_s.replace("\r\n", "\n"), &new_s.replace("\r\n", "\n"), all) {
             Ok(u) => u,
             Err(e) => return ToolOutput::error(e),

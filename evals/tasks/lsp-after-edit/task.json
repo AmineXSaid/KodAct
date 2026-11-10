@@ -1,0 +1,7 @@
+{
+  "instruction": "`format_price` in shop/pricing.py always prints dollars. Give it a required second parameter `currency` (a code such as \"EUR\", printed after the amount: `12.50 EUR`) and remove the dollar sign. Every caller has an order or an invoice with a `currency` field: pass that. There are no tests in this project.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["python", "lsp", "edit-diagnostics"],
+  "timeout_secs": 600
+}
