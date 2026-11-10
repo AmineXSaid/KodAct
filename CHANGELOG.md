@@ -2,7 +2,7 @@
 
 ## 0.1.0 (unreleased)
 
-### Four gaps closed from a source comparison with other harnesses
+### Three gaps closed from a source comparison with other harnesses
 - **A session killed mid-turn says so when resumed.** The transcript records
   where each turn starts and ends. Resuming one whose last turn never ended
   tells the model which tool calls returned nothing and to check the real
@@ -11,13 +11,30 @@
   a Task call gives the agent a copy of the last commit on a new branch, so
   agents changing files in parallel can't overwrite each other. The result
   names the branch when something changed.
-- **Language-server errors after an edit** (`verification.lsp`, off by
-  default). With a server installed for the file's language, the errors an
-  edit introduced are added to its result; errors the file already had are
-  not repeated.
 - **Edit by line range** (`edit.lineRanges`, off by default). Edit can name
   the lines to replace, with the first line's text as an anchor, instead of
   retyping them.
+
+### Checks on the agent's work, second round
+From `docs/VERIFICATION_COMPARISON_2.md`.
+- **Language-server diagnostics after edits**, opt-in
+  (`verification.languageServer: true`): the errors `rust-analyzer`,
+  `typescript-language-server`, `pyright-langserver` or `pylsp`, `gopls` or
+  `clangd` report for the edited file's new text are added to the edit's
+  result, other files' included. Off by default; a missing or slow server
+  adds nothing.
+- **A fallback model takes over on a limit that doesn't clear**: after three
+  rate limits waited out in a row, on a `retry-after` over a minute, and on a
+  spent quota, as it already did on overload.
+- **The loop guard reminds again** at 5 and at 8 when the same call goes on.
+- **A reply that repeats itself is stopped while it streams**, and the model
+  is told, instead of running to the output cap.
+- **A tool call written as text is run** (`<tool_call>…</tool_call>`, or a
+  reply that is only the call's JSON), as small and local models write them.
+- **`/goal` works with these checks:** its check is told what KodAct recorded
+  of the turn's changes (unchecked files, the last check's outcome); a turn
+  whose calls were all refused counts as a turn without a tool; a `-p` run
+  with a goal gets no end-of-run todo reminder.
 
 ### Checks on the agent's work
 From `docs/VERIFICATION_COMPARISON.md`, a comparison with four other CLIs.

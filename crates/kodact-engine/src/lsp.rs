@@ -1,184 +1,229 @@
-//! Language-server diagnostics after edits (GOALS pillar 3; `verification.lsp`).
+//! Language-server diagnostics after edits (GOALS pillar 3).
 //!
-//! The parser check in [`crate::diagnose`] says when a file no longer parses. A language server
-//! says more: a name that doesn't exist, a wrong argument, a type that doesn't fit, also across
-//! files. With `verification.lsp` on, the file just edited is sent to its language's server (when
-//! one is installed) and the errors the edit *introduced* are added to the edit's result.
+//! The parse check ([`crate::diagnose`]) sees a file that no longer parses. A language server
+//! sees what a compiler would: a wrong type, a missing import, a call that no longer matches
+//! its function, in the edited file and in the files the server watches. Its errors are told
+//! with the edit's result, instead of turns later when a check runs.
 //!
-//! * Only errors, never warnings or hints.
-//! * Only new ones: the file as it was before the edit is the baseline, so a project the server
-//!   can't fully resolve (missing dependencies, generated code) doesn't repeat its standing
-//!   errors with every edit.
-//! * A server that is missing, slow to start or silent adds nothing; one that fails is not
-//!   started again in this session.
+//! It is opt-in (`verification.languageServer`): a language server is a second program
+//! reading the whole project, and some take minutes and gigabytes to index one. When on,
+//! nothing is said unless a server for the file's language is installed, starts, and answers
+//! within the wait; a server that is missing, slow or broken costs that wait once and is then
+//! left alone. The edit itself never fails because of it.
 //!
-//! It is off by default: a language server is a long-running process that indexes the project.
+//! The client speaks the base protocol over stdio: `initialize`, `didOpen` / `didChange` with
+//! the file's full text, then the diagnostics, pulled (`textDocument/diagnostic`) when the
+//! server offers that, otherwise as it publishes them.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{mpsc, watch};
-use tokio::time::Instant;
+use tokio::sync::{oneshot, Notify};
 
-use crate::diagnose::Diagnostic;
-
-/// How long a server may take to answer `initialize`.
-const START_TIMEOUT: Duration = Duration::from_secs(20);
-/// How long to wait for a file's diagnostics when `waitMs` is not set.
-const DEFAULT_WAIT: Duration = Duration::from_secs(4);
-/// After a server's first answer for a change, how long a fuller one is waited for (servers
-/// publish syntax errors first and semantic ones right after).
+/// How long a server has to start and answer `initialize`.
+const START_TIMEOUT: Duration = Duration::from_secs(10);
+/// After the first diagnostics for a change arrive, how long to wait for a later, fuller set
+/// (servers often publish syntax errors first and type errors after).
 const SETTLE: Duration = Duration::from_millis(400);
-/// The first errors, not the whole list: the size of a message, whatever the model.
-const MAX_ERRORS: usize = 10;
-const MAX_MESSAGE_CHARS: usize = 300;
 
-/// The servers tried for an extension when `verification.lsp` doesn't name one: the first whose
-/// program is installed is used.
-fn builtin(ext: &str) -> &'static [&'static [&'static str]] {
-    match ext {
-        "rs" => &[&["rust-analyzer"]],
-        "py" | "pyi" => &[&["pyright-langserver", "--stdio"], &["basedpyright-langserver", "--stdio"], &["pylsp"]],
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => &[&["typescript-language-server", "--stdio"]],
-        "go" => &[&["gopls"]],
-        "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" => &[&["clangd"]],
-        _ => &[],
+/// One language server: the file extensions it serves and how to start it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServerSpec {
+    /// Lowercase, without the dot.
+    pub extensions: Vec<String>,
+    /// The program and its arguments.
+    pub command: Vec<String>,
+}
+
+/// `verification.languageServer` and its tuning.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LspConfig {
+    /// Tried in order; the first whose program starts serves the extension.
+    pub servers: Vec<ServerSpec>,
+    /// How long an edit waits for the server's diagnostics.
+    pub wait: Duration,
+}
+
+impl Default for LspConfig {
+    fn default() -> Self {
+        LspConfig { servers: builtin_servers(), wait: Duration::from_secs(3) }
     }
 }
 
-fn language_id(ext: &str) -> &'static str {
+/// The servers looked for when none are configured. Only the ones installed are ever started.
+pub fn builtin_servers() -> Vec<ServerSpec> {
+    let spec = |exts: &[&str], cmd: &[&str]| ServerSpec {
+        extensions: exts.iter().map(|e| e.to_string()).collect(),
+        command: cmd.iter().map(|c| c.to_string()).collect(),
+    };
+    vec![
+        spec(&["rs"], &["rust-analyzer"]),
+        spec(&["ts", "tsx", "js", "jsx", "mts", "cts", "mjs", "cjs"], &["typescript-language-server", "--stdio"]),
+        spec(&["py", "pyi"], &["pyright-langserver", "--stdio"]),
+        spec(&["py", "pyi"], &["pylsp"]),
+        spec(&["go"], &["gopls"]),
+        spec(&["c", "h", "cc", "cpp", "cxx", "hpp"], &["clangd"]),
+    ]
+}
+
+/// The protocol's language identifier for a file extension.
+fn language_id(ext: &str) -> &str {
     match ext {
         "rs" => "rust",
-        "py" | "pyi" => "python",
         "ts" | "mts" | "cts" => "typescript",
         "tsx" => "typescriptreact",
         "js" | "mjs" | "cjs" => "javascript",
         "jsx" => "javascriptreact",
+        "py" | "pyi" => "python",
         "go" => "go",
-        "c" => "c",
-        "h" | "cc" | "cpp" | "cxx" | "hpp" => "cpp",
-        _ => "plaintext",
+        "c" | "h" => "c",
+        "cc" | "cpp" | "cxx" | "hpp" => "cpp",
+        other => other,
     }
 }
 
-/// `verification.lsp`: `true` for the built-in servers, or
-/// `{"servers": {"<ext>": ["program", "arg"…]}, "waitMs": N}` to name them (an empty list
-/// turns an extension off).
-#[derive(Debug, Clone, PartialEq)]
-pub struct LspConfig {
-    /// Extension (lower case, no dot) to command; `Some(vec![])` turns the extension off.
-    pub servers: HashMap<String, Vec<String>>,
-    pub wait: Duration,
-}
-
-impl LspConfig {
-    pub fn from_setting(v: Option<&Value>) -> Option<Self> {
-        match v? {
-            Value::Bool(true) => Some(LspConfig { servers: HashMap::new(), wait: DEFAULT_WAIT }),
-            Value::Object(o) => {
-                if o.get("enabled").and_then(Value::as_bool) == Some(false) {
-                    return None;
-                }
-                let servers = o
-                    .get("servers")
-                    .and_then(Value::as_object)
-                    .map(|m| {
-                        m.iter()
-                            .map(|(ext, cmd)| {
-                                let cmd = cmd
-                                    .as_array()
-                                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-                                    .unwrap_or_default();
-                                (ext.trim_start_matches('.').to_ascii_lowercase(), cmd)
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let wait = o.get("waitMs").and_then(Value::as_u64).map(Duration::from_millis).unwrap_or(DEFAULT_WAIT);
-                Some(LspConfig { servers, wait })
-            }
-            _ => None,
-        }
-    }
-
-    /// The commands to try for a file, in order.
-    fn commands(&self, ext: &str) -> Vec<Vec<String>> {
-        match self.servers.get(ext) {
-            Some(cmd) if cmd.is_empty() => vec![],
-            Some(cmd) => vec![cmd.clone()],
-            None => builtin(ext).iter().map(|c| c.iter().map(|s| s.to_string()).collect()).collect(),
-        }
-    }
-}
-
-/// `file://` URI of an absolute path.
-fn uri_of(path: &Path) -> String {
+/// `file://` URI of an absolute path, percent-encoded as servers expect.
+pub(crate) fn file_uri(path: &Path) -> String {
+    let raw = path.to_string_lossy().replace('\\', "/");
     let mut out = String::from("file://");
-    for b in path.to_string_lossy().replace('\\', "/").bytes() {
+    if !raw.starts_with('/') {
+        out.push('/'); // Windows: file:///C:/…
+    }
+    for b in raw.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => out.push(b as char),
-            _ => out.push_str(&format!("%{b:02X}")),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' | b':' => out.push(b as char),
+            other => out.push_str(&format!("%{other:02X}")),
         }
     }
     out
 }
 
-/// The path a `file://` URI names (servers re-encode URIs their own way, so URIs are compared
-/// as paths).
-fn path_of(uri: &str) -> Option<PathBuf> {
+/// The path a `file://` URI names (the inverse of [`file_uri`], for showing it).
+fn uri_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
-    let bytes = rest.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
+    let mut bytes = Vec::with_capacity(rest.len());
+    let raw = rest.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
-        let hex = (bytes[i] == b'%').then(|| rest.get(i + 1..i + 3)).flatten();
-        match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
-            Some(b) => {
-                out.push(b);
+    while i < raw.len() {
+        if raw[i] == b'%' && i + 3 <= raw.len() && rest.is_char_boundary(i + 1) && rest.is_char_boundary(i + 3) {
+            if let Ok(b) = u8::from_str_radix(&rest[i + 1..i + 3], 16) {
+                bytes.push(b);
                 i += 3;
-            }
-            None => {
-                out.push(bytes[i]);
-                i += 1;
+                continue;
             }
         }
+        bytes.push(raw[i]);
+        i += 1;
     }
-    Some(PathBuf::from(String::from_utf8_lossy(&out).into_owned()))
+    let s = String::from_utf8(bytes).ok()?;
+    // file:///C:/… names C:/…
+    let s = match s.as_bytes() {
+        [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => s[1..].to_string(),
+        _ => s,
+    };
+    Some(PathBuf::from(s))
 }
 
+/// One error a server reported.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Problem {
+    pub file: PathBuf,
+    /// One-based.
+    pub line: u64,
+    pub column: u64,
+    pub message: String,
+}
+
+/// The errors (severity 1) of one `diagnostics` array. Warnings and hints are left out: they
+/// are advice about code that works, and a reminder for each would drown the errors.
+fn errors_of(file: &Path, diagnostics: &Value) -> Vec<Problem> {
+    diagnostics
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|d| d.get("severity").and_then(Value::as_u64).unwrap_or(1) == 1)
+        .map(|d| Problem {
+            file: file.to_path_buf(),
+            line: d["range"]["start"]["line"].as_u64().unwrap_or(0) + 1,
+            column: d["range"]["start"]["character"].as_u64().unwrap_or(0) + 1,
+            message: d["message"].as_str().unwrap_or_default().lines().next().unwrap_or_default().to_string(),
+        })
+        .collect()
+}
+
+/// What the edit's result is told.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Report {
+    pub server: String,
+    pub problems: Vec<Problem>,
+}
+
+impl Report {
+    /// The text added to the result, within `max_chars` (a share of the model's window).
+    pub fn text(&self, root: &Path, max_chars: usize) -> String {
+        let mut body = String::new();
+        let mut shown = 0;
+        for p in &self.problems {
+            let file = p.file.strip_prefix(root).unwrap_or(&p.file).display();
+            let line = format!("{file}:{}:{}: {}\n", p.line, p.column, p.message);
+            if body.len() + line.len() > max_chars && shown > 0 {
+                break;
+            }
+            body.push_str(&line);
+            shown += 1;
+        }
+        let more = match self.problems.len() - shown {
+            0 => String::new(),
+            n => format!("(and {n} more)\n"),
+        };
+        format!(
+            "\n\n<system-reminder>\nAfter this change, the language server ({}) reports {} error{}:\n{body}{more}\
+             Fix what this change caused before going on. An error that was there before it, or that a later \
+             edit you already planned resolves, needs nothing now.\n</system-reminder>",
+            self.server,
+            self.problems.len(),
+            if self.problems.len() == 1 { "" } else { "s" },
+        )
+    }
+}
+
+/// Published diagnostics, by URI, each with the count of publishes when it arrived.
 #[derive(Default)]
-struct Inbox {
-    /// What the server last published for each file: when (a counter), for which version of
-    /// the text, and the diagnostics.
-    published: HashMap<PathBuf, (u64, Option<i64>, Vec<Value>)>,
-    responses: HashMap<i64, Value>,
-    counter: u64,
-    closed: bool,
+struct Published {
+    by_uri: HashMap<String, (u64, Value)>,
+    count: u64,
 }
 
-struct Server {
+struct Client {
     name: String,
-    /// Kept for `kill_on_drop`: the server ends with the session.
+    stdin: Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>,
+    next_id: AtomicU64,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
+    published: Arc<Mutex<Published>>,
+    arrived: Arc<Notify>,
+    /// The server answers `textDocument/diagnostic`.
+    pulls: bool,
+    /// Versions of the documents opened so far.
+    open: Mutex<HashMap<String, i64>>,
     _child: tokio::process::Child,
-    out: mpsc::UnboundedSender<Value>,
-    inbox: Arc<Mutex<Inbox>>,
-    tick: watch::Receiver<u64>,
-    /// Files opened on the server, with the version of the text it has.
-    open: HashMap<PathBuf, i64>,
 }
 
-fn frame(v: &Value) -> Vec<u8> {
-    let body = v.to_string();
-    format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
+async fn write_message(stdin: &mut tokio::process::ChildStdin, msg: &Value) -> std::io::Result<()> {
+    let body = msg.to_string();
+    stdin.write_all(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes()).await?;
+    stdin.write_all(body.as_bytes()).await?;
+    stdin.flush().await
 }
 
-async fn read_message<R: AsyncBufReadExt + Unpin>(r: &mut R) -> Option<Value> {
-    let mut len = 0usize;
+/// One framed message, or `None` at the end of the stream or on a broken frame.
+async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(r: &mut R) -> Option<Value> {
+    let mut len: Option<usize> = None;
     loop {
         let mut line = String::new();
         if r.read_line(&mut line).await.ok()? == 0 {
@@ -188,279 +233,239 @@ async fn read_message<R: AsyncBufReadExt + Unpin>(r: &mut R) -> Option<Value> {
         if line.is_empty() {
             break;
         }
-        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-            len = v.trim().parse().ok()?;
+        if let Some((k, v)) = line.split_once(':') {
+            if k.eq_ignore_ascii_case("content-length") {
+                len = v.trim().parse().ok();
+            }
         }
     }
-    let mut body = vec![0u8; len];
+    let mut body = vec![0u8; len?];
     r.read_exact(&mut body).await.ok()?;
-    // A message that isn't JSON is skipped, not the end of the stream.
-    Some(serde_json::from_slice(&body).unwrap_or(Value::Null))
+    serde_json::from_slice(&body).ok()
 }
 
-impl Server {
-    async fn start(command: &[String], root: &Path) -> Option<Server> {
-        let (program, args) = command.split_first()?;
+impl Client {
+    async fn start(spec: &ServerSpec, root: &Path) -> Option<Client> {
+        let (program, args) = spec.command.split_first()?;
         let mut cmd = tokio::process::Command::new(program);
-        cmd.args(args)
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        // Not installed: nothing is said.
+        cmd.args(args).current_dir(root).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        cmd.kill_on_drop(true);
         let mut child = cmd.spawn().ok()?;
-        let mut stdin = child.stdin.take()?;
+        let stdin = Arc::new(tokio::sync::Mutex::new(child.stdin.take()?));
         let stdout = child.stdout.take()?;
-        let inbox = Arc::new(Mutex::new(Inbox::default()));
-        let (tick_tx, tick) = watch::channel(0u64);
-        let (out, mut out_rx) = mpsc::unbounded_channel::<Value>();
-        tokio::spawn(async move {
-            while let Some(v) = out_rx.recv().await {
-                if stdin.write_all(&frame(&v)).await.is_err() || stdin.flush().await.is_err() {
-                    break;
-                }
-            }
-        });
-        let (inbox2, out2) = (inbox.clone(), out.clone());
-        tokio::spawn(async move {
-            let mut r = BufReader::new(stdout);
-            while let Some(v) = read_message(&mut r).await {
-                let method = v.get("method").and_then(Value::as_str);
-                match (method, v.get("id")) {
-                    // A request from the server: answered so it doesn't wait on the client.
-                    (Some(m), Some(id)) => {
-                        let result = match m {
-                            "workspace/configuration" => {
-                                let n = v.pointer("/params/items").and_then(Value::as_array).map_or(0, Vec::len);
-                                Value::Array(vec![Value::Null; n])
+        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> = Default::default();
+        let published: Arc<Mutex<Published>> = Default::default();
+        let arrived = Arc::new(Notify::new());
+        {
+            let (pending, published, arrived) = (pending.clone(), published.clone(), arrived.clone());
+            let stdin = stdin.clone();
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stdout);
+                while let Some(msg) = read_message(&mut reader).await {
+                    let method = msg.get("method").and_then(Value::as_str);
+                    match (method, msg.get("id")) {
+                        (Some("textDocument/publishDiagnostics"), _) => {
+                            if let Some(uri) = msg["params"]["uri"].as_str() {
+                                let mut p = published.lock().unwrap();
+                                p.count += 1;
+                                let n = p.count;
+                                p.by_uri.insert(uri.to_string(), (n, msg["params"]["diagnostics"].clone()));
                             }
-                            _ => Value::Null,
-                        };
-                        let _ = out2.send(json!({"jsonrpc": "2.0", "id": id, "result": result}));
-                    }
-                    (Some("textDocument/publishDiagnostics"), None) => {
-                        let p = &v["params"];
-                        if let Some(path) = p["uri"].as_str().and_then(path_of) {
-                            let mut ib = inbox2.lock().unwrap();
-                            ib.counter += 1;
-                            let n = ib.counter;
-                            let list = p["diagnostics"].as_array().cloned().unwrap_or_default();
-                            ib.published.insert(path, (n, p["version"].as_i64(), list));
-                            let _ = tick_tx.send(n);
+                            arrived.notify_waiters();
                         }
-                    }
-                    (None, Some(id)) => {
-                        if let Some(id) = id.as_i64() {
-                            let mut ib = inbox2.lock().unwrap();
-                            ib.counter += 1;
-                            let n = ib.counter;
-                            ib.responses.insert(id, v);
-                            let _ = tick_tx.send(n);
+                        // Requests the server makes of the client (configuration, capability
+                        // registration, progress tokens) are answered with nothing, so it
+                        // doesn't wait on them.
+                        (Some(method), Some(id)) => {
+                            let result = match method {
+                                "workspace/configuration" => {
+                                    let n = msg["params"]["items"].as_array().map(Vec::len).unwrap_or(0);
+                                    json!(vec![Value::Null; n])
+                                }
+                                _ => Value::Null,
+                            };
+                            let reply = json!({"jsonrpc": "2.0", "id": id, "result": result});
+                            if write_message(&mut *stdin.lock().await, &reply).await.is_err() {
+                                break;
+                            }
                         }
+                        (None, Some(id)) => {
+                            if let Some(tx) = id.as_u64().and_then(|id| pending.lock().unwrap().remove(&id)) {
+                                let _ = tx.send(msg);
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
-            }
-            let mut ib = inbox2.lock().unwrap();
-            ib.closed = true;
-            ib.counter += 1;
-            let _ = tick_tx.send(ib.counter);
-        });
-
-        let mut server = Server { name: program.clone(), _child: child, out, inbox, tick, open: HashMap::new() };
-        let root_uri = uri_of(root);
-        let mut init = json!({
+                // The server is gone: whoever waits is let go.
+                pending.lock().unwrap().clear();
+                arrived.notify_waiters();
+            });
+        }
+        let init = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
             "processId": std::process::id(),
-            "clientInfo": {"name": "kodact"},
-            "rootUri": root_uri,
-            "rootPath": root,
-            "workspaceFolders": [{"uri": root_uri, "name": "project"}],
+            "rootUri": file_uri(root),
+            "workspaceFolders": [{"uri": file_uri(root), "name": "workspace"}],
             "capabilities": {
                 "textDocument": {
-                    "synchronization": {"dynamicRegistration": false},
-                    "publishDiagnostics": {"versionSupport": true, "relatedInformation": false},
+                    "synchronization": {"didSave": false},
+                    "publishDiagnostics": {"relatedInformation": false},
+                    "diagnostic": {"dynamicRegistration": false},
                 },
-                "workspace": {"workspaceFolders": true, "configuration": true},
+                "workspace": {"configuration": true, "workspaceFolders": true},
             },
-        });
-        if server.name.contains("rust-analyzer") {
-            // Its build-based checks run cargo in the project's target directory, where they
-            // would hold the lock the agent's own builds need: only its own analysis is used.
-            init["initializationOptions"] = json!({"checkOnSave": false});
-        }
-        server.send(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": init}));
-        let deadline = Instant::now() + START_TIMEOUT;
-        loop {
-            {
-                let ib = server.inbox.lock().unwrap();
-                if ib.closed {
-                    return None;
-                }
-                if let Some(r) = ib.responses.get(&1) {
-                    if r.get("error").is_some() {
-                        return None;
-                    }
-                    break;
-                }
-            }
-            if tokio::time::timeout_at(deadline, server.tick.changed()).await.is_err() {
-                return None;
-            }
-        }
-        server.send(json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}));
-        Some(server)
+        }});
+        let (tx, rx) = oneshot::channel();
+        pending.lock().unwrap().insert(0, tx);
+        write_message(&mut *stdin.lock().await, &init).await.ok()?;
+        let answer = tokio::time::timeout(START_TIMEOUT, rx).await.ok()?.ok()?;
+        let pulls = !answer["result"]["capabilities"]["diagnosticProvider"].is_null();
+        let ready = json!({"jsonrpc": "2.0", "method": "initialized", "params": {}});
+        write_message(&mut *stdin.lock().await, &ready).await.ok()?;
+        Some(Client {
+            name: program.clone(),
+            stdin,
+            next_id: AtomicU64::new(1),
+            pending,
+            published,
+            arrived,
+            pulls,
+            open: Mutex::new(HashMap::new()),
+            _child: child,
+        })
     }
 
-    fn send(&self, v: Value) {
-        let _ = self.out.send(v);
+    async fn send(&self, msg: &Value) -> Option<()> {
+        write_message(&mut *self.stdin.lock().await, msg).await.ok()
     }
 
-    /// Give the server `text` for `path` and wait for what it publishes about it: `None` when
-    /// it says nothing in time.
-    async fn diagnostics_for(&mut self, path: &Path, text: &str, wait: Duration) -> Option<Vec<Value>> {
-        let since = self.inbox.lock().unwrap().counter;
-        let uri = uri_of(path);
-        let version = match self.open.get(path).copied() {
-            None => {
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
-                self.send(json!({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
-                    "textDocument": {"uri": uri, "languageId": language_id(&ext), "version": 1, "text": text},
-                }}));
-                1
-            }
-            Some(v) => {
-                self.send(json!({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
-                    "textDocument": {"uri": uri, "version": v + 1},
-                    "contentChanges": [{"text": text}],
-                }}));
-                v + 1
-            }
+    /// The errors after `path` changed to `text`, within `wait`. `None` when the server did
+    /// not answer in time.
+    async fn diagnose(&self, path: &Path, text: &str, wait: Duration) -> Option<Vec<Problem>> {
+        let uri = file_uri(path);
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        let since = self.published.lock().unwrap().count;
+        let version = {
+            let mut open = self.open.lock().unwrap();
+            let v = open.entry(uri.clone()).or_insert(0);
+            *v += 1;
+            *v
         };
-        self.open.insert(path.to_path_buf(), version);
-        let deadline = Instant::now() + wait;
-        let mut got: Option<(u64, Vec<Value>)> = None;
-        let mut settle = deadline;
+        let note = if version == 1 {
+            json!({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {
+                "uri": uri, "languageId": language_id(&ext), "version": version, "text": text}}})
+        } else {
+            json!({"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {
+                "textDocument": {"uri": uri, "version": version}, "contentChanges": [{"text": text}]}})
+        };
+        self.send(&note).await?;
+        let deadline = tokio::time::Instant::now() + wait;
+        if self.pulls {
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let (tx, rx) = oneshot::channel();
+            self.pending.lock().unwrap().insert(id, tx);
+            let ask = json!({"jsonrpc": "2.0", "id": id, "method": "textDocument/diagnostic",
+                "params": {"textDocument": {"uri": uri}}});
+            self.send(&ask).await?;
+            let answer = tokio::time::timeout_at(deadline, rx).await.ok()?.ok()?;
+            self.pending.lock().unwrap().remove(&id);
+            // An error answer (the server isn't ready) is no verdict.
+            let items = answer.get("result")?.get("items")?.clone();
+            return Some(errors_of(path, &items));
+        }
+        // Published: wait for this file's, then a little longer for a fuller set.
+        let mut settle: Option<tokio::time::Instant> = None;
         loop {
-            {
-                let ib = self.inbox.lock().unwrap();
-                if let Some((n, v, list)) = ib.published.get(path) {
-                    let fresh = *n > since && v.is_none_or(|v| v >= version);
-                    if fresh && got.as_ref().is_none_or(|(seen, _)| seen != n) {
-                        got = Some((*n, list.clone()));
-                        settle = (Instant::now() + SETTLE).min(deadline);
-                    }
-                }
-                if ib.closed {
-                    break;
-                }
+            let has = self.published.lock().unwrap().by_uri.get(&uri).is_some_and(|(n, _)| *n > since);
+            if has && settle.is_none() {
+                settle = Some((tokio::time::Instant::now() + SETTLE).min(deadline));
             }
-            let until = if got.is_some() { settle } else { deadline };
-            if tokio::time::timeout_at(until, self.tick.changed()).await.is_err() {
+            let until = settle.unwrap_or(deadline);
+            let notified = self.arrived.notified();
+            if tokio::time::timeout_at(until, notified).await.is_err() {
                 break;
             }
         }
-        got.map(|(_, list)| list)
+        let p = self.published.lock().unwrap();
+        p.by_uri.get(&uri).filter(|(n, _)| *n > since)?;
+        // This file's errors, then those of other files the server reported on since the
+        // change: a caller this edit broke.
+        let mut out = vec![];
+        let mut others: Vec<(&String, &(u64, Value))> = p.by_uri.iter().filter(|(_, (n, _))| *n > since).collect();
+        others.sort_by_key(|(u, _)| (*u != &uri, (*u).clone()));
+        for (u, (_, diags)) in others {
+            let file = if *u == uri { path.to_path_buf() } else { uri_path(u)? };
+            out.extend(errors_of(&file, diags));
+        }
+        Some(out)
     }
 }
 
-/// The error messages in a published list (severity 1; a missing severity counts, as the
-/// protocol leaves it to the client), each with its line.
-fn errors(list: &[Value]) -> Vec<(u64, String)> {
-    list.iter()
-        .filter(|d| d.get("severity").and_then(Value::as_u64).unwrap_or(1) == 1)
-        .filter_map(|d| {
-            let line = d.pointer("/range/start/line").and_then(Value::as_u64).unwrap_or(0) + 1;
-            let msg: String = d["message"].as_str()?.split_whitespace().collect::<Vec<_>>().join(" ");
-            let msg: String = msg.chars().take(MAX_MESSAGE_CHARS).collect();
-            (!msg.is_empty()).then_some((line, msg))
-        })
-        .collect()
-}
-
-/// The errors in `after` that `before` didn't have, by message: lines move with an edit, so
-/// they don't count, and an error that occurred twice and now occurs three times is new once.
-fn introduced(before: &[(u64, String)], after: &[(u64, String)]) -> Vec<(u64, String)> {
-    let mut had: HashMap<&str, usize> = HashMap::new();
-    for (_, m) in before {
-        *had.entry(m.as_str()).or_default() += 1;
-    }
-    after
-        .iter()
-        .filter(|(_, m)| match had.get_mut(m.as_str()) {
-            Some(n) if *n > 0 => {
-                *n -= 1;
-                false
-            }
-            _ => true,
-        })
-        .cloned()
-        .collect()
-}
-
-/// The session's language servers, started when a file of their language is first edited.
-pub struct Lsp {
+/// The session's language servers: started on the first edit of a file they serve.
+pub(crate) struct Manager {
     cfg: LspConfig,
     root: PathBuf,
-    /// By command line; `None` once a server failed to start or closed.
-    servers: HashMap<String, Option<Server>>,
+    /// Per extension: the running server, or `None` once none could be started or one stopped
+    /// answering (it is not tried again this session).
+    by_ext: tokio::sync::Mutex<HashMap<String, Option<Arc<Client>>>>,
 }
 
-impl Lsp {
-    pub fn new(cfg: LspConfig, root: &Path) -> Self {
-        Lsp { cfg, root: root.to_path_buf(), servers: HashMap::new() }
+impl Manager {
+    pub fn new(cfg: LspConfig, root: PathBuf) -> Self {
+        Manager { cfg, root, by_ext: Default::default() }
     }
 
-    async fn server_for(&mut self, path: &Path) -> Option<&mut Server> {
+    pub fn config(&self) -> &LspConfig {
+        &self.cfg
+    }
+
+    async fn client_for(&self, ext: &str) -> Option<Arc<Client>> {
+        let mut by_ext = self.by_ext.lock().await;
+        if let Some(known) = by_ext.get(ext) {
+            return known.clone();
+        }
+        let mut started = None;
+        for spec in self.cfg.servers.iter().filter(|s| s.extensions.iter().any(|e| e == ext)) {
+            if let Some(c) = Client::start(spec, &self.root).await {
+                started = Some(Arc::new(c));
+                break;
+            }
+        }
+        // One server may serve several extensions: share it.
+        if let Some(c) = &started {
+            let spec = self.cfg.servers.iter().find(|s| s.command.first() == Some(&c.name));
+            for e in spec.into_iter().flat_map(|s| s.extensions.iter()) {
+                by_ext.entry(e.clone()).or_insert_with(|| started.clone());
+            }
+        }
+        by_ext.insert(ext.to_string(), started.clone());
+        started
+    }
+
+    /// The errors a language server reports for `path` as it is on disk now. `None` when no
+    /// server serves it, it has none, or the server did not answer in time.
+    pub async fn check(&self, path: &Path) -> Option<Report> {
         let ext = path.extension().and_then(|e| e.to_str())?.to_ascii_lowercase();
-        for command in self.cfg.commands(&ext) {
-            let key = command.join(" ");
-            if !self.servers.contains_key(&key) {
-                let started = Server::start(&command, &self.root).await;
-                self.servers.insert(key.clone(), started);
-            }
-            if self.servers.get(&key).is_some_and(Option::is_some) {
-                return self.servers.get_mut(&key).and_then(Option::as_mut);
-            }
-        }
-        None
-    }
-
-    /// The errors the edit of `path` introduced, per its language server. `original` is the
-    /// file's text before the edit, when the tool gave it (the baseline for a file the server
-    /// hasn't seen yet).
-    pub(crate) async fn check(&mut self, path: &Path, original: Option<&str>) -> Option<Diagnostic> {
-        let text = tokio::fs::read_to_string(path).await.ok()?;
-        let wait = self.cfg.wait;
-        let server = self.server_for(path).await?;
-        // What the server said about the file before this edit.
-        let known = server.open.contains_key(path);
-        let before = match (known, original) {
-            (true, _) => server.inbox.lock().unwrap().published.get(path).map(|(_, _, l)| errors(l)),
-            (false, Some(orig)) => server.diagnostics_for(path, orig, wait).await.map(|l| errors(&l)),
-            (false, None) => None,
-        }
-        .unwrap_or_default();
-        let after = server.diagnostics_for(path, &text, wait).await;
-        let name = server.name.clone();
-        if server.inbox.lock().unwrap().closed {
-            let key =
-                self.servers.iter().find(|(_, s)| s.as_ref().is_some_and(|s| s.name == name)).map(|(k, _)| k.clone());
-            if let Some(k) = key {
-                self.servers.insert(k, None);
-            }
-        }
-        let new = introduced(&before, &errors(&after?));
-        if new.is_empty() {
+        if !self.cfg.servers.iter().any(|s| s.extensions.contains(&ext)) {
             return None;
         }
-        let shown = path.strip_prefix(&self.root).unwrap_or(path).display().to_string();
-        let mut lines: Vec<String> =
-            new.iter().take(MAX_ERRORS).map(|(line, msg)| format!("{shown}:{line}: error: {msg}")).collect();
-        if new.len() > MAX_ERRORS {
-            lines.push(format!("… and {} more", new.len() - MAX_ERRORS));
+        let text = tokio::fs::read_to_string(path).await.ok()?;
+        let client = self.client_for(&ext).await?;
+        match client.diagnose(path, &text, self.cfg.wait).await {
+            Some(problems) if problems.is_empty() => None,
+            Some(problems) => Some(Report { server: client.name.clone(), problems }),
+            None => {
+                // No answer in time: a server still indexing, or stuck. Each edit would wait
+                // again for nothing, so it is left alone for the rest of the session.
+                let mut by_ext = self.by_ext.lock().await;
+                for slot in by_ext.values_mut() {
+                    if slot.as_ref().is_some_and(|c| Arc::ptr_eq(c, &client)) {
+                        *slot = None;
+                    }
+                }
+                None
+            }
         }
-        Some(Diagnostic { parser: name, message: lines.join("\n"), from_server: true })
     }
 }
 
@@ -469,152 +474,153 @@ pub(crate) mod tests {
     use super::*;
 
     #[test]
-    fn the_setting_names_servers_or_takes_the_built_in_ones() {
-        assert_eq!(LspConfig::from_setting(None), None);
-        assert_eq!(LspConfig::from_setting(Some(&json!(false))), None);
-        assert_eq!(LspConfig::from_setting(Some(&json!({"enabled": false}))), None);
-        let on = LspConfig::from_setting(Some(&json!(true))).unwrap();
-        assert_eq!(on.wait, DEFAULT_WAIT);
-        assert_eq!(on.commands("rs"), vec![vec!["rust-analyzer".to_string()]]);
-        assert!(on.commands("py").len() > 1 && on.commands("md").is_empty());
-        let named =
-            LspConfig::from_setting(Some(&json!({"servers": {".PY": ["pylsp"], "rs": []}, "waitMs": 250}))).unwrap();
-        assert_eq!(named.commands("py"), vec![vec!["pylsp".to_string()]]);
-        assert!(named.commands("rs").is_empty(), "an empty command turns the extension off");
-        assert_eq!(named.commands("go"), vec![vec!["gopls".to_string()]]);
-        assert_eq!(named.wait, Duration::from_millis(250));
+    fn uris_round_trip() {
+        let p = Path::new("/home/me/my project/a b.py");
+        let uri = file_uri(p);
+        assert_eq!(uri, "file:///home/me/my%20project/a%20b.py");
+        assert_eq!(uri_path(&uri).unwrap(), p);
+        assert_eq!(file_uri(Path::new("C:\\src\\a.rs")), "file:///C:/src/a.rs");
+        assert_eq!(uri_path("file:///C:/src/a.rs").unwrap(), Path::new("C:/src/a.rs"));
+        assert_eq!(uri_path("untitled:1"), None);
     }
 
     #[test]
-    fn uris_round_trip_whatever_the_server_encodes() {
-        let p = Path::new("/work/my app/src/a+b.rs");
-        assert_eq!(uri_of(p), "file:///work/my%20app/src/a%2Bb.rs");
-        assert_eq!(path_of(&uri_of(p)).unwrap(), p);
-        assert_eq!(path_of("file:///work/my%20app/src/a+b.rs").unwrap(), p, "a server's own encoding");
-        assert_eq!(path_of("untitled:1"), None);
-    }
-
-    #[test]
-    fn only_errors_the_edit_introduced_are_kept() {
-        let list = json!([
-            {"severity": 1, "message": "cannot find name 'x'", "range": {"start": {"line": 4}}},
-            {"severity": 2, "message": "unused variable", "range": {"start": {"line": 1}}},
-            {"severity": 1, "message": "import \"dep\"\n  could not be resolved", "range": {"start": {"line": 0}}},
+    fn only_errors_are_kept() {
+        let d = json!([
+            {"severity": 1, "message": "mismatched types\nexpected u32", "range": {"start": {"line": 4, "character": 8}}},
+            {"severity": 2, "message": "unused variable", "range": {"start": {"line": 1, "character": 0}}},
+            {"message": "no severity means error", "range": {"start": {"line": 0, "character": 0}}},
         ]);
-        let after = errors(list.as_array().unwrap());
-        assert_eq!(after.len(), 2, "warnings are left out");
-        assert_eq!(after[1].1, "import \"dep\" could not be resolved");
-        let before = vec![(9, "import \"dep\" could not be resolved".to_string())];
-        assert_eq!(introduced(&before, &after), vec![(5, "cannot find name 'x'".to_string())]);
-        assert!(introduced(&after, &after).is_empty());
-        let twice = vec![after[0].clone(), after[0].clone()];
-        assert_eq!(introduced(&after, &twice).len(), 1, "one more of the same is new once");
+        let e = errors_of(Path::new("/p/a.rs"), &d);
+        assert_eq!(e.len(), 2);
+        assert_eq!((e[0].line, e[0].column, e[0].message.as_str()), (5, 9, "mismatched types"));
     }
 
-    /// A stand-in server (python, when this machine has it): it reports an error on every line
-    /// that contains `BAD`, and a standing one on every line that contains `OLD`.
-    pub(crate) const FAKE: &str = r#"
+    #[test]
+    fn the_report_fits_its_room_and_says_what_it_left_out() {
+        let problems: Vec<Problem> = (1..=50)
+            .map(|i| Problem { file: "/p/src/a.rs".into(), line: i, column: 1, message: format!("error number {i}") })
+            .collect();
+        let r = Report { server: "rust-analyzer".into(), problems };
+        let small = r.text(Path::new("/p"), 200);
+        assert!(small.contains("reports 50 errors") && small.contains("src/a.rs:1:1: error number 1"), "{small}");
+        assert!(small.contains("more)") && !small.contains("error number 50"), "{small}");
+        let large = r.text(Path::new("/p"), 100_000);
+        assert!(large.contains("error number 50") && !large.contains("more)"));
+        let one = Report { server: "gopls".into(), problems: r.problems[..1].to_vec() };
+        assert!(one.text(Path::new("/p"), 10).contains("reports 1 error:"), "one is always shown");
+    }
+
+    /// A stand-in server: answers `initialize`, and after each open or change publishes one
+    /// error for a file whose text holds `BROKEN`, none otherwise. `pull` makes it answer
+    /// `textDocument/diagnostic` instead; `slow` makes it never answer after `initialize`.
+    const FAKE_SERVER: &str = r#"
 import json, sys
-def send(m):
-    b = json.dumps(m).encode()
-    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(b) + b); sys.stdout.buffer.flush()
-def publish(doc, text):
-    d = [{"severity": 1, "message": ("undefined name" if "BAD" in l else "standing error"),
-          "range": {"start": {"line": i, "character": 0}, "end": {"line": i, "character": 1}}}
-         for i, l in enumerate(text.split("\n")) if "BAD" in l or "OLD" in l]
-    d.append({"severity": 2, "message": "a warning", "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}})
-    send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
-          "params": {"uri": doc["uri"], "version": doc.get("version"), "diagnostics": d}})
+mode = sys.argv[1] if len(sys.argv) > 1 else "push"
+texts = {}
+def send(msg):
+    body = json.dumps(msg).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    sys.stdout.buffer.flush()
+def diags(uri):
+    if "BROKEN" not in texts.get(uri, ""):
+        return []
+    return [{"severity": 1, "message": "name BROKEN is not defined", "range": {"start": {"line": 2, "character": 4}}},
+            {"severity": 2, "message": "a warning", "range": {"start": {"line": 0, "character": 0}}}]
 while True:
-    n = 0
+    length = None
     while True:
-        h = sys.stdin.buffer.readline()
-        if not h: sys.exit(0)
-        h = h.strip()
-        if not h: break
-        if h.lower().startswith(b"content-length:"): n = int(h.split(b":")[1])
-    m = json.loads(sys.stdin.buffer.read(n))
-    if m.get("method") == "initialize":
-        send({"jsonrpc": "2.0", "id": 7, "method": "workspace/configuration", "params": {"items": [{}]}})
-        send({"jsonrpc": "2.0", "id": m["id"], "result": {"capabilities": {}}})
-    elif m.get("method") == "textDocument/didOpen":
-        publish(m["params"]["textDocument"], m["params"]["textDocument"]["text"])
-    elif m.get("method") == "textDocument/didChange":
-        publish(m["params"]["textDocument"], m["params"]["contentChanges"][0]["text"])
+        line = sys.stdin.buffer.readline()
+        if not line:
+            sys.exit(0)
+        line = line.strip()
+        if not line:
+            break
+        if line.lower().startswith(b"content-length:"):
+            length = int(line.split(b":")[1])
+    msg = json.loads(sys.stdin.buffer.read(length))
+    method = msg.get("method")
+    if method == "initialize":
+        caps = {"diagnosticProvider": {}} if mode == "pull" else {}
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"capabilities": caps}})
+        send({"jsonrpc": "2.0", "id": 900, "method": "workspace/configuration", "params": {"items": [{}]}})
+    elif mode == "slow":
+        continue
+    elif method in ("textDocument/didOpen", "textDocument/didChange"):
+        doc = msg["params"]["textDocument"]
+        texts[doc["uri"]] = doc.get("text") or msg["params"]["contentChanges"][0]["text"]
+        if mode == "push":
+            send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                  "params": {"uri": doc["uri"], "diagnostics": diags(doc["uri"])}})
+    elif method == "textDocument/diagnostic":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"kind": "full", "items": diags(msg["params"]["textDocument"]["uri"])}})
 "#;
 
     pub(crate) fn python() -> Option<&'static str> {
         ["python3", "python"].into_iter().find(|p| std::process::Command::new(p).arg("--version").output().is_ok())
     }
 
-    fn fake(dir: &Path, ext: &str) -> Option<Lsp> {
-        let script = dir.join("fake_server.py");
-        std::fs::write(&script, FAKE).unwrap();
-        let cmd = json!([python()?, script]);
-        let cfg = LspConfig::from_setting(Some(&json!({"servers": {ext: cmd}, "waitMs": 3000}))).unwrap();
-        Some(Lsp::new(cfg, dir))
+    pub(crate) fn fake(dir: &Path, mode: &str, wait_ms: u64) -> Option<LspConfig> {
+        let py = python()?;
+        let script = dir.join("fake_lsp.py");
+        std::fs::write(&script, FAKE_SERVER).unwrap();
+        Some(LspConfig {
+            servers: vec![ServerSpec {
+                extensions: vec!["zz".into()],
+                command: vec![py.into(), script.display().to_string(), mode.into()],
+            }],
+            wait: Duration::from_millis(wait_ms),
+        })
     }
 
     #[tokio::test]
-    async fn an_edit_is_told_the_errors_it_introduced_and_no_others() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        let Some(mut lsp) = fake(&root, "zz") else { return };
-        let f = root.join("my mod.zz");
-        // The file had a standing error before the edit; the edit adds one of its own.
-        let original = "ok\nOLD\n";
-        std::fs::write(&f, "ok\nOLD\nBAD call\n").unwrap();
-        let d = lsp.check(&f, Some(original)).await.expect("the new error is reported");
-        assert!(d.from_server && d.parser.contains("python"), "{d:?}");
-        assert_eq!(d.message, "my mod.zz:3: error: undefined name");
-        assert!(d.text("my mod.zz").contains("reports errors this change introduced"), "{}", d.text("x"));
-        // Fixed: nothing is said, and the standing error still isn't.
-        std::fs::write(&f, "ok\nOLD\ngood call\n").unwrap();
-        assert_eq!(lsp.check(&f, None).await, None);
-        // Broken again, now against what the server last said about the file.
-        std::fs::write(&f, "BAD\nok\nOLD\n").unwrap();
-        assert_eq!(lsp.check(&f, None).await.unwrap().message, "my mod.zz:1: error: undefined name");
-        // A language with no server, and a file that is gone: nothing.
-        std::fs::write(root.join("a.txt"), "BAD").unwrap();
-        assert_eq!(lsp.check(&root.join("a.txt"), None).await, None);
-        assert_eq!(lsp.check(&root.join("gone.zz"), None).await, None);
-    }
-
-    #[tokio::test]
-    async fn a_server_that_is_missing_or_dies_says_nothing_and_is_not_started_again() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        let f = root.join("a.zz");
-        std::fs::write(&f, "BAD").unwrap();
-        let cfg = LspConfig::from_setting(Some(&json!({"servers": {"zz": ["kodact-no-such-language-server"]}})));
-        let mut lsp = Lsp::new(cfg.unwrap(), &root);
-        assert_eq!(lsp.check(&f, None).await, None);
-        // One that exits at once (`true` reads nothing and answers nothing).
-        let cfg = LspConfig::from_setting(Some(&json!({"servers": {"zz": ["true"]}})));
-        let mut lsp = Lsp::new(cfg.unwrap(), &root);
-        let started = std::time::Instant::now();
-        assert_eq!(lsp.check(&f, None).await, None);
-        assert_eq!(lsp.check(&f, None).await, None);
-        assert!(started.elapsed() < START_TIMEOUT, "a closed server is not waited for");
-        assert!(lsp.servers.values().all(Option::is_none));
-    }
-
-    /// With a real language server, when this machine has one (pyright).
-    #[tokio::test]
-    async fn a_real_server_reports_an_undefined_name_in_a_file_that_parses() {
-        if std::process::Command::new("pyright-langserver").arg("--version").output().is_err() {
-            return;
+    async fn errors_are_reported_and_clean_files_are_not() {
+        for mode in ["push", "pull"] {
+            let dir = tempfile::tempdir().unwrap();
+            let Some(cfg) = fake(dir.path(), mode, 5_000) else { return };
+            let m = Manager::new(cfg, dir.path().to_path_buf());
+            let f = dir.path().join("a.zz");
+            std::fs::write(&f, "ok\n").unwrap();
+            assert_eq!(m.check(&f).await, None, "{mode}: a clean file adds nothing");
+            std::fs::write(&f, "ok\n\n    BROKEN\n").unwrap();
+            let r = m.check(&f).await.unwrap_or_else(|| panic!("{mode}: no report"));
+            assert_eq!(r.problems.len(), 1, "{mode}: the warning is left out");
+            assert_eq!((r.problems[0].line, r.problems[0].column), (3, 5));
+            assert!(r.text(dir.path(), 2_000).contains("a.zz:3:5: name BROKEN is not defined"));
+            // Fixed again: the server is told the new text and reports nothing.
+            std::fs::write(&f, "ok\n").unwrap();
+            assert_eq!(m.check(&f).await, None, "{mode}: fixed");
+            // A file no server serves is not looked at.
+            let other = dir.path().join("a.txt");
+            std::fs::write(&other, "BROKEN").unwrap();
+            assert_eq!(m.check(&other).await, None);
         }
+    }
+
+    #[tokio::test]
+    async fn a_server_that_is_missing_or_silent_costs_one_wait_and_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        let cfg = LspConfig::from_setting(Some(&json!({"waitMs": 30000}))).unwrap();
-        let mut lsp = Lsp::new(cfg, &root);
-        let f = root.join("m.py");
-        let original = "def total(xs):\n    return sum(xs)\n";
-        std::fs::write(&f, "def total(xs):\n    return sum(xs) + offset\n").unwrap();
-        let d = lsp.check(&f, Some(original)).await.expect("pyright reports the undefined name");
-        assert!(d.message.starts_with("m.py:2: error: ") && d.message.contains("offset"), "{}", d.message);
-        std::fs::write(&f, original).unwrap();
-        assert_eq!(lsp.check(&f, None).await, None);
+        let f = dir.path().join("a.zz");
+        std::fs::write(&f, "BROKEN").unwrap();
+        // Not installed.
+        let missing = LspConfig {
+            servers: vec![ServerSpec {
+                extensions: vec!["zz".into()],
+                command: vec!["no-such-language-server".into()],
+            }],
+            wait: Duration::from_millis(200),
+        };
+        let m = Manager::new(missing, dir.path().to_path_buf());
+        assert_eq!(m.check(&f).await, None);
+        assert_eq!(m.check(&f).await, None);
+        // Starts, then never answers: the first edit waits, the next ones don't.
+        let Some(cfg) = fake(dir.path(), "slow", 300) else { return };
+        let m = Manager::new(cfg, dir.path().to_path_buf());
+        let t = std::time::Instant::now();
+        assert_eq!(m.check(&f).await, None);
+        assert!(t.elapsed() >= Duration::from_millis(250));
+        let t = std::time::Instant::now();
+        assert_eq!(m.check(&f).await, None);
+        assert!(t.elapsed() < Duration::from_millis(200), "not asked again: {:?}", t.elapsed());
     }
 }

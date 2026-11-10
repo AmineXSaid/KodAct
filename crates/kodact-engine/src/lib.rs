@@ -12,9 +12,11 @@ mod events;
 mod exec;
 pub mod lsp;
 pub mod prompts;
+mod repeat;
 pub mod request;
 mod snapshot;
 mod stuck;
+mod textcall;
 pub mod verify;
 
 pub use engine::{
@@ -25,6 +27,7 @@ pub use events::{
     DenyPrompter, EngineEvent, EventSink, ForwardSink, NoticeLevel, NullSink, PermissionAnswer, PermissionPrompt,
     PermissionPrompter, SerializedPrompter, VecSink,
 };
+pub use lsp::{LspConfig, ServerSpec};
 pub use prompts::{build_system, EnvInfo, SystemPromptOptions};
 pub use snapshot::{side_question_request, EngineSnapshot, TurnProgress};
 pub use verify::{detect_checks, Verified, VerifyConfig};

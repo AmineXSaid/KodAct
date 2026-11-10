@@ -174,7 +174,10 @@ the files as they are then). Other slash commands and `!shell` lines aren't scan
     work done so far stays in place, and the result is an error with
     `stop_reason: "max_time"` (KodAct extension; a script gets a result instead
     of an outside kill);
-  - `--fallback-model M` switches models on overload.
+  - `--fallback-model M` switches models, for the turn, when the first can't serve
+    it: overloaded, not found, or limited in a way a short wait doesn't lift (a
+    rate limit waited out three times in a row, a `retry-after` over a minute,
+    a spent quota).
 - **Interrupting:** Ctrl-C stops the run; the result is written and the exit
   status is `130`.
 - **Worktree:** `-w/--worktree [name]` runs the session in
@@ -536,6 +539,15 @@ plus `system/goal` events in stream-json, and exit status `1` if the goal
 ends unmet. `/goal` shows its status; `/goal clear` ends it. Contract C18
 has the details.
 
+The check is also told what KodAct itself recorded of the turn's changes (the
+`verification` state of the result): files changed with no check run since,
+or how the last check ended. An agent's "all tests pass" over unchecked files
+is contradicted by that record. A turn whose calls were all refused by the
+loop guard counts as a turn without a tool call. A goal ends on an error that
+waiting won't fix (a refused key, a spent quota) and pauses on one that may
+pass. In a `-p` run with a goal, the end-of-run reminder about open todos is
+not sent: the run goes on, and the goal's check decides.
+
 **Saving defaults:** `/model`, `/effort`, `/fast`, `/output-style`,
 `/autocompact` and `/sandbox` apply at once. In the REPL (and later the
 TUI) they also save the choice as the default: `model`, `effortLevel`,
@@ -622,17 +634,53 @@ listed in the system prompt's environment section.
 | `verification.commands` | detected | The project's check commands |
 | `verification.maxReminders` | `1` | Reminders per user turn |
 | `verification.syntaxCheck` | `true` | `false` stops the parse check after edits (off too with the loop off) |
-| `verification.lsp` | off | `true` asks the edited file's language server what the edit broke, and adds the errors the edit introduced to its result (errors only; the ones the file already had are left out). Servers used when installed: `rust-analyzer`, `pyright-langserver` (or `basedpyright-langserver`, `pylsp`), `typescript-language-server`, `gopls`, `clangd`. `{"servers": {"py": ["pylsp"], "rs": []}, "waitMs": 4000}` names the command per file extension (an empty list turns one off) and how long an answer is waited for. A server starts on the first edit of a file of its language and runs until the session ends; it needs `syntaxCheck` on. Not used by sub-agents. rust-analyzer runs without its cargo-based checks, which would hold the build lock your own builds need |
+| `verification.languageServer` | `false` | `true` asks a language server for the errors after an edit (below) |
+| `verification.languageServers` | built-in | Extension to command, tried before the built-in ones: `{"py": ["pylsp"]}` |
+| `verification.languageServerWaitMs` | `3000` | How long an edit waits for the server's answer |
 | `edit.lineRanges` | `false` | `true` (or `KODACT_EDIT_LINES=1`) lets Edit name the lines to replace (`start_line`, `end_line`, `anchor`) instead of retyping them as `old_string`. The anchor is the text of the first line: an edit whose line numbers moved since the file was read is refused with the lines as they are now |
 
-**The loop guard** (`system/loop_guard`) reminds the model once when it
-repeats itself: the same failing call three times, the same result three
-times, edits that undo each other, five failures in a row. After that
-reminder, the same failing call to a file tool (Read, Edit, MultiEdit, Write,
+**Language-server diagnostics** (`verification.languageServer: true`): after
+an Edit, MultiEdit or Write of a file that parses, KodAct gives the file's new
+text to the language server for its language and adds the errors it reports
+to the edit's result: a wrong type, a missing import, a call that no longer
+matches, in that file and in other files the server reports on. Warnings are
+left out. The list takes at most a fiftieth of the model's window.
+- It is off by default: a language server is a second program reading the
+  whole project, and some need minutes and gigabytes to index one.
+- Servers looked for: `rust-analyzer`, `typescript-language-server`,
+  `pyright-langserver` (else `pylsp`), `gopls`, `clangd`. Only an installed
+  one is started, on the first edit of a file it serves, and stopped with the
+  session.
+- A server that is missing, or doesn't answer within the wait, adds nothing;
+  one that didn't answer is not asked again in the session. The edit itself
+  never fails because of it.
+- Only the main agent asks; sub-agents don't start servers.
+
+**The loop guard** (`system/loop_guard`) reminds the model when it repeats
+itself: the same failing call three times, the same result three times, edits
+that undo each other, five failures in a row. A repeat that goes on is told
+again at 5 and at 8, then no more. After the first reminder, the same failing call to a file tool (Read, Edit, MultiEdit, Write,
 NotebookEdit, Glob, Grep, LS, or a tool name that doesn't exist) is answered
 "Not run: …" with the last error, without running it, until a call that may
 change files has run. Shell commands, web and MCP tools are never refused:
 they can fail three times and work the fourth (a server still starting).
+
+**A reply that repeats itself** is stopped while it streams: when the last
+6,000 characters of the reasoning or the answer are one passage at least six
+times over, KodAct ends the request, keeps nothing of it, and tells the model
+to act on what it has (`system/act_reminder`, `kind: "repeating"`), within the
+same three-in-a-row budget as replies that were all reasoning. Tool-call
+arguments are not watched, and a long reply that doesn't repeat exactly is
+never cut. The stopped request's tokens are not in the cost: the endpoint
+never reported them.
+
+**A tool call written as text** is run as the call it is. Small and local
+models often answer `<tool_call>{"name": …, "arguments": {…}}</tool_call>`,
+or with only that JSON object, in place of a structured call. When the
+reply has no structured call, names a tool that exists and gives its
+arguments as an object, KodAct turns it into the call
+(`system/tool_call_from_text`). JSON shown inside prose stays text; not done
+with `--json-schema`, where the answer itself is JSON.
 
 **A `-p` run with open todos:** a run whose prompt is given up front ends with
 its turn and takes no further input, so a turn about to end with TodoWrite

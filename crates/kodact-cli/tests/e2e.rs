@@ -690,6 +690,30 @@ async fn print_reports_verification_and_nudges_open_todos() {
     }
 }
 
+/// Over HTTP, with the real binary: a tool call a model wrote as text is run, and a reply that
+/// repeats itself is stopped and the run goes on to an answer.
+#[tokio::test]
+async fn print_runs_text_form_calls_and_stops_a_repeating_reply() {
+    let e = env();
+    let call = "<tool_call>{\"name\": \"Bash\", \"arguments\": {\"command\": \"echo from-text-call\"}}</tool_call>";
+    let api = MockApi::start(vec![
+        MockTurn::text(&"I should think about this once more. ".repeat(300)),
+        MockTurn::text(call),
+        MockTurn::text("finished"),
+    ])
+    .await;
+    let args = ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions", "go"];
+    let (code, out, err) = run(&e, &api, &args, None).await;
+    assert_eq!(code, 0, "stderr: {err}");
+    let v: Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["result"], "finished");
+    let reqs = api.requests();
+    assert_eq!(reqs.len(), 3);
+    let sent = |i: usize| reqs[i]["messages"].as_array().unwrap().last().unwrap().to_string();
+    assert!(sent(1).contains("was repeating itself"), "{}", sent(1));
+    assert!(sent(2).contains("from-text-call"), "the command ran: {}", sent(2));
+}
+
 #[tokio::test]
 async fn host_sets_thinking_tokens() {
     let e = env();
