@@ -1118,8 +1118,17 @@ impl Engine {
             || e.is_outage()
             || (e.is_model_missing() && answered())
             || matches!(e, ApiError::Parse(m) if m.starts_with("stream ended"));
-        if !self.cfg.autonomous || !passes {
+        // Every run, attended or not: an outage or a 429 is waited out (Esc stops the wait). An
+        // endpoint that can't be reached before it ever answered is a setting to fix, not an
+        // outage to wait for, in a session with a person at the prompt: said at once.
+        if !passes || (!self.cfg.autonomous && !answered() && matches!(e, ApiError::Network { .. })) {
             return None;
+        }
+        // KODACT_MAX_RETRIES, the person's own cap on retries, holds here too (0: none).
+        if let Some(max) = std::env::var("KODACT_MAX_RETRIES").ok().and_then(|v| v.trim().parse::<u32>().ok()) {
+            if retries >= max {
+                return None;
+            }
         }
         let backoff = self.cfg.api_retry_wait.saturating_mul(1 << retries.min(6));
         let retry_after = match e {

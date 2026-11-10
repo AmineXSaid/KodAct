@@ -1127,7 +1127,7 @@ async fn fast_mode_is_priced_at_the_fast_rate() {
 #[tokio::test]
 async fn a_self_paced_iteration_that_fails_at_once_still_gets_its_fallback() {
     let mut t = driver();
-    t.p.push(MockTurn::http_error(500, "api_error"));
+    t.p.push(MockTurn::http_error(400, "invalid_request_error"));
     let r = run(&mut t.d, "/loop watch the deploy").await;
     assert!(r.is_error && r.num_turns == 0);
     let sched = t.d.scheduler.as_ref().unwrap().lock().unwrap().clone();

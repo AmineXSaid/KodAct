@@ -345,8 +345,10 @@ async fn non_overload_errors_fail_the_turn() {
 
 #[tokio::test]
 async fn auth_failures_mark_the_turn() {
-    let h =
-        Harness::new(vec![MockTurn::http_error(401, "authentication_error"), MockTurn::http_error(500, "api_error")]);
+    let h = Harness::new(vec![
+        MockTurn::http_error(401, "authentication_error"),
+        MockTurn::http_error(400, "invalid_request_error"),
+    ]);
     let mut e =
         h.engine_with(EngineConfig::default(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     let r = e.submit(prompt("hi")).await;
@@ -1801,6 +1803,19 @@ async fn unattended_runs_retry_failed_model_calls() {
     assert!(retries[0]["error"].as_str().unwrap().contains("429"), "{}", retries[0]);
 }
 
+/// Everyday runs too: a 429 or an outage at the terminal is waited out and the work goes on,
+/// instead of the turn ending on an error the person must retry by hand.
+#[tokio::test]
+async fn attended_runs_wait_out_a_rate_limit_too() {
+    let h = Harness::new(vec![MockTurn::http_error(429, "rate_limit_error"), MockTurn::text("done")]);
+    let cfg = EngineConfig { api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    assert!(!cfg.autonomous);
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!((r.result.as_deref(), r.subtype), (Some("done"), ResultSubtype::Success));
+    assert_eq!(h.provider.requests().len(), 2);
+}
+
 fn http(status: u16, kind: &str, message: &str) -> MockTurn {
     MockTurn::HttpError { status, kind: kind.into(), message: message.into() }
 }
@@ -1863,13 +1878,9 @@ async fn api_retries_stop_at_their_limits() {
     assert_eq!(e.submit(prompt("task")).await.subtype, ResultSubtype::ErrorDuringExecution);
     assert_eq!(h.provider.requests().len(), 1);
 
-    // Errors a retry can't fix, and runs with a person at the prompt, end at once.
+    // Errors a retry can't fix end at once, attended or not.
     let h = Harness::new(vec![MockTurn::http_error(401, "authentication_error"), MockTurn::text("no")]);
     let mut e = h.engine_with(retrying(None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-    assert_eq!(e.submit(prompt("task")).await.subtype, ResultSubtype::ErrorDuringExecution);
-    assert_eq!(h.provider.requests().len(), 1);
-    let h = Harness::new(vec![MockTurn::http_error(429, "rate_limit_error"), MockTurn::text("no")]);
-    let mut e = h.engine();
     assert_eq!(e.submit(prompt("task")).await.subtype, ResultSubtype::ErrorDuringExecution);
     assert_eq!(h.provider.requests().len(), 1);
 }
