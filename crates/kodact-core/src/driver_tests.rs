@@ -392,6 +392,67 @@ async fn goal_runs_until_the_check_passes() {
     assert_eq!(loaded.goal.unwrap()["status"], "achieved");
 }
 
+/// The goal check is told what KodAct recorded of the turn's changes: an agent that says
+/// "done" over a file no check ran on is contradicted by the harness, not only by the
+/// checker's reading of a long transcript.
+#[tokio::test]
+async fn the_goal_check_sees_the_harness_record_of_unchecked_changes() {
+    let mut t = driver_with(|_, o| o.permission_mode = Some("bypassPermissions".into()));
+    let file = t.proj.join("calc.py");
+    for turn in [
+        MockTurn::tool("Write", serde_json::json!({"file_path": file, "content": "x = 1\n"})),
+        MockTurn::text("Done, everything works."),
+        // The verification reminder, ignored.
+        MockTurn::text("Done, as I said."),
+        verdict("not_met", "calc.py was never run"),
+        MockTurn::tool("Bash", serde_json::json!({"command": "true"})),
+        MockTurn::text("Ran the check."),
+        verdict("met", "the check ran"),
+    ] {
+        t.p.push(turn);
+    }
+    let results = run_all(&mut t.d, "/goal calc.py works").await;
+    assert_eq!(results.len(), 2);
+    assert_eq!(t.d.goal.as_ref().unwrap().status.as_str(), "achieved");
+    let reqs = t.p.requests();
+    let first_check = last_user_text(&reqs[3]);
+    assert!(
+        first_check.contains("HARNESS: in the last turn these files changed and no check has run since: calc.py"),
+        "{first_check}"
+    );
+    // The second turn changed nothing: no harness line, the transcript carries the check.
+    let second_check = last_user_text(&reqs[6]);
+    assert!(!second_check.contains("HARNESS:"), "{second_check}");
+}
+
+/// A goal set in a one-shot run (`-p "/goal …"`): the run goes on after each turn, so the
+/// "this run ends with your reply" reminder for open todos is not sent; the goal's check
+/// decides. Without a goal, the same run gets it.
+#[tokio::test]
+async fn a_goal_in_a_one_shot_run_gets_no_end_of_run_reminder() {
+    let todos = || {
+        MockTurn::tool(
+            "TodoWrite",
+            serde_json::json!({"todos": [{"content": "write it", "status": "pending", "activeForm": "writing"}]}),
+        )
+    };
+    let mut t = driver_with(|_, o| o.one_shot = true);
+    assert!(t.d.engine.cfg.one_shot);
+    for turn in [todos(), MockTurn::text("Planned."), verdict("impossible", "nothing to do")] {
+        t.p.push(turn);
+    }
+    run_all(&mut t.d, "/goal it is written").await;
+    assert!(t.p.requests().iter().all(|r| !last_user_text(r).contains("takes no further input")));
+    assert!(t.d.engine.cfg.one_shot, "the setting is back after the turn");
+
+    let mut t = driver_with(|_, o| o.one_shot = true);
+    for turn in [todos(), MockTurn::text("Planned."), MockTurn::text("Left: writing it.")] {
+        t.p.push(turn);
+    }
+    run_all(&mut t.d, "write it").await;
+    assert!(t.p.requests().iter().any(|r| last_user_text(r).contains("takes no further input")));
+}
+
 #[tokio::test]
 async fn goal_pauses_without_progress_and_resumes_on_a_prompt() {
     let mut t = driver();

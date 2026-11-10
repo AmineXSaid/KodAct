@@ -287,6 +287,36 @@ pub(crate) fn edit_diagnostics(settings: &LoadedSettings, verifying: bool) -> bo
     verifying && settings.bool("/verification/syntaxCheck") != Some(false)
 }
 
+/// Language-server diagnostics after edits: off unless `verification.languageServer` is true
+/// (and the verification loop is on). `verification.languageServers` maps file extensions to a
+/// server's command (`{"py": ["pylsp"]}`), tried before the built-in table;
+/// `verification.languageServerWaitMs` is how long an edit waits for the answer.
+pub(crate) fn language_servers(settings: &LoadedSettings, verifying: bool) -> Option<kodact_engine::LspConfig> {
+    if !verifying || settings.bool("/verification/languageServer") != Some(true) {
+        return None;
+    }
+    let mut cfg = kodact_engine::LspConfig::default();
+    let configured = settings.get("/verification/languageServers").and_then(Value::as_object).cloned();
+    let mut own: Vec<kodact_engine::ServerSpec> = configured
+        .into_iter()
+        .flatten()
+        .filter_map(|(ext, command)| {
+            let command: Vec<String> =
+                command.as_array()?.iter().filter_map(|c| c.as_str().map(str::to_string)).collect();
+            (!command.is_empty()).then(|| kodact_engine::ServerSpec {
+                extensions: vec![ext.trim_start_matches('.').to_ascii_lowercase()],
+                command,
+            })
+        })
+        .collect();
+    own.append(&mut cfg.servers);
+    cfg.servers = own;
+    if let Some(ms) = settings.get("/verification/languageServerWaitMs").and_then(Value::as_u64) {
+        cfg.wait = std::time::Duration::from_millis(ms);
+    }
+    Some(cfg)
+}
+
 /// The verification loop's settings: `verification.{enabled, commands,
 /// maxReminders}`, with commands detected from the project's manifests when
 /// none are set. `KODACT_VERIFY=0` turns it off (for A/B runs).
@@ -1030,6 +1060,7 @@ pub fn build_session(
         auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
         is_subagent: false,
         edit_diagnostics: edit_diagnostics(&settings, verify.is_some()),
+        language_servers: language_servers(&settings, verify.is_some()),
         one_shot: opts.one_shot,
         verify,
         escalate_output: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").is_none(),

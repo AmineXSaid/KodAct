@@ -74,6 +74,11 @@ Each pillar lists what KodAct does about it and what shows that it works.
 ### 2. Failure recovery
 
 - **Done** (contract C13):
+  - a fallback model takes the turn when the first is limited in a way a
+    short wait doesn't lift (three rate limits waited out in a row, a long
+    `retry-after`, a spent quota), as it does on overload;
+  - a reply that is one passage over and over is stopped while it streams and
+    the model is told, instead of running to the output cap;
   - API retries with backoff, fallback models, and interrupt with rewind. A
     429 or an outage is waited out in every run. A spent quota is told from a
     throttle and not retried, and a `retry-after` longer than a retry sleeps
@@ -86,7 +91,8 @@ Each pillar lists what KodAct does about it and what shows that it works.
     Ambiguous matches name their lines.
   - Stuck-loop detection: the same failing call three times, the same result
     three times, edits that undo each other, or five failures in a row each
-    trigger one reminder to change approach. After the reminder, the same
+    trigger a reminder to change approach, told again at 5 and at 8 when the
+    repeat goes on. After the first reminder, the same
     failing call to a tool whose result depends only on the call and the
     files (file tools, an unknown tool name) is answered without being run,
     until something changes; shell, web and MCP calls are only reminded.
@@ -129,8 +135,13 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - a file an edit leaves unparseable is said with the edit's result, by the
     language's own parser when installed (`verification.syntaxCheck`;
     `edit_diagnostics` per run, task `syntax-after-edit`).
-- **To build:** LSP diagnostics (types, other files) and formatter feedback
-  after edits (the OpenCode pattern).
+  - language-server diagnostics after edits (`verification.languageServer`,
+    off by default until measured): the errors a server reports for the new
+    text, in that file and others, within a share of the model's window (task
+    `change-signature`);
+  - `/goal`'s check is told the same record (`HARNESS:` line).
+- **To build:** formatter feedback after edits; a baseline of the errors
+  before an edit, so only new ones are told.
 - **Measured by:** false-finish rate and pass rate (tasks `fix-median`,
   `slugify-trap`, `invoice-rounding`).
 
@@ -138,7 +149,9 @@ Each pillar lists what KodAct does about it and what shows that it works.
 
 - **Done:** precise errors, read-before-write, CRLF-safe Edit, parallel
   read-only batches, results returned in call order, and repair of invalid
-  tool-call JSON (open-weight models' most common invalid call).
+  tool-call JSON (open-weight models' most common invalid call), and a tool
+  call written as text (`<tool_call>…</tool_call>`, or a reply that is only
+  the call's JSON) run as the call it is.
 - **To build:**
   - tool descriptions tuned against the eval suite;
   - structured results everywhere;

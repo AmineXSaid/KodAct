@@ -178,6 +178,8 @@ fn todo_reminder(open: &[String]) -> String {
 const API_RETRY_FIRST_WAIT: Duration = Duration::from_secs(5);
 /// The longest wait between two tries.
 const API_RETRY_MAX_WAIT: Duration = kodact_api::MAX_RETRY_WAIT;
+/// Rate limits waited out in a row before a fallback model, when one is set, takes the turn.
+const FALLBACK_AFTER_THROTTLES: u32 = 3;
 /// Without `--max-time`, how many times a failed call is tried again.
 const API_RETRY_ATTEMPTS: u32 = 10;
 /// With `--max-time`, the most tries, and the time kept after a wait for the model to wrap up.
@@ -226,6 +228,10 @@ pub struct EngineConfig {
     /// Tell the model, with an edit's result, when the file it wrote no longer parses
     /// (`verification.syntaxCheck`, on with the verification loop). Sub-agents keep it.
     pub edit_diagnostics: bool,
+    /// Ask a language server for the errors after an edit (`verification.languageServer`, off
+    /// by default): types, imports and broken callers, which the parse check can't see. Only
+    /// the main agent asks; `None` is off.
+    pub language_servers: Option<crate::lsp::LspConfig>,
     /// The run ends with this turn and takes no further input (`-p` with its prompt given up
     /// front): a turn about to end with todo items open is sent back once, since a script gets
     /// what the turn left. Not for a session with a person or a host at the other end, where
@@ -307,6 +313,7 @@ impl Default for EngineConfig {
             is_subagent: false,
             verify: None,
             edit_diagnostics: false,
+            language_servers: None,
             one_shot: false,
             escalate_output: true,
             fast: false,
@@ -713,6 +720,8 @@ pub struct Engine {
     time_up: Arc<std::sync::atomic::AtomicBool>,
     verify: crate::verify::Tracker,
     guard: crate::stuck::LoopGuard,
+    /// The session's language servers, started on first use ([`EngineConfig::language_servers`]).
+    lsp: Option<Arc<crate::lsp::Manager>>,
     /// This turn's raised output cap, after a `max_tokens` stop.
     output_cap: Option<u32>,
     /// After `/clear`: attach the memory context to the next prompt again.
@@ -762,6 +771,8 @@ enum StreamOutcome {
     Done(ApiMessage),
     Interrupted(Option<ApiMessage>),
     Failed(ApiError),
+    /// The reply was stopped while it streamed: it was one passage repeated ([`crate::repeat`]).
+    Repeating(crate::repeat::Repeating),
 }
 
 impl Engine {
@@ -817,6 +828,7 @@ impl Engine {
             session_context,
             verify: Default::default(),
             guard: Default::default(),
+            lsp: None,
             output_cap: None,
             reattach_context: false,
             carried_requests: vec![],
@@ -1258,11 +1270,18 @@ impl Engine {
     }
 
     /// Stream one model response, emitting events. Keeps a usable partial on interrupt.
-    async fn stream_once(&self, req: MessagesRequest, cancel: &CancellationToken) -> StreamOutcome {
-        self.stream_inner(req, cancel, true).await
+    /// One model call of the turn. `watch`: stop a reply that repeats itself as it streams.
+    async fn stream_once(&self, req: MessagesRequest, cancel: &CancellationToken, watch: bool) -> StreamOutcome {
+        self.stream_inner(req, cancel, true, watch).await
     }
 
-    async fn stream_inner(&self, req: MessagesRequest, cancel: &CancellationToken, emit: bool) -> StreamOutcome {
+    async fn stream_inner(
+        &self,
+        req: MessagesRequest,
+        cancel: &CancellationToken,
+        emit: bool,
+        watch: bool,
+    ) -> StreamOutcome {
         let mut stream = match self.shared.provider.stream(req, cancel.clone()).await {
             Ok(s) => s,
             Err(ApiError::Cancelled) => return StreamOutcome::Interrupted(None),
@@ -1270,6 +1289,7 @@ impl Engine {
         };
         let mut acc = MessageAccumulator::new();
         let mut stopped: HashSet<usize> = HashSet::new();
+        let mut watcher = crate::repeat::Watcher::default();
         loop {
             let next = tokio::select! {
                 n = stream.next() => n,
@@ -1279,6 +1299,26 @@ impl Engine {
                 Some(Ok(ev)) => {
                     if let StreamEvent::ContentBlockStop { index } = &ev {
                         stopped.insert(*index);
+                    }
+                    if watch {
+                        let repeating = match &ev {
+                            StreamEvent::ContentBlockStart { .. } => {
+                                watcher.reset();
+                                None
+                            }
+                            StreamEvent::ContentBlockDelta {
+                                delta: kodact_types::Delta::TextDelta { text }, ..
+                            } => watcher.push(text, false),
+                            StreamEvent::ContentBlockDelta {
+                                delta: kodact_types::Delta::ThinkingDelta { thinking },
+                                ..
+                            } => watcher.push(thinking, true),
+                            _ => None,
+                        };
+                        // Dropping the stream ends the request.
+                        if let Some(r) = repeating {
+                            return StreamOutcome::Repeating(r);
+                        }
                     }
                     if let Err(e) = acc.push(&ev) {
                         return StreamOutcome::Failed(e);
@@ -1514,11 +1554,11 @@ impl Engine {
         // (9ef0955) reasoned to the limit and wrote nothing seven times in a row, and five of the
         // eight summaries that did come back that run used 18k to 20k.
         let t0 = Instant::now();
-        let outcome = self.stream_inner(req, cancel, false).await;
+        let outcome = self.stream_inner(req, cancel, false, false).await;
         turn.api_ms += t0.elapsed().as_millis() as u64;
         let msg = match outcome {
             StreamOutcome::Done(m) => m,
-            StreamOutcome::Interrupted(_) => return Err("interrupted".into()),
+            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) => return Err("interrupted".into()),
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
                 self.record_compact_failure(trigger, &reason, None);
@@ -1837,9 +1877,9 @@ impl Engine {
             oc
         });
         // A reply's whole output budget, as for a full compaction.
-        let msg = match self.stream_inner(req, &cancel, false).await {
+        let msg = match self.stream_inner(req, &cancel, false, false).await {
             StreamOutcome::Done(m) => m,
-            StreamOutcome::Interrupted(_) => return Err("interrupted".into()),
+            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) => return Err("interrupted".into()),
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
                 self.record_compact_failure("partial", &reason, None);
@@ -2235,7 +2275,10 @@ impl Engine {
                 "model request"
             );
             let t0 = Instant::now();
-            let outcome = self.stream_once(req, &cancel).await;
+            // Watched while this stretch still has reminders to act left: past them, a reply
+            // runs to its end and the turn ends as it would have.
+            let watch = self.cfg.reminders && reasoning_cutoffs < MAX_REASONING_CUTOFFS;
+            let outcome = self.stream_once(req, &cancel, watch).await;
             turn.api_ms += t0.elapsed().as_millis() as u64;
             match &outcome {
                 StreamOutcome::Done(m) => tracing::debug!(
@@ -2249,9 +2292,26 @@ impl Engine {
                 ),
                 StreamOutcome::Interrupted(_) => tracing::debug!("model response interrupted"),
                 StreamOutcome::Failed(e) => tracing::debug!(error = %e, "model request failed"),
+                StreamOutcome::Repeating(r) => tracing::debug!(copies = r.copies, "model response repeating; stopped"),
             }
             let mut msg = match outcome {
                 StreamOutcome::Done(m) => m,
+                // Nothing of the reply is kept: it was one passage over and over. The model is
+                // told, within the same budget as replies that were all reasoning.
+                StreamOutcome::Repeating(r) => {
+                    turn.api_calls += 1;
+                    reasoning_cutoffs += 1;
+                    self.system_event(
+                        "act_reminder",
+                        json!({"kind": "repeating", "copies": r.copies, "reasoning": r.reasoning}),
+                    );
+                    self.notice(
+                        NoticeLevel::Warning,
+                        "The reply was repeating itself: stopped, and the model was told.",
+                    );
+                    self.push_user(Message::user_text(r.text()), true, None, true);
+                    continue;
+                }
                 StreamOutcome::Interrupted(partial) => {
                     let mut marker = self.stop_marker(false);
                     if let Some(p) = partial {
@@ -2310,7 +2370,15 @@ impl Engine {
                     }
                 }
                 StreamOutcome::Failed(e) => {
-                    let switch = e.is_overloaded() || matches!(&e, ApiError::Http { status: 404, .. });
+                    // A fallback model is for when this one can't serve the turn: overloaded, gone,
+                    // or limited in a way a short wait doesn't lift (a throttle that has been
+                    // waited out several times in a row, a wait longer than a retry sleeps, a spent
+                    // quota). With no fallback set, each of these goes on as before.
+                    let limited = matches!(&e, ApiError::Http { status: 429, .. })
+                        && api_retries >= FALLBACK_AFTER_THROTTLES
+                        || e.long_wait().is_some()
+                        || e.is_quota();
+                    let switch = e.is_overloaded() || matches!(&e, ApiError::Http { status: 404, .. }) || limited;
                     if switch {
                         if let Some(next) = fallbacks.next() {
                             self.system_event(
@@ -2366,6 +2434,20 @@ impl Engine {
             api_retries = 0;
             self.record_usage(&model, &msg.usage.clone(), &mut turn);
             self.measure_context(&model, &msg);
+            // A call the model wrote out as text is the call it meant (small and local models
+            // do this): run it instead of ending the turn on a line of JSON.
+            // Not where the answer itself is asked as JSON (`--json-schema`).
+            if self.cfg.json_schema.is_none()
+                && msg.stop_reason != Some(StopReason::MaxTokens)
+                && msg.stop_reason != Some(StopReason::Refusal)
+            {
+                let promoted =
+                    crate::textcall::promote(&mut msg.content, &|name| self.shared.tools.get(name).is_some());
+                if !promoted.is_empty() {
+                    msg.stop_reason = Some(StopReason::ToolUse);
+                    self.system_event("tool_call_from_text", json!({"tools": promoted}));
+                }
+            }
             let text = msg.to_message().text();
             let next_step = announced_next_step(&text);
             // Read before `text` moves into `last_text`: a cut-off reply with no text was all reasoning.
@@ -2456,7 +2538,6 @@ impl Engine {
             if !tool_uses.is_empty() {
                 // The model acted: a later reasoning-only cut-off starts a new stretch.
                 reasoning_cutoffs = 0;
-                turn.tool_calls += tool_uses.len() as u32;
                 // A call the model was already told would fail the same way is answered, not run.
                 let refused: Vec<Option<crate::stuck::Refused>> = tool_uses
                     .iter()
@@ -2467,6 +2548,9 @@ impl Engine {
                     .collect();
                 let to_run: Vec<(String, String, Value)> =
                     tool_uses.iter().zip(&refused).filter(|(_, r)| r.is_none()).map(|(c, _)| c.clone()).collect();
+                // Calls that ran: a call answered without running is not work done (a goal's
+                // "turns without using a tool" count them as none).
+                turn.tool_calls += to_run.len() as u32;
                 let mut ran = crate::exec::run_tools(&self.shared, &to_run, &cancel, self.mode_str()).await.into_iter();
                 let writes_now = self.shared.history.writes_len();
                 let mut results: Vec<crate::exec::CallResult> = tool_uses
@@ -2507,8 +2591,8 @@ impl Engine {
                         self.guard.observe(name, input, &r.output.text_content(), r.output.is_error, may_change)
                     })
                     .collect();
-                if self.cfg.edit_diagnostics {
-                    self.diagnose_edits(&tool_uses, &mut results).await;
+                if self.cfg.edit_diagnostics || self.cfg.language_servers.is_some() {
+                    self.diagnose_edits(&tool_uses, &mut results, &model).await;
                 }
                 let mut interrupted = cancel.is_cancelled();
                 for r in results {
@@ -2963,20 +3047,60 @@ impl Engine {
             || self.shared.tools.get(name).is_none()
     }
 
-    /// Diagnostics after edits (GOALS pillar 3): a file an edit left unparseable is said with the
-    /// edit's result ([`crate::diagnose`]). Nothing is added when the file parses.
-    async fn diagnose_edits(&mut self, calls: &[(String, String, Value)], results: &mut [crate::exec::CallResult]) {
+    /// The session's language servers, when they are on and this is the main agent. Rebuilt
+    /// when the setting changed mid-session.
+    fn language_servers(&mut self) -> Option<Arc<crate::lsp::Manager>> {
+        let cfg = self.cfg.language_servers.clone().filter(|_| !self.cfg.is_subagent);
+        match (&self.lsp, cfg) {
+            (_, None) => self.lsp = None,
+            (Some(m), Some(cfg)) if *m.config() == cfg => {}
+            (_, Some(cfg)) => {
+                let root = self.shared.tool_ctx.project_dir.clone();
+                self.lsp = Some(Arc::new(crate::lsp::Manager::new(cfg, root)));
+            }
+        }
+        self.lsp.clone()
+    }
+
+    /// Diagnostics after edits (GOALS pillar 3), told with the edit's result: a file it left
+    /// unparseable ([`crate::diagnose`]), or, when that is on, what a language server reports
+    /// ([`crate::lsp`]). Nothing is added when neither finds an error.
+    async fn diagnose_edits(
+        &mut self,
+        calls: &[(String, String, Value)],
+        results: &mut [crate::exec::CallResult],
+        model: &str,
+    ) {
         let root = self.shared.tool_ctx.project_dir.clone();
+        let servers = self.language_servers();
+        // Room for a server's errors: a share of the model's window (a fiftieth of its tokens,
+        // in characters), so a long list doesn't crowd a small window and isn't cut short on a
+        // large one.
+        let room = usize::try_from(self.context_window(model) / 50).unwrap_or(usize::MAX).clamp(1_500, 20_000);
         for ((_, name, input), r) in calls.iter().zip(results.iter_mut()) {
             if !matches!(name.as_str(), "Edit" | "MultiEdit" | "Write") || r.output.is_error || r.denial.is_some() {
                 continue;
             }
             let Some(raw) = input.get("file_path").and_then(Value::as_str) else { continue };
             let path = kodact_tools::expand_path(raw, &root);
-            let Some(d) = crate::diagnose::check(&path).await else { continue };
             let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
-            self.system_event("diagnostics", json!({"file": shown, "parser": d.parser}));
-            let text = d.text(&shown);
+            let parse = if self.cfg.edit_diagnostics { crate::diagnose::check(&path).await } else { None };
+            let text = match (parse, &servers) {
+                (Some(d), _) => {
+                    self.system_event("diagnostics", json!({"file": shown, "parser": d.parser}));
+                    d.text(&shown)
+                }
+                // A file that parses: what a compiler would say of it.
+                (None, Some(servers)) => {
+                    let Some(report) = servers.check(&path).await else { continue };
+                    self.system_event(
+                        "diagnostics",
+                        json!({"file": shown, "server": report.server, "errors": report.problems.len()}),
+                    );
+                    report.text(&root, room)
+                }
+                (None, None) => continue,
+            };
             match &mut r.output.content {
                 kodact_types::ToolResultContent::Text(s) => s.push_str(&text),
                 kodact_types::ToolResultContent::Blocks(b) => b.push(ContentBlock::text(text.trim_start())),

@@ -24,6 +24,10 @@ const REPEATED_FAILURES: u32 = 3;
 const NO_PROGRESS: u32 = 3;
 /// Consecutive failing calls (any tool) before a reminder.
 const ERROR_STREAK: u32 = 5;
+/// A pattern that goes on is told again at these counts, then no more: a model that didn't act
+/// on the first reminder gets two more chances to, and a long run of the same call doesn't
+/// fill the conversation with reminders. Counts of identical calls, never time.
+const REMIND_AT: [u32; 3] = [REPEATED_FAILURES, 5, 8];
 /// Characters of the last error a refusal quotes: enough to recognize it, not a second copy.
 const REFUSAL_QUOTE: usize = 600;
 
@@ -119,6 +123,15 @@ fn hash<T: Hash>(t: &T) -> u64 {
     h.finish()
 }
 
+/// What sets a later reminder of one pattern apart from its first: nothing at the first count
+/// and between the counts of [`REMIND_AT`] (so it fires once), the count itself at a later one.
+fn later(count: u32) -> String {
+    match REMIND_AT.iter().rev().find(|at| count >= **at) {
+        Some(at) if *at > REPEATED_FAILURES => format!(":{at}"),
+        _ => String::new(),
+    }
+}
+
 /// How often one call gave one output.
 #[derive(Debug, Default)]
 struct Seen {
@@ -175,7 +188,7 @@ impl LoopGuard {
                     count: seen.count,
                     after_changes: seen.changed_between,
                 };
-                found = Some((format!("fail:{key}:{out}"), stuck));
+                found = Some((format!("fail:{key}:{out}{}", later(seen.count)), stuck));
             } else if self.streak >= ERROR_STREAK {
                 found = Some(("streak".into(), Stuck::ErrorStreak { count: self.streak }));
             }
@@ -191,7 +204,8 @@ impl LoopGuard {
                 seen.count += 1;
                 seen.changes_after = changes_after;
                 if seen.count >= NO_PROGRESS {
-                    found = Some((format!("same:{key}"), Stuck::NoProgress { tool: tool.into(), count: seen.count }));
+                    let id = format!("same:{key}{}", later(seen.count));
+                    found = Some((id, Stuck::NoProgress { tool: tool.into(), count: seen.count }));
                 }
             }
             for (file, old, new) in edits_of(tool, input) {
@@ -429,6 +443,33 @@ mod tests {
             g.observe("Read", &other, "File does not exist.", true, false),
             Some(Stuck::ErrorStreak { count: 6 })
         );
+    }
+
+    /// A call that is never refused (a shell command) and goes on failing the same way is told
+    /// again at 5 and at 8, with the count, then no more.
+    #[test]
+    fn a_loop_that_goes_on_is_told_again_at_later_counts() {
+        let mut g = LoopGuard::default();
+        let call = json!({"command": "make"});
+        let told: Vec<u32> = (1..=12)
+            .filter_map(|_| match g.observe("Bash", &call, "make: *** No rule", true, false) {
+                Some(Stuck::RepeatedFailure { count, .. }) => Some(count),
+                Some(Stuck::ErrorStreak { .. }) | None => None,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(told, vec![3, 5, 8]);
+        // The same result again and again, likewise.
+        let mut g = LoopGuard::default();
+        let read = json!({"file_path": "a.txt"});
+        let told: Vec<u32> = (1..=12)
+            .filter_map(|_| match g.observe("Read", &read, "same", false, false) {
+                Some(Stuck::NoProgress { count, .. }) => Some(count),
+                None => None,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(told, vec![3, 5, 8]);
     }
 
     #[test]

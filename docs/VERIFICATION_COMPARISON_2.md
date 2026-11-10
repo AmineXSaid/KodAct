@@ -44,7 +44,16 @@ not found after a search.
 
 ## Proposals, ranked
 
-Each follows `KODACT.md`. None is implemented or measured.
+Each follows `KODACT.md`. All five are implemented (see CHANGELOG, "Checks on
+the agent's work, second round"); none is measured yet. Where what was built
+differs from the proposal:
+- **1** is off by default (`verification.languageServer`), until an eval run
+  shows its cost and gain. It tells every error the server reports after the
+  edit, not only the new ones: there is no reading of the file before it.
+- **3** was built without the count from transcripts first.
+- **4** uses fixed sizes (the last 6,000 characters, six copies): the size of
+  the evidence, the same on every model, not a share of the reply.
+- **5**: the check came first. KodAct did not recognize such calls.
 
 ### 1. Language-server diagnostics after edits
 
