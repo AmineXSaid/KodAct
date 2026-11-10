@@ -333,7 +333,15 @@ with `{"text", "cwd"}`:
   last row. After it, the transcript sits above the live region (a short one
   just above it), scrolled with PgUp / PgDn and the mouse wheel (Shift+drag
   selects text while the mouse is captured); sending goes back to the
-  newest lines. On exit the transcript is printed into the terminal's
+  newest lines. When the conversation is replaced (`/clear` and its other
+  names, `/resume`, `/rewind`, or one loaded at start with `--resume` or
+  `--continue`) the session sends `UiEvent::Reset` and the screen starts
+  over: the transcript is emptied and the conversation as it is now is
+  written out again (prompts, answers, tool calls with their results), then
+  the command and its answer. An empty conversation shows the front page
+  again, its `/resume` line naming the conversation just left. The inline
+  UI (`KODACT_TUI=inline`) clears the window and its scrollback instead.
+  On exit the transcript is printed into the terminal's
   scrollback, wrapped to its width.
 - **The front screen** (`brand::welcome`), printed once at the start,
   centred across the terminal and down the room above the input: the KodAct

@@ -241,6 +241,17 @@ fn strip_escapes(s: &str) -> String {
 /// Run `work` (a turn, holding the driver) to its end. Meanwhile immediate commands from the
 /// UI are answered from the session view, each on its own task so the turn and the spinner
 /// keep going; any other input waits in `queue` for the turn to end (C17).
+/// `text` is a command that puts another conversation on screen: `/clear`, `/resume`
+/// or `/rewind`, by any of their names.
+fn replaces_conversation(text: &str) -> bool {
+    matches!(kodact_core::commands::builtin_of(text), Some(Builtin::Clear | Builtin::Resume | Builtin::Rewind))
+}
+
+/// The screen starts over with `replay`, the session's conversation as it is now.
+fn reset_event(driver: &Driver, replay: Vec<kodact_types::Message>, echo: Option<String>) -> UiEvent {
+    UiEvent::Reset { replay, recent: kodact_core::commands::recent_sessions(driver, 3), echo }
+}
+
 async fn while_busy<F: Future>(
     work: F,
     view: &SessionView,
@@ -292,6 +303,11 @@ pub async fn run(mut driver: Driver, mut rx: mpsc::UnboundedReceiver<ToSession>,
             let _ = send.send(ev);
         }
     };
+    // A conversation loaded at start (--resume, --continue) is shown, not only remembered.
+    let loaded = driver.engine.shown_messages();
+    if !loaded.is_empty() {
+        let _ = ui.send(reset_event(&driver, loaded, None));
+    }
     let mut menu = commands(&driver);
     let _ = ui.send(UiEvent::Commands(menu.clone()));
     let skill_names = |d: &Driver| -> Vec<String> { d.catalog.skills.iter().map(|s| s.name.clone()).collect() };
@@ -413,6 +429,28 @@ pub async fn run(mut driver: Driver, mut rx: mpsc::UnboundedReceiver<ToSession>,
                 } else if let Some(events) = ui_command(&driver, &text) {
                     for e in events {
                         let _ = ui.send(e);
+                    }
+                } else if replaces_conversation(&text) {
+                    // /clear, /resume and /rewind put another conversation on screen: the
+                    // command's answer is held until the screen has started over, so it
+                    // is written under the conversation it left.
+                    let before = (driver.info.session_id.clone(), driver.engine.shown_messages());
+                    let mut held: Vec<UiEvent> = vec![];
+                    let mut hold = |r: &TurnResult| held.extend(reply_for(r));
+                    let input = driver.input(MessageContent::Text(text.clone()), &mut hold);
+                    let flow = while_busy(input, &view, &mut rx, &ui, &mut queue).await;
+                    let failed = held.iter().any(|e| matches!(e, UiEvent::Reply { is_error: true, .. }));
+                    let now = driver.engine.shown_messages();
+                    let cleared = kodact_core::commands::builtin_of(&text) == Some(Builtin::Clear);
+                    if !failed && (cleared || before != (driver.info.session_id.clone(), now.clone())) {
+                        let _ = ui.send(reset_event(&driver, now, Some(text)));
+                    }
+                    for e in held {
+                        let _ = ui.send(e);
+                    }
+                    if flow == Flow::Exit {
+                        let _ = ui.send(UiEvent::Exit);
+                        break;
                     }
                 } else {
                     let input = driver.input(MessageContent::Text(text), &mut report);
@@ -593,6 +631,83 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// `/clear` left the old conversation on screen, and `/resume` and `/rewind` never
+    /// showed the one they moved to: the UI was told the answer, not that the
+    /// conversation had changed.
+    #[tokio::test]
+    async fn clear_resume_and_rewind_start_the_screen_over() {
+        let mut t = start(|_| {});
+        until_idle(&mut t.ui).await;
+        let said = |m: &kodact_types::Message| -> String {
+            m.content.iter().filter_map(ContentBlock::as_text).collect::<Vec<_>>().join(" ")
+        };
+        // The Reset of a command: what it replays, and whether it came before the answer.
+        type Seen = (Vec<String>, Vec<(String, String)>, bool);
+        let reset = |evs: &[UiEvent]| -> Option<Seen> {
+            let at = evs.iter().position(|e| matches!(e, UiEvent::Reset { .. }))?;
+            let reply = evs.iter().position(|e| matches!(e, UiEvent::Reply { .. }));
+            match &evs[at] {
+                UiEvent::Reset { replay, recent, .. } => {
+                    Some((replay.iter().map(said).collect(), recent.clone(), reply.is_some_and(|r| at < r)))
+                }
+                _ => None,
+            }
+        };
+        t.p.push(MockTurn::text("first answer"));
+        t.to.send(ToSession::Input("first question".into())).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        assert!(reset(&evs).is_none(), "a turn does not start the screen over");
+
+        // /clear: nothing to replay, and the conversation it left is the newest to resume.
+        t.to.send(ToSession::Input("/clear".into())).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        let (replay, recent, before_reply) = reset(&evs).expect("/clear starts the screen over");
+        assert!(replay.is_empty(), "{replay:?}");
+        assert_eq!(recent.first().map(|r| r.0.as_str()), Some("first question"));
+        assert!(before_reply, "the answer is written on the new screen");
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Reset { echo: Some(c), .. } if c == "/clear")));
+        // The answer names the conversation it left: `/resume <id> brings it back`.
+        let first_id = evs
+            .iter()
+            .find_map(|e| match e {
+                UiEvent::Reply { text, .. } => {
+                    text.split("/resume ").nth(1)?.split_whitespace().next().map(str::to_string)
+                }
+                _ => None,
+            })
+            .expect("the id of the conversation it left");
+
+        // Its other names do the same; a command that changes nothing does not.
+        t.to.send(ToSession::Input("/new".into())).unwrap();
+        assert!(reset(&until_idle(&mut t.ui).await).is_some(), "/new");
+        t.to.send(ToSession::Input("/status".into())).unwrap();
+        assert!(reset(&until_idle(&mut t.ui).await).is_none(), "/status");
+        t.to.send(ToSession::Input("/resume no-such-conversation".into())).unwrap();
+        assert!(reset(&until_idle(&mut t.ui).await).is_none(), "a /resume that failed");
+
+        // /resume: the conversation it moves to is replayed.
+        t.p.push(MockTurn::text("second answer"));
+        t.to.send(ToSession::Input("second question".into())).unwrap();
+        until_idle(&mut t.ui).await;
+        t.to.send(ToSession::Input(format!("/resume {first_id}"))).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        let (replay, _, before_reply) = reset(&evs).expect("/resume starts the screen over");
+        assert_eq!(replay, ["first question", "first answer"]);
+        assert!(before_reply);
+
+        // /rewind: what is left of the conversation is replayed.
+        t.p.push(MockTurn::text("third answer"));
+        t.to.send(ToSession::Input("third question".into())).unwrap();
+        until_idle(&mut t.ui).await;
+        t.to.send(ToSession::Input("/rewind 2 conversation".into())).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        let (replay, _, _) = reset(&evs).expect("/rewind starts the screen over");
+        assert_eq!(replay, ["first question", "first answer"]);
+
+        t.to.send(ToSession::Exit).unwrap();
+        t.task.await.unwrap();
     }
 
     #[tokio::test]

@@ -1635,6 +1635,30 @@ impl Engine {
         out
     }
 
+    /// The conversation as a person would read it back, oldest first: every
+    /// message but the ones the harness added for the model alone (meta
+    /// messages), with system reminders left out of the person's prompts. A UI
+    /// redraws from this when the conversation is replaced (`/resume`,
+    /// `/rewind`) or was loaded at start (`--resume`).
+    pub fn shown_messages(&self) -> Vec<Message> {
+        let reminder = |b: &ContentBlock| b.as_text().is_some_and(|t| t.trim_start().starts_with("<system-reminder>"));
+        let mut out = vec![];
+        for (i, m) in self.state.messages.iter().enumerate() {
+            if self.state.uuids.get(i).is_some_and(|u| self.state.meta.contains(u)) {
+                continue;
+            }
+            let content: Vec<ContentBlock> = if m.role == kodact_types::Role::User {
+                m.content.iter().filter(|b| !reminder(b)).cloned().collect()
+            } else {
+                m.content.clone()
+            };
+            if !content.is_empty() {
+                out.push(Message { role: m.role, content });
+            }
+        }
+        out
+    }
+
     /// `/rewind`: drop the conversation from the message at `index` on (a
     /// prompt point). The transcript branches from the message before it.
     pub fn rewind_conversation(&mut self, index: usize) -> Result<(), String> {

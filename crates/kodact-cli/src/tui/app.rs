@@ -12,7 +12,7 @@ use kodact_core::commands::picker::{Choice, Pick, Picker};
 use kodact_core::commands::screens::{FieldKind, Form, RowAction, Screen};
 use kodact_engine::{EngineEvent, NoticeLevel, PermissionAnswer, PermissionPrompt};
 use kodact_permissions::{PermissionMode, Suggestion};
-use kodact_types::{ContentBlock, Delta, StreamEvent};
+use kodact_types::{ApiMessage, ContentBlock, Delta, Role, StreamEvent};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::{json, Value};
@@ -91,6 +91,15 @@ pub enum UiEvent {
     Picker(Picker),
     /// A screen for a command typed without arguments (`/diff`, `/context`, `/hooks`, `/agents`).
     Screen(Screen),
+    /// The conversation on screen was replaced (`/clear`, `/resume`, `/rewind`, or one
+    /// loaded at start): the screen starts over and shows `replay`, the conversation
+    /// as it is now. `recent` is the newest other conversations here, for the front
+    /// page; `echo` is the command that did it, written again after the replay.
+    Reset {
+        replay: Vec<kodact_types::Message>,
+        recent: Vec<(String, String)>,
+        echo: Option<String>,
+    },
     /// The session started work by itself (a scheduled task).
     Busy,
     /// The session is ready for the next input.
@@ -539,6 +548,9 @@ pub struct App {
     pub focus: bool,
     /// A screen or picker waiting for an open question to be answered.
     held: Option<Dialog>,
+    /// The conversation on screen was replaced: the loop starts the screen over before it
+    /// writes [`App::pending`]. Holds the newest other conversations, for the front page.
+    pub reset: Option<Vec<(String, String)>>,
 }
 
 /// Most diff lines shown under an edit; the rest are counted.
@@ -1096,6 +1108,7 @@ impl App {
             branch: String::new(),
             focus: false,
             held: None,
+            reset: None,
         }
     }
 
@@ -1471,6 +1484,7 @@ impl App {
             UiEvent::StatusLine(text) => self.status_text = text,
             UiEvent::Picker(picker) => self.open_picker(picker),
             UiEvent::Screen(screen) => self.open_screen(screen),
+            UiEvent::Reset { replay, recent, echo } => self.reset_to(replay, recent, echo),
             UiEvent::Busy => {
                 if !self.busy {
                     self.busy = true;
@@ -1490,6 +1504,75 @@ impl App {
                 self.activity.clear();
             }
             UiEvent::Exit => self.exit = true,
+        }
+    }
+
+    /// Start the screen over with `replay`, the conversation as it is now: nothing
+    /// written before stays, and an empty conversation goes back to the front page.
+    fn reset_to(&mut self, replay: Vec<kodact_types::Message>, recent: Vec<(String, String)>, echo: Option<String>) {
+        self.pending.clear();
+        self.printed_blank = true;
+        self.running.clear();
+        self.calls.clear();
+        self.live.clear();
+        self.thought.clear();
+        self.thought_since = None;
+        self.md.reset();
+        self.first_line = true;
+        self.streamed = false;
+        self.todos.clear();
+        self.skills_used.clear();
+        self.agents_done = 0;
+        self.title.clear();
+        self.talked = !replay.is_empty();
+        self.front = replay.is_empty();
+        self.first_run = false;
+        self.reset = Some(recent);
+        // Tool calls show in a replay even in focus mode, which is for the work under way.
+        let focus = std::mem::take(&mut self.focus);
+        for m in replay {
+            if m.role == Role::User {
+                let said: Vec<&str> = m.content.iter().filter_map(ContentBlock::as_text).collect();
+                if !said.is_empty() {
+                    self.flush_live();
+                    self.echo_prompt(&said.join("\n"));
+                    self.first_line = true;
+                }
+                if m.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })) {
+                    self.on_engine(EngineEvent::User {
+                        message: m,
+                        uuid: String::new(),
+                        tool_use_result: None,
+                        is_meta: false,
+                        parent_tool_use_id: None,
+                    });
+                }
+            } else {
+                self.on_engine(EngineEvent::Assistant {
+                    message: ApiMessage {
+                        id: String::new(),
+                        kind: "message".into(),
+                        role: Role::Assistant,
+                        model: String::new(),
+                        content: m.content,
+                        stop_reason: None,
+                        stop_sequence: None,
+                        usage: Default::default(),
+                    },
+                    uuid: String::new(),
+                    parent_tool_use_id: None,
+                });
+            }
+        }
+        self.flush_live();
+        // A call the conversation never got a result for (it was interrupted).
+        for r in std::mem::take(&mut self.running) {
+            self.commit_tool(r, ToolEnd::Stopped);
+        }
+        self.focus = focus;
+        self.activity.clear();
+        if let Some(text) = echo {
+            self.echo_prompt(&text);
         }
     }
 
@@ -2799,7 +2882,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::tui::text::plain;
-    use kodact_types::{ApiMessage, MessageContent, Role, StopReason, Usage};
+    use kodact_types::{MessageContent, StopReason, Usage};
 
     fn app() -> App {
         let mut a = App::new(Theme { color: false, light: false, accent: None, depth: Default::default() }, vec![]);
@@ -2828,6 +2911,57 @@ mod tests {
 
     fn texts(lines: &[Line]) -> Vec<String> {
         lines.iter().map(plain).collect()
+    }
+
+    #[test]
+    fn a_replaced_conversation_starts_the_screen_over() {
+        use kodact_types::Message;
+        let mut a = app();
+        a.submit("old question".into());
+        a.on_event(UiEvent::Engine(EngineEvent::Notice { level: NoticeLevel::Info, text: "old notice".into() }));
+        assert!(!a.front && a.reset.is_none());
+
+        // /clear: nothing of the old conversation is left to write, and the front page is back.
+        let recent = vec![("old question".to_string(), "just now".to_string())];
+        a.on_event(UiEvent::Reset { replay: vec![], recent: recent.clone(), echo: Some("/clear".into()) });
+        a.on_event(UiEvent::Reply { text: "Conversation cleared.".into(), is_error: false });
+        assert_eq!(a.reset.take(), Some(recent), "the loop empties the screen and lists what can be resumed");
+        assert!(a.front, "an empty conversation shows the front page");
+        let lines = texts(&a.take_pending());
+        assert!(!lines.iter().any(|l| l.contains("old")), "{lines:?}");
+        let at =
+            |want: &str| lines.iter().position(|l| l.contains(want)).unwrap_or_else(|| panic!("{want}: {lines:?}"));
+        assert!(at("/clear") < at("Conversation cleared."), "the command, then its answer");
+
+        // /resume: the conversation it moved to is written out, a tool call with its result.
+        let call = ContentBlock::ToolUse {
+            id: "t".into(),
+            name: "Read".into(),
+            input: json!({"file_path": "src/cart.rs"}),
+            cache_control: None,
+            provider: None,
+        };
+        let replay = vec![
+            Message::user_text("why is the total off?"),
+            Message { role: Role::Assistant, content: vec![ContentBlock::text("Looking at the cart."), call] },
+            Message::user(vec![ContentBlock::tool_result("t".to_string(), "fn total() {}", false)]),
+            Message { role: Role::Assistant, content: vec![ContentBlock::text("It rounds **each line**.")] },
+        ];
+        a.on_event(UiEvent::Reset { replay, recent: vec![], echo: Some("/resume 1".into()) });
+        assert!(!a.front && a.reset.is_some());
+        assert!(a.running.is_empty(), "nothing is left running");
+        let lines = texts(&a.take_pending());
+        let at =
+            |want: &str| lines.iter().position(|l| l.contains(want)).unwrap_or_else(|| panic!("{want}: {lines:?}"));
+        let order = [
+            at("why is the total off?"),
+            at("Looking at the cart."),
+            at("src/cart.rs"),
+            at("It rounds each line."),
+            at("/resume 1"),
+        ];
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "in the conversation's order: {lines:?}");
+        assert!(!lines.iter().any(|l| l.contains("Conversation cleared")), "{lines:?}");
     }
 
     fn delta(text: &str) -> UiEvent {

@@ -185,6 +185,17 @@ impl<B: Backend> Screen<B> {
         Ok(())
     }
 
+    /// Start again at the top of the window, once `wipe` has cleared it and its
+    /// scrollback and sent the cursor home. The position is known, so the terminal
+    /// isn't asked for it (see [`Tracked`]).
+    pub fn restart(&mut self, wipe: impl FnOnce() -> std::io::Result<()>) -> std::io::Result<()> {
+        wipe()?;
+        self.pos.set(Some(Position { x: 0, y: 0 }));
+        let backend = Tracked { inner: (self.make)(), pos: self.pos.clone() };
+        self.terminal = Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Inline(self.height) })?;
+        Ok(())
+    }
+
     /// Write finished lines into scrollback, above the viewport.
     pub fn commit(&mut self, lines: Vec<Line<'static>>) -> std::io::Result<()> {
         let rows = text::wrap(app::lay_out(lines, self.width()), self.width());
@@ -297,6 +308,16 @@ impl<B: Backend> Full<B> {
             self.wrapped.extend(rows);
         }
         self.transcript.extend(lines);
+    }
+
+    /// Start over: the transcript is emptied (the conversation on screen was replaced),
+    /// and the front page lists `recent`, the newest other conversations here.
+    pub fn reset(&mut self, recent: Vec<(String, String)>) {
+        self.transcript.clear();
+        self.wrapped.clear();
+        self.scroll = 0;
+        self.max_scroll = 0;
+        self.info.recent = recent;
     }
 
     /// Scroll by `rows` (up when positive), within the transcript.
@@ -607,6 +628,26 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
     let mut had_dialog = false;
     let mut exiting = false;
     loop {
+        // The conversation was replaced (/clear, /resume, /rewind): the screen starts
+        // over before the conversation as it is now is written.
+        if let Some(recent) = app.reset.take() {
+            match &mut screen {
+                Display::Full(f) => f.reset(recent),
+                // Inline, the earlier lines are the terminal's own: the window and its
+                // scrollback are cleared, and the live region starts again at the top.
+                Display::Inline(s) => s
+                    .restart(|| {
+                        crossterm::execute!(
+                            std::io::stdout(),
+                            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+                            crossterm::terminal::Clear(crossterm::terminal::ClearType::Purge),
+                            crossterm::cursor::MoveTo(0, 0)
+                        )
+                    })
+                    .map_err(io_fail)?,
+            }
+            app.dirty = true;
+        }
         if !app.pending.is_empty() {
             match &mut screen {
                 Display::Inline(s) => s.commit(app.take_pending()).map_err(io_fail)?,
@@ -877,6 +918,55 @@ mod tests {
         s.set_height(3).expect("and shrinking back");
         s.commit(vec![Line::from("answer")]).unwrap();
         assert_eq!(asked.get(), 1, "only the first viewport asked");
+    }
+
+    /// `/clear` in the inline UI: the viewport starts again at the top of the cleared
+    /// window, without asking the terminal where the cursor is.
+    #[test]
+    fn restarting_the_viewport_never_asks_the_terminal() {
+        let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+        let a = asked.clone();
+        let mut s =
+            Screen::new(Box::new(move || AsksOnce { inner: TestBackend::new(40, 12), asked: a.clone() }), 2).unwrap();
+        s.commit(vec![Line::from("the old conversation")]).unwrap();
+        let mut wiped = false;
+        s.restart(|| {
+            wiped = true;
+            Ok(())
+        })
+        .expect("starting over works");
+        assert!(wiped);
+        s.commit(vec![Line::from("the new one")]).unwrap();
+        s.draw(&LiveView { lines: vec![Line::from("> ")], cursor: Some((2, 0)) }).unwrap();
+        assert_eq!(asked.get(), 1, "only the first viewport asked");
+        assert_eq!(s.height(), 2);
+    }
+
+    #[test]
+    fn the_full_screen_starts_over_when_the_conversation_is_replaced() {
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
+        let mut a = app::App::new(theme, vec![]);
+        let mut f = Full::new(TestBackend::new(100, 30), front::FrontInfo::default()).unwrap();
+        a.submit("the old question".into());
+        f.commit(a.take_pending());
+        f.scroll = 3;
+        f.draw(&a).unwrap();
+        assert!(rows(f.terminal.backend()).iter().any(|r| r.contains("the old question")));
+        // /clear: the session says the conversation is empty and what can be resumed.
+        a.on_event(app::UiEvent::Reset {
+            replay: vec![],
+            recent: vec![("the old question".into(), "just now".into())],
+            echo: Some("/clear".into()),
+        });
+        a.on_event(app::UiEvent::Idle);
+        f.reset(a.reset.take().expect("the app asks for the screen to start over"));
+        f.commit(a.take_pending());
+        f.draw(&a).unwrap();
+        let rows = rows(f.terminal.backend());
+        assert_eq!(f.scroll, 0);
+        assert!(!rows.iter().any(|r| r.contains("❯ the old question")), "the old conversation is gone: {rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("/resume") && r.contains("the old question")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("❯ /clear")), "{rows:#?}");
     }
 
     fn rows(b: &TestBackend) -> Vec<String> {

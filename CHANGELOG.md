@@ -9,6 +9,14 @@
   `design/brand` are redrawn (the name in Outfit), and kodact.exe carries
   the new icon.
 
+### Fixed
+- `/clear` (and `/reset`, `/new`) left the old conversation on screen in the
+  terminal UI: only the answer said it was cleared. Now the screen starts
+  over, on the front page, with the conversation it left as the one to
+  `/resume`. `/resume` and `/rewind` had the same fault and now show the
+  conversation they moved to, as does starting with `--resume` or
+  `--continue`, which showed an empty screen.
+
 ### On crates.io
 - `cargo install kodact-cli` installs the `kodact` command (and
   `cargo install kodact-eval` the eval harness); the other `kodact-*` crates

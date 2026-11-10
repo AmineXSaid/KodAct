@@ -314,6 +314,12 @@ pub fn recent_sessions(d: &crate::Driver, n: usize) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The built-in that `text` invokes, when it is typed as a command (`/clear`, `/new work`).
+pub fn builtin_of(text: &str) -> Option<Builtin> {
+    let name = text.trim_start().strip_prefix('/')?.split_whitespace().next()?;
+    lookup(name).map(|c| c.id)
+}
+
 pub fn lookup(name: &str) -> Option<&'static CommandSpec> {
     BUILTINS.iter().find(|c| c.name == name || c.aliases.contains(&name))
 }
@@ -503,6 +509,17 @@ pub fn command_text_any(content: &kodact_types::MessageContent) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_typed_command_names_its_builtin() {
+        assert_eq!(builtin_of("/clear"), Some(Builtin::Clear));
+        assert_eq!(builtin_of("  /new work on the cart"), Some(Builtin::Clear), "an alias, with arguments");
+        assert_eq!(builtin_of("/undo 2 both"), Some(Builtin::Rewind));
+        assert_eq!(builtin_of("/continue"), Some(Builtin::Resume));
+        assert_eq!(builtin_of("/no-such-command"), None);
+        assert_eq!(builtin_of("clear the cache"), None, "not typed as a command");
+        assert_eq!(builtin_of("/"), None);
+    }
 
     fn catalog(dir: &Path) -> Catalog {
         let cmd = kodact_agents::commands::parse_command(
