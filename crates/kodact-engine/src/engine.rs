@@ -176,6 +176,12 @@ const API_RETRY_RESERVE: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
+    /// KodAct's own nudges to the model: the verification reminder, the loop guard, the
+    /// act, attempt, next-step and todo reminders, the budget and time wrap-up, and the
+    /// background-command warning. Off, the model works on its own between tool results, and
+    /// only what the person and the CLI did is told to it (plan mode, a mode switch, attached
+    /// files, a subtask's result). The CLI leaves them off unless `reminders` is set.
+    pub reminders: bool,
     pub model: String,
     pub fallback_models: Vec<String>,
     /// Output cap per request (default 32,000, capped by the model).
@@ -263,6 +269,7 @@ const EMPTY_SUMMARY: &str = "the model returned an empty summary";
 impl Default for EngineConfig {
     fn default() -> Self {
         EngineConfig {
+            reminders: true,
             model: kodact_api::models::DEFAULT_MODEL.into(),
             fallback_models: vec![],
             max_output_tokens: 32_000,
@@ -2384,7 +2391,11 @@ impl Engine {
                 // All reasoning, nothing to continue: the next reply is a fresh step, not the rest of
                 // this one, so `continuing` stays false. Counted per stretch without a tool call, not
                 // per run: a long task can hit this many times, each time after real work.
-                if tool_uses.is_empty() && !reply_has_text && reasoning_cutoffs < MAX_REASONING_CUTOFFS {
+                if self.cfg.reminders
+                    && tool_uses.is_empty()
+                    && !reply_has_text
+                    && reasoning_cutoffs < MAX_REASONING_CUTOFFS
+                {
                     reasoning_cutoffs += 1;
                     let (text, kept) = self.act_reminder(ACT_PROMPT, ACT_CUTOFF, &model, &reasoning);
                     self.system_event("act_reminder", json!({"kind": "reasoning_cutoff", "reasoning_chars": kept}));
@@ -2450,11 +2461,11 @@ impl Engine {
                     self.push_user(Message::user_text(text), true, None, true);
                 }
                 self.publish_turn(started, &turn);
-                if let (Some(s), false) = (stuck.first(), interrupted) {
+                if let (Some(s), false, true) = (stuck.first(), interrupted, self.cfg.reminders) {
                     self.system_event("loop_guard", s.record());
                     self.push_user(Message::user_text(s.text()), true, None, true);
                 }
-                if !budget_warned && !interrupted {
+                if self.cfg.reminders && !budget_warned && !interrupted {
                     if let Some(text) = self.budget_warning(turn.api_calls) {
                         budget_warned = true;
                         self.push_user(Message::user_text(text), true, None, true);
@@ -2505,7 +2516,8 @@ impl Engine {
             }
 
             // Unattended runs (GOALS pillar 5): no finishing without an attempt.
-            if self.cfg.autonomous
+            if self.cfg.reminders
+                && self.cfg.autonomous
                 && !self.cfg.is_subagent
                 && !attempt_reminded
                 && turn.tool_calls == 0
@@ -2519,7 +2531,11 @@ impl Engine {
 
             // Unattended runs: a reply that announces its next step ("Let me check...") and makes
             // no tool call would end the run with that step undone.
-            if self.cfg.autonomous && !self.cfg.is_subagent && stop_reason != Some(StopReason::Refusal) {
+            if self.cfg.reminders
+                && self.cfg.autonomous
+                && !self.cfg.is_subagent
+                && stop_reason != Some(StopReason::Refusal)
+            {
                 if let (Some(line), true) = (next_step.as_deref(), next_step_reminders < FINISH_REMINDERS) {
                     next_step_reminders += 1;
                     self.system_event("next_step_reminder", json!({"line": line}));
@@ -2536,7 +2552,7 @@ impl Engine {
             }
 
             // Verification loop (GOALS pillar 3): no finishing on unchecked changes.
-            if stop_reason != Some(StopReason::Refusal) {
+            if self.cfg.reminders && stop_reason != Some(StopReason::Refusal) {
                 if let Some(text) = self.verification_reminder().await {
                     self.push_user(Message::user_text(text), true, None, true);
                     continue;
@@ -2546,7 +2562,8 @@ impl Engine {
             // A reply that ended with no text and no tool call answers nothing, whatever ended it: ask
             // for the next step or the answer instead of ending the turn. Same budget as the
             // reasoning cut-offs: three in a row with no tool call between them end the turn.
-            if !reply_has_text
+            if self.cfg.reminders
+                && !reply_has_text
                 && !was_continuation
                 && stop_reason != Some(StopReason::Refusal)
                 && reasoning_cutoffs < MAX_REASONING_CUTOFFS
@@ -2561,7 +2578,8 @@ impl Engine {
             // Unattended: what still runs in the background is stopped when the session ends,
             // right after this turn, so a service the task needs would be gone before anything
             // checks it (pypi-server, 9ef0955). Said once, with what is still running.
-            if self.cfg.autonomous
+            if self.cfg.reminders
+                && self.cfg.autonomous
                 && !self.cfg.is_subagent
                 && !background_reminded
                 && stop_reason != Some(StopReason::Refusal)

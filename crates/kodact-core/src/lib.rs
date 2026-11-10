@@ -267,6 +267,16 @@ pub struct Session {
     pub resumed: Option<LoadedSession>,
 }
 
+/// KodAct's own nudges to the model (verification, loop guard, act, attempt, next-step, todo,
+/// budget and time wrap-up, background commands): off unless `"reminders": true` in settings
+/// or `KODACT_REMINDERS=1`. Off, a run is the model and the CLI alone.
+pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_REMINDERS") {
+        Some(v) => matches!(v.as_str(), "1" | "true" | "on" | "yes"),
+        None => settings.bool("/reminders").unwrap_or(false),
+    }
+}
+
 /// The verification loop's settings: `verification.{enabled, commands,
 /// maxReminders}`, with commands detected from the project's manifests when
 /// none are set. `KODACT_VERIFY=0` turns it off (for A/B runs).
@@ -970,6 +980,7 @@ pub fn build_session(
         hooks: hooks.clone(),
         sink: sink.clone(),
         base: EngineConfig {
+            reminders: reminders_enabled(&settings),
             max_output_tokens: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").and_then(|v| v.parse().ok()).unwrap_or(32_000),
             pricing: pricing.clone(),
             autocompact_window,
@@ -988,6 +999,7 @@ pub fn build_session(
     }
     let tool_names = tools.names();
     let cfg = EngineConfig {
+        reminders: reminders_enabled(&settings),
         model: model.clone(),
         fallback_models,
         max_output_tokens: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").and_then(|v| v.parse().ok()).unwrap_or(32_000),

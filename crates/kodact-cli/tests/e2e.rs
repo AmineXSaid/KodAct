@@ -543,8 +543,16 @@ async fn print_tells_the_model_its_time_limit() {
 async fn autonomous_runs_have_no_question_tools_and_attempt_first() {
     let e = env();
     let api = MockApi::start(vec![MockTurn::text("Not practical."), MockTurn::text("Tried; it can't be done.")]).await;
+    // KodAct's own reminders are off by default: the model's first answer stands.
     let (code, out, _) = run(&e, &api, &["-p", "--autonomous", "do the hard thing"], None).await;
-    assert_eq!((code, out.trim()), (0, "Tried; it can't be done."));
+    assert_eq!((code, out.trim()), (0, "Not practical."));
+    assert_eq!(api.requests().len(), 1, "no reminder sent by default");
+    // KODACT_REMINDERS=1 turns them on: no giving up before an attempt.
+    let api = MockApi::start(vec![MockTurn::text("Not practical."), MockTurn::text("Tried; it can't be done.")]).await;
+    let mut c = command(&kodact_bin(), &e.cwd, &e.home, &api.url, &["-p", "--autonomous", "do the hard thing"]);
+    c.env("KODACT_REMINDERS", "1").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let out = tokio::time::timeout(Duration::from_secs(30), c.output()).await.unwrap().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "Tried; it can't be done.");
     let reqs = api.requests();
     let tools: Vec<String> =
         reqs[0]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
