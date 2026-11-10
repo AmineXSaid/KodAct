@@ -1,0 +1,11 @@
+{
+  "instruction": "`vat_rate` in vat.py is one long if/elif chain. Replace the chain with a module-level dict `RATES` (country code to rate) and a lookup, keeping every rate, the docstring and the ValueError message for an unknown country. Lower-case codes (\"de\") must now work too. Leave `with_vat` as it is.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": [
+    "python",
+    "edit",
+    "line-ranges"
+  ],
+  "timeout_secs": 600
+}

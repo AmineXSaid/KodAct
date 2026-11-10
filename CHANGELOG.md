@@ -16,6 +16,19 @@
   the verification check asks once to run it and look at its output.
   Building and running in one command, or running the tests, needs nothing.
 
+### Three gaps closed from a source comparison with other harnesses
+- **A session killed mid-turn says so when resumed.** The transcript records
+  where each turn starts and ends. Resuming one whose last turn never ended
+  tells the model which tool calls returned nothing and to check the real
+  state before continuing.
+- **Sub-agents can work in their own worktree.** `isolation: "worktree"` on
+  a Task call gives the agent a copy of the last commit on a new branch, so
+  agents changing files in parallel can't overwrite each other. The result
+  names the branch when something changed.
+- **Edit by line range** (`edit.lineRanges`, off by default). Edit can name
+  the lines to replace, with the first line's text as an anchor, instead of
+  retyping them.
+
 ### Checks on the agent's work, second round
 From `docs/VERIFICATION_COMPARISON_2.md`.
 - **Language-server diagnostics after edits**, opt-in

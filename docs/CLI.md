@@ -637,6 +637,7 @@ listed in the system prompt's environment section.
 | `verification.languageServer` | `false` | `true` asks a language server for the errors after an edit (below) |
 | `verification.languageServers` | built-in | Extension to command, tried before the built-in ones: `{"py": ["pylsp"]}` |
 | `verification.languageServerWaitMs` | `3000` | How long an edit waits for the server's answer |
+| `edit.lineRanges` | `false` | `true` (or `KODACT_EDIT_LINES=1`) lets Edit name the lines to replace (`start_line`, `end_line`, `anchor`) instead of retyping them as `old_string`. The anchor is the text of the first line: an edit whose line numbers moved since the file was read is refused with the lines as they are now |
 
 **Language-server diagnostics** (`verification.languageServer: true`): after
 an Edit, MultiEdit or Write of a file that parses, KodAct gives the file's new

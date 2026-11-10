@@ -2745,3 +2745,40 @@ async fn a_message_the_turn_ended_before_reaching_is_left_for_the_next() {
     assert_eq!(left.len(), usize::from(queued));
     assert!(!handle.turn_running());
 }
+
+/// A turn the process died in (here: its future dropped mid-tool, so nothing after it runs)
+/// is told to the model on resume, with the call that never returned; a turn that ended is not.
+#[tokio::test]
+async fn a_turn_cut_off_mid_tool_is_told_on_resume() {
+    let h = Harness::new(vec![
+        MockTurn::tool("Mut", json!({"tag": "migrate", "ms": 60_000})),
+        MockTurn::text("checked and finished"),
+        MockTurn::text("nothing more"),
+    ]);
+    let path = SessionStore::new(h.dir.path().join("store")).session_path(&h.cwd(), SID).unwrap();
+    {
+        let mut e = h.engine();
+        let cut = tokio::time::timeout(Duration::from_millis(300), e.submit(prompt("run the migration"))).await;
+        assert!(cut.is_err(), "the turn was still in its tool call");
+    }
+    let loaded = kodact_session::LoadedSession::load(&path, None).unwrap();
+    assert!(loaded.cut_off);
+    let mut e = h.engine();
+    e.restore(&loaded);
+    let r = e.submit(prompt("continue")).await;
+    assert_eq!(r.result.as_deref(), Some("checked and finished"));
+    let sent = serde_json::to_string(&h.provider.requests()[1].messages).unwrap();
+    assert!(sent.contains("did not end"), "{sent}");
+    assert!(sent.contains("returned nothing: Mut"), "{sent}");
+    assert!(sent.contains("Tool call was interrupted before it returned."), "the call is answered for the API");
+    assert!(h.transcript_text().contains("\"turn_recovered\""));
+
+    // That turn ended: the next resume says nothing.
+    let loaded = kodact_session::LoadedSession::load(&path, None).unwrap();
+    assert!(!loaded.cut_off);
+    let mut e = h.engine();
+    e.restore(&loaded);
+    e.submit(prompt("anything else?")).await;
+    let sent = serde_json::to_string(&h.provider.requests()[2].messages.last()).unwrap();
+    assert!(!sent.contains("did not end"), "{sent}");
+}

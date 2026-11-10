@@ -395,6 +395,7 @@ impl Driver {
             requests: Some(self.engine.carried_requests().to_vec()).filter(|r| !r.is_empty()),
             goal: self.goal.as_ref().map(Goal::record),
             schedule: self.scheduler.as_ref().map(|s| s.lock().unwrap().record()),
+            cut_off: false,
         }
     }
 
@@ -741,6 +742,7 @@ impl Driver {
             sink: Arc::new(SubtaskSink::new(&id, self.agent_rt.sink.clone(), calls.clone())),
             seed: Some(&self.engine.state),
             checkpoint_turn: Some(format!("{id}-{}", self.info.session_id)),
+            dir: None,
         })?;
         child.engine.transcript().append_meta(serde_json::json!({
             "forkOf": {"sessionId": self.info.session_id, "leafUuid": self.engine.transcript().last_uuid()},

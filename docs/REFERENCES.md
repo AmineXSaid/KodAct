@@ -19,6 +19,8 @@ Each project was read from its official repository or documentation on
 | Villani Code | Search results only (CDN blocked) | Runtime for small local models: verification-driven loops, robustness to messy terminals. Claims +46% relative to the baseline on the same 9B model. Unverified | Informs the verification and recovery pillars |
 | KISS Sorcar | **Not found.** No repository or paper matched | – | Skipped |
 | ClawCodex | PyPI page | Describes itself as *ported from the reference CLI's TypeScript implementation*, i.e. derived from leaked source | **Excluded** on provenance grounds |
+| oh-my-pi (MIT) | `can1357/oh-my-pi` source, read 2026-11-10: `packages/agent`, `crates/pi-edit`, `crates/pi-iso`, `docs/` | **Edits that name lines** under a content tag instead of retyping text, refused when stale; **language-server diagnostics on every write**; **sub-agents isolated** in copy-on-write copies of the tree | Line-range Edit with an anchor line (`edit.lineRanges`), language-server errors after edits (`verification.languageServer`) and worktree isolation for Task agents: built, each KodAct's own design, off or opt-in until measured |
+| DeepSeek Harness (MIT) | `deepseek-ai/deepseek-harness` source, read 2026-11-10: `packages/core/agent-loop`, docs | **A durable session log** in which an interrupted turn is closed on resume | Turn start and end records, and a resume that tells the model what a killed turn left unanswered: built |
 | Terminal-Bench | Search results (tbench.ai not fetched) | Tasks run in a real terminal and are judged by a hidden verification script | `kodact-eval` follows the same design (hidden checks); a Terminal-Bench adapter is planned |
 
 ## Rules for comparisons

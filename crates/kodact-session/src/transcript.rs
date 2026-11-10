@@ -41,6 +41,10 @@ pub struct LoadedSession {
     pub goal: Option<Value>,
     /// The last list of scheduled tasks (`CronCreate`, `/loop`), kept outside the chain.
     pub schedule: Option<Value>,
+    /// The last turn began (`system/turn_start`) and never ended (`system/turn_end`): the
+    /// process was killed or crashed mid-turn. Transcripts written before these records
+    /// existed never say so.
+    pub cut_off: bool,
 }
 
 /// Append-only writer for one session's JSONL file.
@@ -373,6 +377,8 @@ pub fn load(path: &Path, leaf: Option<&str>) -> Result<LoadedSession, SessionErr
                 });
             }
             Some("system") => match e["subtype"].as_str() {
+                Some("turn_start") => out.cut_off = true,
+                Some("turn_end") => out.cut_off = false,
                 Some("microcompact") => {
                     for id in e["toolUseIds"].as_array().into_iter().flatten().filter_map(Value::as_str) {
                         out.microcompacted.insert(id.to_string());

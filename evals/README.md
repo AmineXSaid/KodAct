@@ -12,6 +12,11 @@ A task can also send a message while the agent works, as a desktop host does:
 and sends `text` for the turn's next step once the agent has made N tool calls
 (as the next turn, if the turn ends first).
 
+`"crash": {"after_tool_calls": N, "resume": "Continue."}` kills kodact once
+the agent has made N tool calls, as a crash or a closed terminal does, then
+runs `kodact -p <resume> --continue` in the same workspace; both parts go to
+the run's transcript.
+
 ## Running it
 
 ```bash
@@ -58,6 +63,9 @@ and stderr.
 | crlf-config | tool-design | Edit one CRLF line in a file with a duplicate key elsewhere |
 | csv-to-json | tool-design | Write new code to a precise spec checked on hidden input |
 | serve-after-exit | long-horizon | Serve site/ over HTTP on a free port for a checker that runs after the agent has exited (run with `--autonomous`). A server left as a KodAct background command is stopped when the session ends; the background reminder must lead to one started detached, so the check finds it answering |
+| resume-after-kill | recovery | Load three batches with a slow loader that is not idempotent; kodact is killed mid-task (`crash`) and the session continued. The check wants every batch exactly once, so the resumed turn must look at what was loaded instead of repeating or skipping the call that was under way |
+| parallel-plugins | long-horizon | Two plugins written by two sub-agents at once, each in its own worktree (`isolation: "worktree"`), both editing registry.py; both changes must end up in the working tree |
+| rewrite-block | tool-design | Replace a 55-line if/elif chain with a dict; the project turns `edit.lineRanges` on, so the chain can be named by its lines instead of retyped (compare cost and turns with `KODACT_EDIT_LINES=0`) |
 | steer-more-work | long-horizon | A request sent mid-task ("also write the total") must be done without dropping the per-file work in hand |
 | reference-skill | compatibility | `/version-notes 1.4.0 changes.txt` runs a skill written for the reference CLI (`.claude/skills`, named and indexed arguments, `${CLAUDE_SKILL_DIR}`) |
 | tool-chain | compatibility | Follow a trail through four files, one tool call at a time, to the right release code; run with a Gemini 3 model (`--model gemini-3-flash-preview`, `KODACT_GEMINI_API_KEY`) it checks that thought signatures survive a multi-step tool loop |

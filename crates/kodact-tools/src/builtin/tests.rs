@@ -199,21 +199,21 @@ async fn edit_requires_read_and_unique_match() {
     std::fs::write(&f, "a = 1;\nb = 1;\n").unwrap();
     let c = ctx(d.path());
     let input = json!({"file_path": f, "old_string": "= 1", "new_string": "= 2"});
-    assert!(Edit.validate(&input, &c).unwrap_err().contains("has not been read"));
+    assert!(Edit::default().validate(&input, &c).unwrap_err().contains("has not been read"));
     Read.call(json!({"file_path": f}), &c).await;
-    Edit.validate(&input, &c).unwrap();
-    let out = Edit.call(input.clone(), &c).await;
+    Edit::default().validate(&input, &c).unwrap();
+    let out = Edit::default().call(input.clone(), &c).await;
     assert!(out.is_error && out.text_content().contains("Found 2 matches"));
-    let out = Edit.call(json!({"file_path": f, "old_string": "a = 1", "new_string": "a = 2"}), &c).await;
+    let out = Edit::default().call(json!({"file_path": f, "old_string": "a = 1", "new_string": "a = 2"}), &c).await;
     assert!(!out.is_error, "{out:?}");
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "a = 2;\nb = 1;\n");
     // Our own write keeps the file editable.
-    Edit.validate(&json!({"file_path": f, "old_string": "b = 1", "new_string": "b = 3"}), &c).unwrap();
+    Edit::default().validate(&json!({"file_path": f, "old_string": "b = 1", "new_string": "b = 3"}), &c).unwrap();
     // An outside modification makes it stale.
     std::thread::sleep(Duration::from_millis(20));
     std::fs::write(&f, "changed\n").unwrap();
     filetime_bump(&f);
-    assert!(Edit
+    assert!(Edit::default()
         .validate(&json!({"file_path": f, "old_string": "changed", "new_string": "x"}), &c)
         .unwrap_err()
         .contains("modified since read"));
@@ -233,7 +233,7 @@ async fn edit_preserves_crlf_and_multiedit_is_atomic() {
     std::fs::write(&f, "one\r\ntwo\r\n").unwrap();
     let c = ctx(d.path());
     Read.call(json!({"file_path": f}), &c).await;
-    let out = Edit.call(json!({"file_path": f, "old_string": "one\ntwo", "new_string": "1\n2"}), &c).await;
+    let out = Edit::default().call(json!({"file_path": f, "old_string": "one\ntwo", "new_string": "1\n2"}), &c).await;
     assert!(!out.is_error, "{out:?}");
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "1\r\n2\r\n");
 
@@ -596,4 +596,60 @@ fn powershell_read_only_rejects_subexpressions() {
     assert!(!super::bash::powershell_is_read_only("ls | Remove-Item"));
     assert!(!super::bash::powershell_is_read_only("Get-Content $env:USERPROFILE\\.ssh\\id_rsa"));
     assert!(!super::bash::powershell_is_read_only("Remove-Item x"));
+}
+
+/// `edit.lineRanges`: lines are named instead of retyped, and a stale number is caught by the
+/// anchor before anything is written.
+#[tokio::test]
+async fn edit_by_line_range_replaces_the_lines_and_refuses_stale_numbers() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let f = d.path().canonicalize().unwrap().join("m.py");
+    std::fs::write(&f, "import os\n\ndef a():\n    return 1\n\ndef b():\n    return 2\n").unwrap();
+    c.files.record_read(&f);
+    let edit = Edit { line_ranges: true };
+    assert!(edit.description().contains("start_line") && !Edit::default().description().contains("start_line"));
+    assert!(Edit::default().input_schema()["properties"].get("start_line").is_none());
+
+    // Lines 3-4 become three lines; the anchor is taken with or without Read's number prefix.
+    let input = json!({"file_path": f, "start_line": 3, "end_line": 4, "anchor": "     3\tdef a():",
+                       "new_string": "def a():\n    x = 1\n    return x"});
+    edit.validate(&input, &c).unwrap();
+    let out = edit.call(input, &c).await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert!(out.text_content().contains("moved by +1"), "{}", out.text_content());
+    assert_eq!(
+        std::fs::read_to_string(&f).unwrap(),
+        "import os\n\ndef a():\n    x = 1\n    return x\n\ndef b():\n    return 2\n"
+    );
+
+    // `def b():` was line 6 when the model read the file; it is line 7 now.
+    let stale = json!({"file_path": f, "start_line": 6, "end_line": 7, "anchor": "def b():", "new_string": "pass"});
+    let out = edit.call(stale, &c).await;
+    let said = out.text_content();
+    assert!(out.is_error && said.contains("now line 7") && said.contains("no changes were made"), "{said}");
+    assert!(std::fs::read_to_string(&f).unwrap().contains("def b():\n    return 2\n"));
+
+    // Removing lines, and a file whose last line has no newline.
+    let out = edit
+        .call(json!({"file_path": f, "start_line": 1, "end_line": 2, "anchor": "import os", "new_string": ""}), &c)
+        .await;
+    assert!(!out.is_error && std::fs::read_to_string(&f).unwrap().starts_with("def a():"), "{}", out.text_content());
+    assert_eq!(apply_line_edit("a\nb", 2, 2, "b", "c").unwrap(), "a\nc");
+    assert_eq!(apply_line_edit("a\r\nb\r\n".replace("\r\n", "\n").as_str(), 1, 1, "a", "z").unwrap(), "z\nb\n");
+    assert!(apply_line_edit("a\nb\n", 2, 5, "b", "c").unwrap_err().contains("has 2 lines"));
+    assert!(apply_line_edit("a\nb\n", 1, 1, "a", "a").unwrap_err().contains("No changes"));
+    assert!(apply_line_edit("a\nb\n", 1, 1, "gone", "c").unwrap_err().contains("not a line of the file"));
+
+    // Both ways of naming the text, or neither, is refused; plain old_string still works.
+    let both =
+        json!({"file_path": f, "old_string": "x", "start_line": 1, "end_line": 1, "anchor": "a", "new_string": "y"});
+    assert!(edit.validate(&both, &c).unwrap_err().contains("not both"));
+    assert!(edit.validate(&json!({"file_path": f, "new_string": "y"}), &c).unwrap_err().contains("old_string, or"));
+    assert!(edit
+        .validate(&json!({"file_path": f, "start_line": 1, "new_string": "y"}), &c)
+        .unwrap_err()
+        .contains("end_line and anchor"));
+    let out = edit.call(json!({"file_path": f, "old_string": "x = 1", "new_string": "x = 5"}), &c).await;
+    assert!(!out.is_error, "{}", out.text_content());
 }

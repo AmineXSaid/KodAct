@@ -828,10 +828,10 @@ impl Engine {
             session_context,
             verify: Default::default(),
             guard: Default::default(),
-            lsp: None,
             output_cap: None,
             reattach_context: false,
             carried_requests: vec![],
+            lsp: None,
             time_up: Default::default(),
             reminders: vec![],
             start_source: "startup".into(),
@@ -1004,6 +1004,9 @@ impl Engine {
         }
         self.shared.transcript.continue_from(loaded);
         self.carried_requests = loaded.requests.clone().unwrap_or_default();
+        if loaded.cut_off && !self.cfg.is_subagent {
+            self.recover_cut_off_turn();
+        }
         // The plan survives a resume: the last TodoWrite list becomes the current one.
         let last_todos = self.state.messages.iter().rev().flat_map(|m| m.tool_uses().collect::<Vec<_>>()).find_map(
             |(_, name, input)| {
@@ -1013,6 +1016,53 @@ impl Engine {
         if let Some(todos) = last_todos.or_else(|| loaded.todos.clone()) {
             *self.shared.tool_ctx.todos.lock().unwrap() = todos;
         }
+    }
+
+    /// The resumed conversation's last turn never ended: KodAct was killed or crashed in it
+    /// (GOALS pillar 2). The model is told with the next prompt which calls have no result,
+    /// so it checks what they did instead of trusting or blindly repeating them.
+    fn recover_cut_off_turn(&mut self) {
+        let answered: HashSet<&str> = self
+            .state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let pending: Vec<String> = self
+            .state
+            .messages
+            .iter()
+            .flat_map(|m| m.tool_uses().collect::<Vec<_>>())
+            .filter(|(id, _, _)| !answered.contains(id))
+            .map(|(_, name, _)| name.to_string())
+            .collect();
+        let mut text = String::from(
+            "The previous turn of this conversation did not end: KodAct was stopped or crashed while it was \
+             running, so the work it was doing may be half done.",
+        );
+        if !pending.is_empty() {
+            text.push_str(&format!(
+                " These tool calls were under way and returned nothing: {}. Each may have run fully, partly \
+                 or not at all.",
+                pending.join(", ")
+            ));
+        }
+        text.push_str(
+            " Before continuing, look at the current state (the files concerned, `git status` in a repository, \
+             any process that should be running) and carry on from what is really there; don't assume a step \
+             was done, and don't repeat one that was.",
+        );
+        self.reminders.push(text);
+        self.notice(
+            NoticeLevel::Warning,
+            "The last turn of this session was cut off (KodAct was stopped or crashed mid-turn). The next prompt \
+             continues from the state it left.",
+        );
+        self.system_event("turn_recovered", json!({"pending": pending}));
     }
 
     /// The current task list, for re-attaching after compaction (GOALS pillar 5).
@@ -2054,11 +2104,19 @@ impl Engine {
     /// next step ([`EngineHandle::steer`]); any it ended before reaching are left for the
     /// host to run next ([`EngineHandle::take_steers`]).
     pub async fn submit(&mut self, prompt: MessageContent) -> TurnResult {
+        // The transcript says when a turn is open, so a resume can tell a turn the process
+        // died in from one that ended (GOALS pillar 2). Written to the file only: hosts get
+        // the turn's `result`.
         if self.cfg.is_subagent {
-            return self.run_turn(prompt).await;
+            self.shared.transcript.append_system("turn_start", json!({}));
+            let result = self.run_turn(prompt).await;
+            self.shared.transcript.append_system("turn_end", json!({"stop_reason": result.stop_reason}));
+            return result;
         }
         self.handle.set_turn_running(true);
+        self.shared.transcript.append_system("turn_start", json!({}));
         let mut result = self.run_turn(prompt).await;
+        self.shared.transcript.append_system("turn_end", json!({"stop_reason": result.stop_reason}));
         // A turn a hook blocked before it began did nothing to report on.
         if result.prompt_blocked.is_none() {
             result.verification = self.verification_state().await;
