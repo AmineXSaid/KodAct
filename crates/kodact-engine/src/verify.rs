@@ -707,6 +707,9 @@ pub(crate) struct Tracker {
     /// The writes and the worktree fingerprint when the last reminder went out: another comes
     /// only after something changed since.
     pub reminded_at: Option<(usize, Option<u64>)>,
+    /// The last passing check built a program (its command and the program's path), and
+    /// nothing has run that program since: compiling isn't seeing it work.
+    pub built: Option<(String, String)>,
 }
 
 /// Plain data a task produces (an answer, a table, a log, notes): no program in the project runs
@@ -747,6 +750,65 @@ pub(crate) fn files_viewed(command: &str) -> Vec<String> {
 /// Does `arg`, as a command named it, name the written file `path`?
 pub(crate) fn names_file(path: &Path, arg: &str) -> bool {
     is_changed(arg, std::slice::from_ref(&path.to_path_buf()))
+}
+
+/// Compilers that produce a program to run, as the first word of a command.
+const COMPILERS: &[&str] = &["gcc", "cc", "clang", "g++", "c++", "clang++", "tcc", "rustc", "go"];
+
+/// The program a compile command produces: `gcc -O2 -o image image.c` builds `image`, a plain
+/// `gcc x.c` builds `a.out`, `rustc main.rs` builds `main`, `go build -o app` builds `app`.
+/// `None` when it builds nothing to run (`-c`, `-S`, `-E`, `-fsyntax-only`, a library) or isn't
+/// a compile. The last part of a compound command that builds one wins.
+pub(crate) fn built_artifact(command: &str) -> Option<String> {
+    let commands = strip_heredoc_bodies(command);
+    let mut built = None;
+    for part in kodact_permissions::split_compound(&commands) {
+        let all = words(&part);
+        let w = skip_wrappers(&all);
+        let Some(first) = w.first() else { continue };
+        let prog = program(first);
+        if !COMPILERS.contains(&prog) || (prog == "go" && w.get(1).map(String::as_str) != Some("build")) {
+            continue;
+        }
+        let args = &w[1..];
+        if args
+            .iter()
+            .any(|a| matches!(a.as_str(), "-c" | "-S" | "-E" | "-fsyntax-only" | "-shared" | "--crate-type=lib"))
+        {
+            continue;
+        }
+        let named = args.iter().enumerate().find_map(|(i, a)| match a.as_str() {
+            "-o" => args.get(i + 1).cloned(),
+            o if o.starts_with("-o") && o.len() > 2 && prog != "go" => Some(o[2..].to_string()),
+            _ => None,
+        });
+        built = match (named, prog) {
+            (Some(n), _) => Some(n),
+            (None, "rustc") => args
+                .iter()
+                .find(|a| a.ends_with(".rs"))
+                .and_then(|a| Path::new(a).file_stem())
+                .map(|s| s.to_string_lossy().into_owned()),
+            (None, "go") => None,
+            (None, _) => Some("a.out".to_string()),
+        };
+    }
+    built
+}
+
+/// Does `command` run the program at `artifact` (`./image`, `/app/image > out.ppm`,
+/// `time ./a.out`)? Its path as the command names it, from the same directory or absolute.
+pub(crate) fn runs_artifact(command: &str, artifact: &str) -> bool {
+    let commands = strip_heredoc_bodies(command);
+    let target = artifact.trim_start_matches("./");
+    kodact_permissions::split_compound(&commands).iter().any(|part| {
+        let all = words(part);
+        let w = skip_wrappers(&all);
+        w.first().is_some_and(|f| {
+            let f = f.trim_start_matches("./");
+            f == target || f.ends_with(&format!("/{target}")) || target.ends_with(&format!("/{f}"))
+        })
+    })
 }
 
 /// Where a turn's changes stand when it ends: the `verification` field of the result, so a
@@ -796,8 +858,18 @@ impl Verified {
 /// What the model is reminded of.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Reminder {
-    Unchecked { files: Vec<String>, shell: bool },
-    LastCheckFailed { command: String },
+    Unchecked {
+        files: Vec<String>,
+        shell: bool,
+    },
+    LastCheckFailed {
+        command: String,
+    },
+    /// A program was built and never run since.
+    BuiltNotRun {
+        command: String,
+        artifact: String,
+    },
 }
 
 impl Reminder {
@@ -809,6 +881,9 @@ impl Reminder {
             }
             Reminder::LastCheckFailed { command } => {
                 serde_json::json!({"kind": "last_check_failed", "command": command})
+            }
+            Reminder::BuiltNotRun { command, artifact } => {
+                serde_json::json!({"kind": "built_not_run", "command": command, "artifact": artifact})
             }
         }
     }
@@ -836,6 +911,11 @@ impl Reminder {
                      final answer, state what you verified and what you did not.\n</system-reminder>"
                 )
             }
+            Reminder::BuiltNotRun { command, artifact } => format!(
+                "<system-reminder>\n`{command}` built `{artifact}`, and it hasn't run since: compiling doesn't show \
+                 it works.\nRun it once and check its output before you finish. If it can't run here, say so in \
+                 your final answer.\n</system-reminder>"
+            ),
             Reminder::LastCheckFailed { command } => format!(
                 "<system-reminder>\nThe last check (`{command}`) failed, and nothing changed after it.\nFix the \
                  failure, or, if it is expected or unrelated to your change, say so plainly in your final \
@@ -857,6 +937,24 @@ fn list(files: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A compile that builds a program, and the commands that run it.
+    #[test]
+    fn a_built_program_is_known_and_so_is_running_it() {
+        assert_eq!(built_artifact("gcc -static -o image image.c -lm").as_deref(), Some("image"));
+        assert_eq!(built_artifact("cd /app && gcc -O3 gpt2.c -lm").as_deref(), Some("a.out"));
+        assert_eq!(built_artifact("gcc -oprog x.c").as_deref(), Some("prog"));
+        assert_eq!(built_artifact("rustc -O main.rs").as_deref(), Some("main"));
+        assert_eq!(built_artifact("go build -o bin/app ./cmd").as_deref(), Some("bin/app"));
+        for none in ["gcc -c x.c", "gcc -fsyntax-only x.c", "go test ./...", "cargo build", "make", "go build ./..."] {
+            assert_eq!(built_artifact(none), None, "{none}");
+        }
+        assert!(runs_artifact("./image && ls -l reconstructed.ppm", "image"));
+        assert!(runs_artifact("time /app/a.out > out.txt", "a.out"));
+        assert!(runs_artifact("cd /app && ./bin/app --help", "bin/app"));
+        assert!(!runs_artifact("wc -c image.c && head -3 image.c", "image"));
+        assert!(!runs_artifact("ls -l image", "image"));
+    }
 
     #[test]
     fn detects_checks_from_manifests() {

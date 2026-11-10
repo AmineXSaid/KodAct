@@ -2,6 +2,20 @@
 
 ## 0.1.0 (unreleased)
 
+### Failed commands explained, and built programs run
+- **`command not found` (exit 127) names what is installed instead**, by job:
+  `xxd` missing → `od`; `python3` missing → `perl`; `jq` missing → none of
+  `jq`, `python3`, `node` either. The model uses one at once instead of
+  probing for tools one call at a time (minimal containers, fresh boxes).
+- **Exit 137 says the command was killed** (SIGKILL), which, unless you
+  stopped it, is almost always the system ending a process out of memory, so
+  the same command isn't run again as is.
+- **A program built and never run is run once before finishing**: when the
+  last passing check compiled a program (`gcc -o image image.c`, a plain
+  `gcc x.c` making `a.out`, `rustc`, `go build -o`) and nothing ran it since,
+  the verification check asks once to run it and look at its output.
+  Building and running in one command, or running the tests, needs nothing.
+
 ### Checks on the agent's work, second round
 From `docs/VERIFICATION_COMPARISON_2.md`.
 - **Language-server diagnostics after edits**, opt-in

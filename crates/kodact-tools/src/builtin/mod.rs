@@ -2,6 +2,7 @@
 
 pub(crate) mod bash;
 mod edit;
+mod exit_hints;
 mod glob;
 mod grep;
 mod interact;
