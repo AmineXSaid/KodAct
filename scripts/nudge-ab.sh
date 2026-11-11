@@ -83,8 +83,8 @@ run() { # out-dir, task, nudges
     "$(git rev-parse --short HEAD)" >"$1/ab.txt"
   KODACT_NUDGES="$3" target/release/kodact-eval run --label "$(basename "$1")" --out "$1" \
     --kodact "$repo/target/release/kodact" --repeat "$repeat" ${only[@]+"${only[@]}"} \
-    -- "${kodact_args[@]}" >"$1/run.log" 2>&1 || {
-    tail -n 20 "$1/run.log" >&2
+    -- "${kodact_args[@]}" 2>&1 | tee "$1/run.log" | sed -u 's/^/  /' || {
+    echo "nudge-ab: $(basename "$1") failed; see $1/run.log" >&2
     return 1
   }
 }
@@ -93,7 +93,9 @@ for g in "${groups[@]}"; do
   IFS='|' read -r task off on <<<"$(spec "$g")"
   base="evals/results/$label-$stamp-$g"
   echo "nudge-ab: $g on ${task/\*/every task}: A=$off, B=$on"
+  echo "nudge-ab: A ($off), $repeat run(s); log in $base-off/run.log"
   run "$base-off" "$task" "$off"
+  echo "nudge-ab: B ($on), $repeat run(s); log in $base-on/run.log"
   run "$base-on" "$task" "$on"
   target/release/kodact-eval compare "$base-off" "$base-on" | tee "$base-compare.md"
 done

@@ -648,7 +648,8 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
     let jobs: Vec<(usize, u32)> = (0..tasks.len()).flat_map(|t| (1..=opts.repeat).map(move |r| (t, r))).collect();
     let mut runs: Vec<RunRecord> = stream::iter(jobs)
         .map(|(t, r)| async move {
-            match run_task(&tasks[t], r, opts).await {
+            eprintln!("kodact-eval: start {} run {r}", tasks[t].spec.id);
+            let rec = match run_task(&tasks[t], r, opts).await {
                 Ok(rec) => rec,
                 Err(e) => RunRecord {
                     task: tasks[t].spec.id.clone(),
@@ -679,7 +680,24 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
                     check_output: format!("harness error: {e:#}"),
                     workspace: PathBuf::new(),
                 },
-            }
+            };
+            // One line per finished run: a long suite shows where it is.
+            eprintln!(
+                "kodact-eval: {} run {r}: {} in {:.0}s, {} turns, {} tool calls, ${:.4}",
+                rec.task,
+                if rec.passed {
+                    "PASS"
+                } else if rec.had_error {
+                    "ERROR"
+                } else {
+                    "FAIL"
+                },
+                rec.wall_secs,
+                rec.turns,
+                rec.tool_calls,
+                rec.cost_usd
+            );
+            rec
         })
         .buffer_unordered(opts.jobs.max(1))
         .collect()
