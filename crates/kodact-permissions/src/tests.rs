@@ -250,3 +250,125 @@ fn a_skill_s_grants_last_one_turn() {
     assert!(matches!(e.decide(&bash(script)), Decision::Ask { .. }));
     assert!(matches!(e.decide(&fetch), Decision::Allow { .. }));
 }
+
+/// A link inside the project that points outside it was, read as text, inside: a Read
+/// through it was allowed without the question a path outside gets, a deny rule on the
+/// folder it leads to did not apply, and an allow rule on the link's folder covered it.
+#[cfg(unix)]
+#[test]
+fn a_link_out_of_the_project_is_outside_it() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().canonicalize().unwrap();
+    let (proj, out) = (root.join("proj"), root.join("outside"));
+    std::fs::create_dir_all(proj.join("docs")).unwrap();
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("private.txt"), "x").unwrap();
+    std::fs::write(proj.join("inside.txt"), "x").unwrap();
+    std::os::unix::fs::symlink(&out, proj.join("link-dir")).unwrap();
+    std::os::unix::fs::symlink(out.join("private.txt"), proj.join("link-file")).unwrap();
+    std::os::unix::fs::symlink(out.join("private.txt"), proj.join("docs/link")).unwrap();
+    std::os::unix::fs::symlink(proj.join("inside.txt"), proj.join("link-inside")).unwrap();
+    let read = |p: &std::path::Path| Request::new("Read", Subject::Path { path: p.to_path_buf(), write: false }, true);
+    let asks = |d: Decision| matches!(d, Decision::Ask { reason: Reason::OutsideWorkingDirs(_), .. });
+    let allows = |d: Decision| matches!(d, Decision::Allow { .. });
+    let engine = |mode, cwd: &std::path::Path, allow: &[String], deny: &[String]| {
+        let (rules, errs) = RuleSet::from_strings(allow, &[], deny);
+        assert!(errs.is_empty(), "{errs:?}");
+        Engine::new(mode, rules, cwd, &[])
+    };
+
+    let e = engine(PermissionMode::Default, &proj, &[], &[]);
+    for through in ["link-dir/private.txt", "link-file", "docs/link", "link-dir/not-yet-made.txt"] {
+        assert!(!e.in_working_dirs(&proj.join(through)), "{through} leads outside");
+        assert!(asks(e.decide(&read(&proj.join(through)))), "{through}: asked, as any path outside is");
+    }
+    // What stays inside is as before: plain files, files to be created, links within the project.
+    for inside in ["inside.txt", "link-inside", "docs/new.md", "new-dir/new.md"] {
+        assert!(e.in_working_dirs(&proj.join(inside)), "{inside}");
+        assert!(allows(e.decide(&read(&proj.join(inside)))), "{inside}");
+    }
+    // A project reached through a link is still the project.
+    std::os::unix::fs::symlink(&proj, root.join("proj-link")).unwrap();
+    let via = engine(PermissionMode::Default, &root.join("proj-link"), &[], &[]);
+    assert!(allows(via.decide(&read(&root.join("proj-link/inside.txt")))));
+    assert!(asks(via.decide(&read(&root.join("proj-link/link-file")))));
+
+    // A deny rule on the real folder covers the link into it; an allow rule on the link's folder does not.
+    let denied = engine(PermissionMode::BypassPermissions, &proj, &[], &[format!("Read(/{}/**)", out.display())]);
+    assert!(matches!(denied.decide(&read(&proj.join("link-dir/private.txt"))), Decision::Deny { .. }));
+    assert!(matches!(denied.decide(&read(&proj.join("link-file"))), Decision::Deny { .. }));
+    let allowed = engine(PermissionMode::Default, &proj, &["Read(./docs/**)".to_string()], &[]);
+    assert!(
+        asks(allowed.decide(&read(&proj.join("docs/link")))),
+        "an allow on docs/ does not reach what a link there points to"
+    );
+    assert!(allows(allowed.decide(&read(&proj.join("docs/new.md")))));
+    let all = engine(PermissionMode::Default, &proj, &["Read".to_string()], &[]);
+    assert!(allows(all.decide(&read(&proj.join("docs/link")))), "an allow on the whole tool still is one");
+}
+
+/// `cat ~/.ssh/id_rsa` ran without a question in every mode, plan and don't-ask included:
+/// a read-only command was allowed whatever it named, while Read of the same file asked.
+/// And accept-edits let `touch ~/.profile` through.
+#[cfg(unix)]
+#[test]
+fn a_command_that_names_a_path_outside_is_asked_about() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().canonicalize().unwrap();
+    let (proj, out) = (root.join("proj"), root.join("outside"));
+    std::fs::create_dir_all(proj.join("src")).unwrap();
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("private.txt"), "x").unwrap();
+    std::fs::write(proj.join("src/main.rs"), "x").unwrap();
+    std::os::unix::fs::symlink(out.join("private.txt"), proj.join("link-file")).unwrap();
+    let engine = |mode| Engine::new(mode, RuleSet::default(), &proj, &[]);
+    let read =
+        |cmd: &str| Request { tool: "Bash", subject: Subject::Command(cmd.into()), read_only: true, sandboxed: false };
+    let outside = [
+        format!("cat {}/private.txt", out.display()),
+        "cat ../outside/private.txt".to_string(),
+        "cat ~/.ssh/id_rsa".to_string(),
+        "cat link-file".to_string(),
+        "grep -r key src && head -3 /etc/passwd".to_string(),
+        format!("wc -l <{}/private.txt", out.display()),
+        "cat '/etc/passwd'".to_string(),
+    ];
+    for cmd in &outside {
+        let asked = engine(PermissionMode::Default).decide(&read(cmd));
+        assert!(matches!(asked, Decision::Ask { reason: Reason::OutsideWorkingDirs(_), .. }), "{cmd}: {asked:?}");
+        let refused = engine(PermissionMode::DontAsk).decide(&read(cmd));
+        assert!(matches!(refused, Decision::Deny { .. }), "{cmd} in don't-ask mode: {refused:?}");
+        assert!(
+            !matches!(engine(PermissionMode::Plan).decide(&read(cmd)), Decision::Allow { .. }),
+            "{cmd} in plan mode"
+        );
+    }
+    // What stays inside runs as before, with flags, patterns and the standard streams.
+    for cmd in [
+        "cat src/main.rs",
+        "grep -rn 'fn main' src 2>/dev/null",
+        "ls -la",
+        "git log --oneline -5",
+        "head -n 3 ./src/main.rs && wc -l src/main.rs",
+        "rg --glob=*.rs main",
+        "cat not-there.txt",
+    ] {
+        let d = engine(PermissionMode::Default).decide(&read(cmd));
+        assert!(matches!(d, Decision::Allow { .. }), "{cmd}: {d:?}");
+    }
+    // Accept-edits lets file commands through inside the project only.
+    let write =
+        |cmd: &str| Request { tool: "Bash", subject: Subject::Command(cmd.into()), read_only: false, sandboxed: false };
+    let e = engine(PermissionMode::AcceptEdits);
+    assert!(matches!(e.decide(&write("touch src/new.rs")), Decision::Allow { .. }));
+    for cmd in ["touch ~/.profile", "cp src/main.rs ~/copy.rs", "mv link-file gone"] {
+        assert!(matches!(e.decide(&write(cmd)), Decision::Ask { .. }), "{cmd}");
+    }
+    // A sandboxed command still asks about a path outside (CLI.md, "Sandbox").
+    let boxed = Request { sandboxed: true, ..write("cat ~/.ssh/id_rsa") };
+    assert!(matches!(engine(PermissionMode::Default).decide(&boxed), Decision::Ask { .. }));
+    // An allow rule on the command is still an allow.
+    let (rules, _) = RuleSet::from_strings(&["Bash(cat:*)".to_string()], &[], &[]);
+    let allowed = Engine::new(PermissionMode::Default, rules, &proj, &[]);
+    assert!(matches!(allowed.decide(&read("cat /etc/hostname")), Decision::Allow { .. }));
+}

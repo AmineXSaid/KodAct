@@ -75,6 +75,54 @@ fn read_json(path: &Path) -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
+/// A session store that can't be written stopped KodAct from starting ("Not a directory
+/// (os error 20)"). The session starts, unsaved, and says so.
+#[tokio::test]
+async fn an_unwritable_store_starts_the_session_unsaved_with_a_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let proj = dir.path().join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    let blocked = dir.path().join("store");
+    std::fs::write(&blocked, "a file where the store's folder should be").unwrap();
+    let p = Arc::new(MockProvider::new(vec![MockTurn::text("still works")]));
+    let o = LaunchOptions {
+        cwd: proj.canonicalize().unwrap(),
+        provider: Some(p.clone()),
+        store_root: Some(blocked.join("projects")),
+        setting_sources: Some(vec![SettingSource::Project, SettingSource::Local]),
+        ..Default::default()
+    };
+    let s = crate::build_session(o, Arc::new(kodact_engine::NullSink), Arc::new(kodact_engine::DenyPrompter))
+        .expect("the session starts");
+    let warning = s.warnings.iter().find(|w| w.contains("not being saved")).expect("and says it is not saved");
+    assert!(warning.contains(&blocked.display().to_string()), "it names the folder: {warning}");
+    assert!(s.engine.transcript().path().is_none());
+    let mut d = Driver::new(s, Surface::Print, None);
+    assert_eq!(run(&mut d, "hi").await.result.as_deref(), Some("still works"));
+}
+
+/// `/model one two three` was taken as a model named "one two three", and saved as the
+/// default: every request after it failed. And a mistyped id gave no sign until the
+/// first request did.
+#[tokio::test]
+async fn model_refuses_words_and_says_when_the_endpoint_does_not_list_the_id() {
+    let mut t = driver();
+    let before = t.d.engine.handle().model();
+    let out = fails(&mut t.d, "/model one two three").await;
+    assert!(out.contains("one word"), "{out}");
+    assert_eq!(t.d.engine.handle().model(), before, "nothing changed");
+    // The endpoint's list isn't known: no claim about it.
+    let out = local(&mut t.d, "/model some-gateway-alias").await;
+    assert!(out.contains("Set model to some-gateway-alias.") && !out.contains("doesn't list"), "{out}");
+    // Known: a listed id switches quietly, an unlisted one switches and says so.
+    t.d.accept_models(Some(Ok(vec!["served-a".into(), "served-b".into()])));
+    let out = local(&mut t.d, "/model served-b").await;
+    assert!(out.contains("Set model to served-b.") && !out.contains("doesn't list"), "{out}");
+    let out = local(&mut t.d, "/model servd-b").await;
+    assert!(out.contains("Set model to servd-b.") && out.contains("Your endpoint doesn't list servd-b"), "{out}");
+    assert_eq!(t.d.engine.handle().model(), "servd-b", "a gateway may serve what it doesn't list");
+}
+
 #[tokio::test]
 async fn model_effort_and_fast_reach_the_request() {
     let mut t = driver();

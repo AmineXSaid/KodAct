@@ -312,13 +312,31 @@ impl Engine {
         }
     }
 
+    /// Is `path` inside a working directory, as written and where it really leads
+    /// (a link in the project that points outside it is outside).
     pub fn in_working_dirs(&self, path: &Path) -> bool {
         let p = normalize(path, &self.cwd);
-        self.working_dirs.iter().any(|d| is_within(&p, d))
+        if !self.working_dirs.iter().any(|d| is_within(&p, d)) {
+            return false;
+        }
+        let real = paths::real(&p);
+        real == p || self.working_dirs.iter().any(|d| is_within(&real, d) || is_within(&real, &paths::real(d)))
     }
 
+    /// The first deny or ask rule that covers the request. A path is tried as written and
+    /// as where it really leads, so a rule on a folder also covers a link into it.
     fn first_match<'r>(&self, rules: &'r [Rule], req: &Request) -> Option<&'r Rule> {
-        rules.iter().find(|r| r.matches(req, &self.cwd, MatchMode::Any))
+        if let Some(r) = rules.iter().find(|r| r.matches(req, &self.cwd, MatchMode::Any)) {
+            return Some(r);
+        }
+        let Subject::Path { path, write } = &req.subject else { return None };
+        let written = normalize(path, &self.cwd);
+        let real = paths::real(&written);
+        if real == written {
+            return None;
+        }
+        let through = Request { subject: Subject::Path { path: real, write: *write }, ..req.clone() };
+        rules.iter().find(|r| r.matches(&through, &self.cwd, MatchMode::Any))
     }
 
     /// The allow rule(s) covering `req`, joined for display.
@@ -344,7 +362,18 @@ impl Engine {
             }
             return Some(used.join(", "));
         }
-        self.allow_rules().find(|r| r.matches(req, &self.cwd, MatchMode::All)).map(|r| r.to_string())
+        let rule = self.allow_rules().find(|r| r.matches(req, &self.cwd, MatchMode::All))?;
+        // An allow on a path covers where the path really leads, or it does not apply:
+        // `Read(./docs/**)` is no leave to read what a link under docs/ points to elsewhere.
+        if let Subject::Path { path, write } = &req.subject {
+            let written = normalize(path, &self.cwd);
+            let real = paths::real(&written);
+            if real != written && !self.in_working_dirs(&written) {
+                let through = Request { subject: Subject::Path { path: real, write: *write }, ..req.clone() };
+                self.allow_rules().find(|r| r.matches(&through, &self.cwd, MatchMode::All))?;
+            }
+        }
+        Some(rule.to_string())
     }
 
     pub fn decide(&self, req: &Request) -> Decision {
@@ -387,12 +416,20 @@ impl Engine {
         // 5. Mode defaults.
         let path_outside = match &req.subject {
             Subject::Path { path, .. } if !self.in_working_dirs(path) => Some(normalize(path, &self.cwd)),
+            // A command that names a path outside is asked about like a tool that does:
+            // `cat ~/.ssh/id_rsa` ran unasked where `Read` of the same file asked.
+            Subject::Command(c) => self.command_path_outside(c),
             _ => None,
         };
         if req.read_only {
             return match path_outside {
                 None => Decision::Allow { reason: Reason::ReadOnlyInWorkingDir },
-                Some(p) if self.read_dirs.iter().any(|d| is_within(&p, d)) => {
+                Some(p)
+                    if self
+                        .read_dirs
+                        .iter()
+                        .any(|d| is_within(&p, d) && is_within(&paths::real(&p), &paths::real(d))) =>
+                {
                     Decision::Allow { reason: Reason::ReadOnlyInWorkingDir }
                 }
                 Some(p) => self.ask_or_deny(Reason::OutsideWorkingDirs(p), req),
@@ -429,6 +466,38 @@ impl Engine {
         }
         let reason = path_outside.map(Reason::OutsideWorkingDirs).unwrap_or(Reason::Default);
         self.ask_or_deny(reason, req)
+    }
+
+    /// The first path a command line names that is outside the working directories (and
+    /// the folders reads are allowed from): an argument that is written as a path
+    /// (`/etc/x`, `~/x`, `../x`), or one that exists here and leads out through a link.
+    /// Words that are not paths (flags, patterns, names of things that don't exist) are
+    /// left alone, and so are the standard streams (`2>/dev/null`).
+    fn command_path_outside(&self, cmd: &str) -> Option<PathBuf> {
+        const STREAMS: &[&str] = &["/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty"];
+        for part in split_compound(cmd) {
+            for word in part.split_whitespace().skip(1) {
+                // `2>/x`, `<x`, `--out=/x`, `"x"`: the path inside.
+                let w = word.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start_matches(['<', '>', '&']);
+                let w = if word.starts_with('-') { w.split_once('=').map(|(_, v)| v).unwrap_or("") } else { w };
+                let w = w.trim_matches(['"', '\'', ';', ')', '(']);
+                if w.is_empty() || w.starts_with('-') || STREAMS.contains(&w) {
+                    continue;
+                }
+                let written_as_path =
+                    w.starts_with('/') || w.starts_with('~') || w.starts_with("..") || w.contains("/../");
+                let p = normalize(Path::new(w), &self.cwd);
+                if !written_as_path && p.symlink_metadata().is_err() {
+                    continue;
+                }
+                let readable =
+                    self.read_dirs.iter().any(|d| is_within(&p, d) && is_within(&paths::real(&p), &paths::real(d)));
+                if !self.in_working_dirs(&p) && !readable {
+                    return Some(p);
+                }
+            }
+        }
+        None
     }
 
     fn ask_or_deny(&self, reason: Reason, req: &Request) -> Decision {

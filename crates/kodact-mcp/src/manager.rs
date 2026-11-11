@@ -138,6 +138,18 @@ impl ServerEntry {
         self.state.read().unwrap().status.clone()
     }
 
+    /// The server went away under a call (its process died, the connection dropped): it
+    /// is no longer connected, and everything that reads the status says so. Before, it
+    /// stayed "connected" in `/mcp` while every call to it failed. `/mcp reconnect`
+    /// starts it again from its config.
+    pub fn mark_lost(&self, why: &str) {
+        let mut s = self.state.write().unwrap();
+        if s.status == Status::Connected {
+            s.status = Status::Failed(why.to_string());
+            s.client = None;
+        }
+    }
+
     /// The client, while connected.
     pub fn client(&self) -> Option<Arc<McpClient>> {
         let s = self.state.read().unwrap();

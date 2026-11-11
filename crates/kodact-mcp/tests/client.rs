@@ -354,6 +354,63 @@ while True:
         send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "nope"}})
 "#;
 
+/// A server whose `die` tool ends its process, as a crash would.
+const DYING_SERVER: &str = r#"
+import json, sys
+for line in sys.stdin:
+    m = json.loads(line)
+    mid, method = m.get("id"), m.get("method")
+    if mid is None: continue
+    if method == "initialize":
+        r = {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}}, "serverInfo": {"name": "dying", "version": "1"}}
+    elif method == "tools/list":
+        r = {"tools": [{"name": "say", "inputSchema": {"type": "object"}}, {"name": "die", "inputSchema": {"type": "object"}}]}
+    elif method == "tools/call":
+        if m["params"]["name"] == "die": sys.exit(1)
+        r = {"content": [{"type": "text", "text": "said"}]}
+    else:
+        r = {}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": mid, "result": r}) + "\n"); sys.stdout.flush()
+"#;
+
+/// A server that died mid-session stayed "connected" in `/mcp` while every call to it
+/// failed. Its status follows what happened, its tools leave the list, and a reconnect
+/// brings both back.
+#[tokio::test]
+async fn a_server_that_dies_is_no_longer_connected() {
+    let d = tempfile::tempdir().unwrap();
+    let Some(py) = python() else {
+        eprintln!("skipped: python3 not found");
+        return;
+    };
+    let script = d.path().join("dying.py");
+    std::fs::write(&script, DYING_SERVER).unwrap();
+    let cfg =
+        ServerConfig::Stdio { command: py.into(), args: vec![script.display().to_string()], env: BTreeMap::new() };
+    let resolved = Resolved {
+        servers: vec![NamedServer { name: "dying".into(), scope: Scope::Settings, config: cfg }],
+        ..Default::default()
+    };
+    let m = McpManager::connect(&resolved, &ConnectOptions::new(d.path())).await;
+    let tools = m.tools();
+    let tool = |name: &str| tools.iter().find(|t| t.name() == name).unwrap().clone();
+    let ctx = ToolContext::new(d.path());
+    assert_eq!(tool("mcp__dying__say").call(json!({}), &ctx).await.text_content(), "said");
+
+    let out = tool("mcp__dying__die").call(json!({}), &ctx).await;
+    assert!(out.is_error && out.text_content().contains("/mcp reconnect dying"), "{}", out.text_content());
+    assert_eq!(m.status(), vec![("dying".to_string(), "failed".to_string())], "the status says what happened");
+    assert!(!tool("mcp__dying__say").is_enabled(), "its tools are no longer offered");
+    let out = tool("mcp__dying__say").call(json!({}), &ctx).await;
+    assert!(out.is_error && out.text_content().contains("isn't connected"), "{}", out.text_content());
+
+    let done = m.apply(ServerAction::Reconnect, "dying").await.unwrap();
+    assert!(done[0].is_ok(), "{done:?}");
+    assert_eq!(m.status(), vec![("dying".to_string(), "connected".to_string())]);
+    assert_eq!(tool("mcp__dying__say").call(json!({}), &ctx).await.text_content(), "said");
+    m.shutdown().await;
+}
+
 #[tokio::test]
 async fn servers_turn_off_on_and_reconnect() {
     let d = tempfile::tempdir().unwrap();

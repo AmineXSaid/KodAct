@@ -69,7 +69,7 @@ pub struct Opts {
     #[arg(short = 'q', long, conflicts_with = "verbose")]
     pub quiet: bool,
     /// Never ask for input: permission prompts are denied and interactive mode refuses to start
-    #[arg(long = "no-input", env = "KODACT_NO_INPUT", value_parser = clap::builder::BoolishValueParser::new(), num_args = 0..=1, default_missing_value = "true", default_value = "false")]
+    #[arg(long = "no-input", env = "KODACT_NO_INPUT", value_parser = clap::builder::BoolishValueParser::new(), num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false")]
     pub no_input: bool,
     /// Unattended run: no question or plan-approval tools, a prompt to finish without asking, a reminder to attempt before giving up, and retries of failed model calls (also the `autonomous` setting)
     #[arg(long = "autonomous", env = "KODACT_AUTONOMOUS", action = clap::ArgAction::SetTrue, value_parser = clap::builder::BoolishValueParser::new())]

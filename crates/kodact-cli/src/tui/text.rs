@@ -1064,6 +1064,31 @@ pub fn highlight(line: &str, lang: &str, t: &Theme) -> Vec<Span<'static>> {
     out
 }
 
+/// The character a control character is drawn as: its picture (`␛` for escape, `␉`
+/// for a tab), one cell wide. Any other character is itself.
+///
+/// A control character written to the terminal is an instruction to it, not text: a
+/// pasted `ESC [ 2 J` cleared the screen, a tab moved the cursor past cells the screen
+/// thought it had drawn. What a person typed or pasted is kept as it is; only what is
+/// drawn changes.
+pub fn shown(c: char) -> char {
+    match c {
+        '\u{0}'..='\u{1f}' => char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'),
+        '\u{7f}' => '\u{2421}',
+        c if c.is_control() => '\u{fffd}',
+        c => c,
+    }
+}
+
+/// `s` with every control character as its picture ([`shown`]).
+pub fn printable(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.chars().any(char::is_control) {
+        std::borrow::Cow::Owned(s.chars().map(shown).collect())
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 /// Display width of a string.
 pub fn width(s: &str) -> usize {
     s.chars().map(|c| c.width().unwrap_or(0)).sum()

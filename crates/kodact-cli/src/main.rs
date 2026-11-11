@@ -179,6 +179,9 @@ fn init_tracing(o: &Opts) {
     }
     kodact_core::debug::set_enabler(move |path| {
         if let Some(dir) = path.parent() {
+            if dir.starts_with(kodact_config::state_dir()) {
+                let _ = kodact_config::private_state_dir();
+            }
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;

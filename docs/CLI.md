@@ -16,7 +16,7 @@ a note in `CHANGELOG.md`.
 | Color | Color is on when stdout and stderr are terminals and `TERM` isn't `dumb`. `NO_COLOR` (non-empty) turns it off, and `FORCE_COLOR` / `CLICOLOR_FORCE` turn it on. `--color auto\|always\|never` overrides all of these. Machine output is never colored. |
 | Quiet and verbose | `-q/--quiet`: errors only on stderr. `--verbose`: adds informational diagnostics. Both affect stderr only, never stdout. `-d/--debug` and `--debug-file <path>` turn on debug logs. |
 | No terminal UI | `--no-tui` (or `KODACT_TUI=0`): interactive mode uses the line-based prompt. |
-| No input | `--no-input` (or `KODACT_NO_INPUT=1`): KodAct never waits for a person. Permission prompts are denied, and interactive mode refuses to start. |
+| No input | `--no-input` (or `KODACT_NO_INPUT=1`): KodAct never waits for a person. Permission prompts are denied, and interactive mode refuses to start. The flag takes a value only with `=` (`--no-input=false`), so a prompt after it is the prompt. |
 | Confirmations | KodAct has no `--yes`. Tool permissions are granted only by `--permission-mode`, `--allowedTools` or settings rules, never by a blanket yes. |
 | Secrets | Values whose key looks secret (`*key*`, `*token*`, `*secret*`, `*password*`, `*auth*`, ...) and values that look like credentials (`sk-…`, `Bearer …`) are printed as `<redacted>` in `config` output and diagnostics. |
 
@@ -30,6 +30,7 @@ a note in `CHANGELOG.md`.
 | `3` | Configuration or credentials are missing or invalid: no API key, a key the endpoint refuses (HTTP 401 or 403, also mid-run), an invalid endpoint URL, a key helper that fails, an unreadable `--settings`, a session that doesn't exist, or an unknown model with a budget. Also `doctor` when it finds a problem. |
 | `4` | A limit ended the run: `--max-turns` or `--max-budget-usd`. |
 | `130` | Interrupted by Ctrl-C (SIGINT). The current turn's result is still written. |
+| `129`, `143` | The terminal UI was ended by SIGHUP or SIGTERM (128 plus the signal, as a shell reports it). The UI closes as `/exit` does: the terminal is restored, the conversation is saved and the resume hint is printed. |
 
 ## Commands
 
@@ -67,6 +68,12 @@ model, context used, cost). Design and key table: `docs/TUI.md`.
 | Tab | Complete the highlighted command or `@` path |
 | Ctrl+R | Search earlier prompts; Ctrl+R again for older ones, Esc to cancel |
 | Ctrl+L | Redraw |
+| PgUp / PgDn, Home / End | In a picker or question: move by ten rows, to the first or last. A list longer than the window scrolls around the selected row |
+| Up (empty prompt, a message queued) | Take the newest queued message back into the input |
+
+Control characters in what you type or paste (a tab, an escape) are drawn as
+their pictures (`␉`, `␛`) and sent as they are: nothing typed, pasted or
+printed is written to the terminal as a command to it.
 
 `/model`, `/resume`, `/rewind`, `/output-style` and `/permissions` without
 an argument open a picker (type to filter, Enter to choose). Each choice runs
@@ -390,7 +397,7 @@ the context window to compact in time, and prices to show costs.
 | Kind | Default | Override |
 | --- | --- | --- |
 | Config (settings, `KODACT.md`, agents, commands) | `$XDG_CONFIG_HOME/kodact`, else `~/.config/kodact` (Linux), `~/Library/Application Support/kodact` (macOS), `%APPDATA%\kodact` (Windows) | `KODACT_HOME` |
-| State (sessions, file history) | `$XDG_STATE_HOME/kodact`, else the platform state or local-data directory | `KODACT_HOME/state` |
+| State (sessions, file history, debug logs, feedback bundles, prompt history) | `$XDG_STATE_HOME/kodact`, else the platform state or local-data directory. Kept to its owner (mode 0700 on Unix). If it can't be written, the session starts unsaved and says so | `KODACT_HOME/state` |
 | Cache | `$XDG_CACHE_HOME/kodact`, else the platform cache directory | `KODACT_HOME/cache` |
 | Project | `.kodact/` in the project, plus `KODACT.md` files from the root down to the cwd (a directory's `AGENTS.md` when it has no `KODACT.md`). Agents (and later commands, skills and output styles) are also read from the vendor-neutral `.agents/<kind>/`, below `.kodact/<kind>/` in precedence | — |
 
@@ -444,7 +451,7 @@ them all. The built-ins so far:
 | `/mcp [reconnect\|enable\|disable <server\|all>]` | Each MCP server's status. `reconnect` restarts a server from the config it started with; `disable` stops it, hides its tools and prompts, and saves that in `.kodact/settings.local.json` (`disabledMcpjsonServers`); `enable` reverses it. Tools a server didn't offer when the session started join after `/reload-plugins`. `--mcp-config` and plugin servers change for the session only |
 | `/tasks [stop <id>]` (`/bashes`) | Background shells, scheduled tasks and subtasks; `stop` ends one |
 | `/subtask <task>` | Hands the task to a background agent that starts from this conversation; you keep going. Its report reaches the model with your next prompt (and is shown when it finishes). In `-p`, KodAct waits for it, then runs one more turn with the report |
-| `/model [model]` | Shows the current model and the models your endpoint lists (`GET {baseUrl}/models` on an OpenAI-compatible endpoint; the default backend lists none), or switches to the given model id |
+| `/model [model]` | Shows the current model and the models your endpoint lists (`GET {baseUrl}/models` on an OpenAI-compatible endpoint; the default backend lists none), or switches to the given model id. An id is one word; one the endpoint doesn't list still switches (a gateway may serve it) and says so |
 | `/effort [low\|medium\|high\|xhigh\|max\|auto]` | Shows or sets reasoning effort; `max` lasts for the session only |
 | `/fast [on\|off]` | Fast mode, on models that offer it |
 | `/config [key=value ...] [--scope user\|project\|local]` (`/settings`) | Shows the settings KodAct can change, or changes them; `key=` restores the default; `/config --help` lists the keys |
@@ -659,6 +666,17 @@ operating system, not a rule, limits what it can touch.
 **The rules still apply:**
 - deny rules still deny;
 - paths outside the working directories still ask.
+
+**What counts as outside** (with or without the sandbox):
+- a path is judged as written and by where it really leads: a symbolic link
+  in the project that points outside it is outside. Deny and ask rules cover
+  the folder a link leads to; an allow rule on a folder does not cover what
+  a link in it points to elsewhere;
+- a shell command that names a path outside (`cat /etc/hosts`, `ls ~/x`,
+  `head ../other/file`, a link that leads out) is asked about, read-only
+  commands included, and refused in `dontAsk` mode and in `-p`. An allow
+  rule on the command (`Bash(cat:*)`) allows it. The standard streams
+  (`2>/dev/null`) are not paths.
 
 **Backends:**
 - Linux: bubblewrap (`bwrap`). Install it with your package manager.

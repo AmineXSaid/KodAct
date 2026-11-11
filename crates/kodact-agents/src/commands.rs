@@ -77,23 +77,25 @@ pub fn load_commands(
     plugins: &[crate::plugins::Plugin],
     warnings: &mut Vec<String>,
 ) -> Vec<CommandDef> {
-    let mut dirs: Vec<(PathBuf, String, Option<String>)> = kodact_config::resource_dirs("commands", project)
-        .into_iter()
-        .map(|(scope, d)| {
-            let s = match scope {
-                kodact_config::Scope::User => "user",
-                kodact_config::Scope::Project => "project",
-            };
-            (d, s.to_string(), None)
-        })
-        .collect();
+    // (folder, source, the plugin's name as a prefix, the plugin's own folder)
+    let mut dirs: Vec<(PathBuf, String, Option<String>, Option<PathBuf>)> =
+        kodact_config::resource_dirs("commands", project)
+            .into_iter()
+            .map(|(scope, d)| {
+                let s = match scope {
+                    kodact_config::Scope::User => "user",
+                    kodact_config::Scope::Project => "project",
+                };
+                (d, s.to_string(), None, None)
+            })
+            .collect();
     for p in plugins {
         for d in p.component_dirs("commands") {
-            dirs.push((d, p.name.clone(), Some(p.name.clone())));
+            dirs.push((d, p.name.clone(), Some(p.name.clone()), Some(p.dir.clone())));
         }
     }
     let mut out: Vec<CommandDef> = vec![];
-    for (dir, source, prefix) in dirs {
+    for (dir, source, prefix, plugin_dir) in dirs {
         let mut files = vec![];
         md_files(&dir, &mut files);
         for f in files {
@@ -107,7 +109,19 @@ pub fn load_commands(
             match std::fs::read_to_string(&f) {
                 Ok(text) => {
                     out.retain(|c| c.name != name);
-                    out.push(parse_command(&name, &text, &f, &source));
+                    let mut cmd = parse_command(&name, &text, &f, &source);
+                    // A plugin's command names its own folder as a plugin's skill does
+                    // (`${KODACT_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_ROOT}`): it was sent to the
+                    // model unfilled. The project folder is filled for every command.
+                    let vars = crate::substitute::SkillVars {
+                        project_dir: Some(project),
+                        plugin: plugin_dir.as_deref().zip(prefix.as_deref()),
+                        ..Default::default()
+                    };
+                    cmd.body = crate::substitute::fill_vars(&cmd.body, &vars);
+                    cmd.allowed_tools =
+                        cmd.allowed_tools.iter().map(|t| crate::substitute::fill_vars(t, &vars)).collect();
+                    out.push(cmd);
                 }
                 Err(e) => warnings.push(format!("command {}: {e}", f.display())),
             }
@@ -274,5 +288,38 @@ mod tests {
         let comp = cmds.iter().find(|c| c.name == "frontend:component").unwrap();
         assert_eq!(comp.description, "Make a component");
         assert!(w.is_empty());
+    }
+
+    /// A plugin's command said `${CLAUDE_PLUGIN_ROOT}` to the model as it was written.
+    #[test]
+    fn a_plugins_command_knows_its_own_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let (proj, plug) = (d.path().join("proj"), d.path().join("plug"));
+        std::fs::create_dir_all(plug.join("commands")).unwrap();
+        std::fs::create_dir_all(proj.join(".kodact/commands")).unwrap();
+        std::fs::write(
+            plug.join("commands/lint.md"),
+            "---\nallowed-tools: Bash(${KODACT_PLUGIN_ROOT}/lint.sh *)\n---\nRun ${CLAUDE_PLUGIN_ROOT}/lint.sh in ${CLAUDE_PROJECT_DIR} on $1; keep \\${HOME} and ${OTHER}.",
+        )
+        .unwrap();
+        std::fs::write(proj.join(".kodact/commands/own.md"), "From ${KODACT_PROJECT_DIR}, not ${KODACT_PLUGIN_ROOT}.")
+            .unwrap();
+        let plugin = crate::plugins::Plugin {
+            name: "plug".into(),
+            description: String::new(),
+            version: None,
+            dir: plug.clone(),
+            manifest: serde_json::Value::Null,
+        };
+        let mut w = vec![];
+        let cmds = load_commands(&proj, &[plugin], &mut w);
+        let lint = cmds.iter().find(|c| c.name == "plug:lint").unwrap();
+        let (root, project) = (plug.display(), proj.display());
+        assert!(lint.body.starts_with(&format!("Run {root}/lint.sh in {project} on $1;")), "{}", lint.body);
+        assert!(lint.body.contains("${OTHER}"), "what it does not know is left alone: {}", lint.body);
+        assert_eq!(lint.allowed_tools, [format!("Bash({root}/lint.sh *)")]);
+        // A command of the project's own has no plugin folder to name.
+        let own = cmds.iter().find(|c| c.name == "own").unwrap();
+        assert_eq!(own.body.trim(), format!("From {project}, not ${{KODACT_PLUGIN_ROOT}}."));
     }
 }

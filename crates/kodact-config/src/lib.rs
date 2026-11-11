@@ -57,6 +57,25 @@ pub fn state_dir() -> PathBuf {
         .unwrap_or_else(|| renamed(&home(), ".kodact", ".forge").join("state"))
 }
 
+/// The state directory, made if missing and kept to its owner (mode 0700 on Unix).
+///
+/// What is under it is what was said and done in a project: session transcripts, file
+/// checkpoints, debug logs, feedback bundles, the prompt history. Only the history was
+/// written private; on a shared machine every other user could read the rest.
+pub fn private_state_dir() -> std::io::Result<PathBuf> {
+    let dir = state_dir();
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&dir)?.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(dir)
+}
+
 /// Disposable caches: `$KODACT_HOME/cache`, else `$XDG_CACHE_HOME/kodact`, else the platform cache directory.
 pub fn cache_dir() -> PathBuf {
     env_dir("KODACT_HOME")

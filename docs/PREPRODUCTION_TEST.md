@@ -9,6 +9,12 @@ It exists because of a fault found by use and missed by the tests: `/clear`
 answered "Conversation cleared" and left the old conversation on screen. The
 unit tests checked the answer's text; nobody checked the screen.
 
+The matrix is automated: `cargo build -p kodact-cli && scripts/terminal-matrix/run.py`
+runs it (about 35 minutes on 4 cores; `-s B`, `-k clear`, `-d inline` narrow
+it). See `scripts/terminal-matrix/README.md`. The last run's ledger, faults
+and verdict are in `docs/PREPRODUCTION_REPORT.md`. Give the prompt to an
+agent again when the matrix itself needs to grow.
+
 ---
 
 ## The prompt

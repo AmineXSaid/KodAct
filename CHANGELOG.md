@@ -9,6 +9,61 @@
   `design/brand` are redrawn (the name in Outfit), and kodact.exe carries
   the new icon.
 
+### Fixed: the pre-production pass on the terminal
+Found by driving the real binary in a pseudo-terminal and reading the screen
+(`scripts/terminal-matrix/run.py`; the report is
+`docs/PREPRODUCTION_REPORT.md`):
+- **Nothing typed, pasted or printed can command the terminal.** A paste
+  holding escape sequences cleared the screen (it could switch screens or
+  set the title), and a pasted tab left the prompt in pieces. Control
+  characters are drawn as their pictures (`␛`, `␉`); what you send is as you
+  typed it.
+- **With the sidebar open (Ctrl+B), new prompts and answers appear.** They
+  were sent and answered but never drawn until the window was resized.
+- **SIGTERM, SIGHUP and SIGINT leave the terminal usable.** `kill` left it
+  in raw mode on the alternate screen with the mouse captured. The UI now
+  ends as `/exit` does, with exit status 143, 129 or 130.
+- **A picker longer than the window scrolls.** `/model` on an endpoint that
+  lists 40 models ran off the top and lost its title and filter. PgUp,
+  PgDn, Home and End move in every picker and question.
+- **The inline display survives a resize.** A smaller window left the input
+  box, its border and the status line on one row.
+- **`?`, `/status` or `/help` on the front page show their whole answer**,
+  not its last six rows.
+- **A queued message can be taken back:** Up on an empty prompt puts the
+  newest one in the input.
+- **PgUp in a short window no longer skips rows**; the saved `theme` and
+  style apply from the first frame (`theme: none` drew colour); the status
+  line's branch follows `/cd` and branch switches; `/keybindings` lists
+  rebound keys on its two-action rows; a narrow front page no longer cuts
+  its hints mid-word; `@` completion keeps top-level files in a project
+  with a 25,000-file folder.
+- **`/model one two` is refused** instead of saved as a model named "one
+  two"; an id the endpoint doesn't list still switches, and says so.
+- **A dead MCP server shows as failed** in `/mcp` (it stayed "connected"),
+  and the tool error says `/mcp reconnect <name>`.
+- **A session store that can't be written no longer stops KodAct from
+  starting:** the conversation runs unsaved and says so.
+- A plugin's command fills `${KODACT_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}`;
+  a 429 that ended the turn no longer says "waits and retries"; a 404 from a
+  wrong base URL points at the URL, not only at `/model`.
+
+### Changed (security)
+- **A link out of the project is outside it.** A file read through a
+  symlink that leads outside the working directories is asked about like
+  any other path outside; deny and ask rules cover the folder a link leads
+  to, and an allow rule on a folder does not cover what a link in it points
+  to elsewhere.
+- **A shell command that names a path outside the working directories is
+  asked about**, read-only ones too: `cat ~/.ssh/id_rsa` ran unasked in
+  every mode, plan and don't-ask included. Accept-edits no longer lets
+  `touch ~/.profile` through. An allow rule (`Bash(cat:*)`) still allows.
+  You will see a prompt where `ls /usr/lib` used to run.
+- **The state directory is private (0700):** session transcripts, debug
+  logs and feedback bundles were readable by other users of the machine.
+- `--no-input` takes a value only as `--no-input=false`: `kodact -p
+  --no-input "prompt"` took the prompt as the flag's value.
+
 ### Fixed
 - `/clear` (and `/reset`, `/new`) left the old conversation on screen in the
   terminal UI: only the answer said it was cleared. Now the screen starts
