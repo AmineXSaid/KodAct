@@ -2,6 +2,19 @@
 
 ## 0.1.0 (unreleased)
 
+### Measurements held against the request's limits (opt-in)
+- **`nudges.limitVerdicts`**: when the request states numeric limits (a table
+  of thresholds per file, `error_rate <= 0.01`, `at most 6 slot sizes across
+  both files`) and a command prints `key=value` numbers, the result says, line
+  by line, which limits are met and by how much the others are not. A limit
+  across all files together is said apart, since per-file counts don't show
+  the combined number. Limits, names and files all come from the request's
+  own words.
+- **`nudges.staleDeliverables`**: a printed result met every limit, and a few
+  steps later the files the request asks for still haven't changed: the
+  model is told to write it now if it is the best so far. Off by default
+  until measured.
+
 ### Failed commands explained, and built programs run
 - **`command not found` (exit 127) names what is installed instead**, by job:
   `xxd` missing → `od`; `python3` missing → `perl`; `jq` missing → none of

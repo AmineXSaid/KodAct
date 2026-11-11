@@ -11,6 +11,7 @@ mod engine;
 mod events;
 mod exec;
 pub mod format;
+mod limits;
 pub mod lsp;
 mod named;
 pub mod progress;

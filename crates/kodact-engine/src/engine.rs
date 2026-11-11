@@ -747,6 +747,14 @@ pub struct Engine {
     passing: Option<(String, String, usize)>,
     /// The model was told this turn where the passing version is.
     passing_told: bool,
+    /// The limits this turn's request states (`nudges.limitVerdicts`, `nudges.staleDeliverables`).
+    limits: crate::limits::Limits,
+    /// A measurement that met every limit for its row, with the files the request asks for
+    /// unchanged since: (step, command, line, row).
+    unsaved: Option<(u32, String, String, Option<String>)>,
+    /// Stale-deliverable notes given this turn, and whether the end-of-turn one was.
+    stale_told: u32,
+    stale_end_told: bool,
     /// The session's language servers, started on first use ([`EngineConfig::language_servers`]).
     lsp: Option<Arc<crate::lsp::Manager>>,
     /// This turn's raised output cap, after a `max_tokens` stop.
@@ -864,6 +872,10 @@ impl Engine {
             constraints_told: false,
             passing: None,
             passing_told: false,
+            limits: Default::default(),
+            unsaved: None,
+            stale_told: 0,
+            stale_end_told: false,
             output_cap: None,
             reattach_context: false,
             carried_requests: vec![],
@@ -2337,6 +2349,15 @@ impl Engine {
         self.ran_commands.clear();
         self.constraints_told = false;
         self.passing_told = false;
+        let n = &self.cfg.nudges;
+        self.limits = if n.limit_verdicts || n.stale_deliverables {
+            crate::limits::Limits::from_request(&prompt_text)
+        } else {
+            Default::default()
+        };
+        self.unsaved = None;
+        self.stale_told = 0;
+        self.stale_end_told = false;
         self.output_cap = None;
         if self.verifying() {
             self.verify.fingerprint = self.worktree_fingerprint().await;
@@ -2725,7 +2746,12 @@ impl Engine {
                     self.diagnose_edits(&tool_uses, &mut results, &model).await;
                 }
                 self.shell_edits_parse(&tool_uses, &mut results, &shell_before).await;
-                let made_progress = self.made_progress(&tool_uses, &results, writes_before);
+                let named_changed = !self.watched.changed().is_empty();
+                if named_changed {
+                    self.unsaved = None;
+                }
+                self.judge_limits(&tool_uses, &mut results, turn.api_calls, named_changed);
+                let made_progress = self.made_progress(&tool_uses, &results, writes_before, named_changed);
                 if made_progress {
                     self.progress_for_back_off();
                 }
@@ -2778,6 +2804,11 @@ impl Engine {
                 // first; one reminder per step is enough.
                 if !interrupted {
                     if let Some(text) = self.progress_nudge(made_progress, stuck.is_empty()) {
+                        self.push_user(Message::user_text(text), true, None, true);
+                    }
+                }
+                if !interrupted {
+                    if let Some(text) = self.stale_note(turn.api_calls, false) {
                         self.push_user(Message::user_text(text), true, None, true);
                     }
                 }
@@ -2896,6 +2927,14 @@ impl Engine {
                 let report = crate::named::report(&self.named, &self.shared.tool_ctx.project_dir, &self.ran_commands);
                 if let Some((text, record)) = report.filter(|_| self.may_nudge(crate::progress::Nudge::Constraints)) {
                     self.system_event("nudge", record);
+                    self.push_user(Message::user_text(text), true, None, true);
+                    continue;
+                }
+            }
+
+            // A result that met every limit was printed and never written: said once at the end.
+            if stop_reason != Some(StopReason::Refusal) {
+                if let Some(text) = self.stale_note(turn.api_calls, true) {
                     self.push_user(Message::user_text(text), true, None, true);
                     continue;
                 }
@@ -3524,8 +3563,9 @@ impl Engine {
         calls: &[(String, String, Value)],
         results: &[crate::exec::CallResult],
         writes_before: usize,
+        named_changed: bool,
     ) -> bool {
-        if !self.watched.changed().is_empty() {
+        if named_changed {
             return true;
         }
         let any_write = !self.watched.asks_for_new();
@@ -3549,6 +3589,106 @@ impl Engine {
                 _ => false,
             }
         })
+    }
+
+    /// Shell output held against the limits the request states (`nudges.limitVerdicts`), and a
+    /// result meeting all of them noted while the files the request asks for are unchanged
+    /// (`nudges.staleDeliverables`).
+    fn judge_limits(
+        &mut self,
+        calls: &[(String, String, Value)],
+        results: &mut [crate::exec::CallResult],
+        step: u32,
+        named_changed: bool,
+    ) {
+        let (verdicts_on, stale_on) = (self.cfg.nudges.limit_verdicts, self.cfg.nudges.stale_deliverables);
+        if !self.cfg.reminders || self.cfg.is_subagent || !(verdicts_on || stale_on) || self.limits.is_empty() {
+            return;
+        }
+        let limits = std::mem::take(&mut self.limits);
+        for ((_, name, input), r) in calls.iter().zip(results.iter_mut()) {
+            if name != "Bash" || r.denial.is_some() {
+                continue;
+            }
+            let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
+            let measured = crate::limits::measurements(&r.output.text_content());
+            let judged: Vec<(crate::limits::Verdict, &crate::limits::Measured)> =
+                measured.iter().filter_map(|m| limits.judge(m, command).map(|v| (v, m))).collect();
+            if judged.is_empty() {
+                continue;
+            }
+            // A command that names a file the request asks for measured that file: nothing unsaved.
+            if stale_on
+                && self.named.names_files()
+                && !named_changed
+                && self.unsaved.is_none()
+                && !self.watched.named_in(command)
+            {
+                if let Some((v, _)) = judged.iter().find(|(v, _)| v.all_met()) {
+                    self.unsaved = Some((step, command.to_string(), v.line.clone(), v.scope.clone()));
+                }
+            }
+            if !verdicts_on || !self.may_nudge(crate::progress::Nudge::LimitVerdict) {
+                continue;
+            }
+            let scoped: Vec<(Option<String>, &crate::limits::Measured)> =
+                judged.iter().map(|(v, m)| (v.scope.clone(), *m)).collect();
+            let globals = limits.global_counts(&scoped);
+            let verdicts: Vec<crate::limits::Verdict> = judged.iter().map(|(v, _)| v.clone()).collect();
+            self.system_event(
+                "nudge",
+                json!({
+                    "kind": crate::progress::Nudge::LimitVerdict.as_str(),
+                    "lines": verdicts.len(),
+                    "met": verdicts.iter().filter(|v| v.all_met()).count(),
+                    "across": globals.iter().map(|(g, _)| g.name.clone()).collect::<Vec<_>>(),
+                }),
+            );
+            let text = crate::limits::text(&verdicts, &globals);
+            match &mut r.output.content {
+                kodact_types::ToolResultContent::Text(s) => s.push_str(&text),
+                kodact_types::ToolResultContent::Blocks(blocks) => blocks.push(ContentBlock::text(text.trim_start())),
+            }
+        }
+        self.limits = limits;
+    }
+
+    /// A result met every limit for its row some steps ago and the files the request asks for
+    /// haven't changed since (`nudges.staleDeliverables`): twice a turn at most, and once more
+    /// when the model would finish.
+    fn stale_note(&mut self, step: u32, at_end: bool) -> Option<String> {
+        /// Steps after such a result before it is called unsaved: time to write it.
+        const STALE_AFTER: u32 = 3;
+        if !self.cfg.reminders || self.cfg.is_subagent || !self.cfg.nudges.stale_deliverables {
+            return None;
+        }
+        let (at, command, line, scope) = self.unsaved.clone()?;
+        let due = if at_end { !self.stale_end_told } else { self.stale_told < 2 && step >= at + STALE_AFTER };
+        if !due || !self.may_nudge(crate::progress::Nudge::StaleDeliverable) {
+            return None;
+        }
+        if at_end {
+            self.stale_end_told = true;
+        } else {
+            self.stale_told += 1;
+            // Said again only after as many more steps.
+            self.unsaved = Some((step, command.clone(), line.clone(), scope.clone()));
+        }
+        let files = self.watched.names_for(scope.as_deref());
+        self.system_event(
+            "nudge",
+            json!({
+                "kind": crate::progress::Nudge::StaleDeliverable.as_str(),
+                "steps": step.saturating_sub(at),
+                "files": files,
+                "at_end": at_end,
+            }),
+        );
+        let row = scope.map(|s| format!(" for {s}")).unwrap_or_default();
+        let files = files.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ");
+        Some(format!(
+            "<system-reminder>\n`{command}` printed a result that meets every limit the request states{row}:\n               {line}\n{files} have not changed since. If it is the best result so far, write it to the file now, so              the file holds it whatever happens next. Ignore this if the file already holds it.\n</system-reminder>"
+        ))
     }
 
     /// Before a shell command that may write runs: the files it names (`nudges.shellEdit`).

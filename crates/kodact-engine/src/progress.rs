@@ -68,12 +68,28 @@ pub struct NudgeConfig {
     /// The time-limit warning states the steps left at the run's own pace, comes earlier when
     /// few are left, and names the files the request asks for that don't exist yet.
     pub pace: bool,
+    /// A command's `key=value` output held against the limits the request states: each line
+    /// met or not, by how much, and limits across all files that per-file counts don't show.
+    pub limit_verdicts: bool,
+    /// A measurement met every limit stated for its file, and the file the request asks for
+    /// wasn't written since: the model is told the best result is not saved yet.
+    pub stale_deliverables: bool,
 }
 
 impl NudgeConfig {
     /// The names used in settings and `KODACT_NUDGES`.
-    pub const NAMES: [&'static str; 8] =
-        ["progress", "progressEarly", "shellEdit", "constraints", "namedChecks", "passingSnapshots", "backOff", "pace"];
+    pub const NAMES: [&'static str; 10] = [
+        "progress",
+        "progressEarly",
+        "shellEdit",
+        "constraints",
+        "namedChecks",
+        "passingSnapshots",
+        "backOff",
+        "pace",
+        "limitVerdicts",
+        "staleDeliverables",
+    ];
 
     /// From a list of names (`KODACT_NUDGES=progress,shellEdit`); `all` turns every one on,
     /// `none` (or an empty list) none. Unknown names are returned for a warning.
@@ -103,6 +119,8 @@ impl NudgeConfig {
             "passingSnapshots" => &mut self.passing_snapshots,
             "backOff" => &mut self.back_off,
             "pace" => &mut self.pace,
+            "limitVerdicts" => &mut self.limit_verdicts,
+            "staleDeliverables" => &mut self.stale_deliverables,
             _ => return false,
         };
         *field = on;
@@ -122,6 +140,8 @@ pub(crate) enum Nudge {
     ShellEdit,
     Constraints,
     PassingSnapshot,
+    LimitVerdict,
+    StaleDeliverable,
 }
 
 impl Nudge {
@@ -132,6 +152,8 @@ impl Nudge {
             Nudge::ShellEdit => "shell_edit",
             Nudge::Constraints => "constraints",
             Nudge::PassingSnapshot => "passing_snapshot",
+            Nudge::LimitVerdict => "limit_verdict",
+            Nudge::StaleDeliverable => "stale_deliverable",
         }
     }
 }

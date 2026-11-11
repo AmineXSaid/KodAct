@@ -194,6 +194,39 @@ impl Watched {
         out
     }
 
+    /// Does a command name one of the files (by its path, or its file name)?
+    pub fn named_in(&self, command: &str) -> bool {
+        self.files.iter().any(|(n, p, _)| {
+            command.contains(n.as_str())
+                || p.file_name().is_some_and(|f| command.contains(f.to_string_lossy().as_ref()))
+        })
+    }
+
+    /// The files a row of limits is about: those whose words the row's label carries
+    /// (`north` for `routes_north.csv`), else all of them.
+    pub fn names_for(&self, row: Option<&str>) -> Vec<String> {
+        let words = |s: &str| -> Vec<String> {
+            s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 1).map(String::from).collect()
+        };
+        let all: Vec<String> = self.files.iter().map(|(n, ..)| n.clone()).collect();
+        let Some(row) = row else { return all };
+        let row = words(row);
+        let some: Vec<String> = all
+            .iter()
+            .filter(|n| {
+                let mine = words(n);
+                let own: Vec<&String> = mine.iter().filter(|w| !all.iter().all(|o| words(o).contains(w))).collect();
+                !own.is_empty() && own.iter().all(|w| row.contains(w))
+            })
+            .cloned()
+            .collect();
+        if some.is_empty() {
+            all
+        } else {
+            some
+        }
+    }
+
     /// Of the files the request asks to be made, those that still don't exist.
     pub fn still_missing(&self) -> Vec<String> {
         self.files.iter().filter(|(_, p, _)| !p.exists()).map(|(n, ..)| n.clone()).collect()

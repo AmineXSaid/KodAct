@@ -3292,3 +3292,92 @@ async fn the_time_warning_names_steps_left_and_missing_deliverables() {
         assert_eq!(nudges(&h.transcript_text()).iter().any(|n| n["kind"] == "pace"), paced);
     }
 }
+
+const LIMITED: &str = "Write the plan to plan.csv. Keep cost at most 100 and wait at most 5.";
+
+/// Limit verdicts (#8a): `key=value` output is held against the limits the request states,
+/// line by line; output without matching keys gets nothing; off by default and with
+/// `reminders: false`.
+#[tokio::test]
+async fn shell_output_is_held_against_the_requests_limits() {
+    let script = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "printf 'a cost=90 wait=4\\nb cost=120 wait=4\\n'"})));
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "printf 'loss=1 acc=2\\n'"})));
+        h.provider.push(MockTurn::text("done"));
+    };
+    let h = Harness::new(vec![]);
+    script(&h);
+    let mut e = h.engine_with(
+        nudged_cfg("limitVerdicts"),
+        PermissionMode::BypassPermissions,
+        Arc::new(DenyPrompter),
+        json!({}),
+    );
+    e.submit(prompt(LIMITED)).await;
+    let results = tool_results(&e);
+    let r = &results[0].1;
+    assert!(
+        r.contains("`a cost=90 wait=4`: all 2 limits met")
+            && r.contains("`b cost=120 wait=4`: 1 of 2 not met: cost 120 > 100"),
+        "{r}"
+    );
+    assert!(!results[1].1.contains("limits"), "keys no limit names: {}", results[1].1);
+    let given = nudges(&h.transcript_text());
+    assert_eq!(given.len(), 1, "{given:?}");
+    assert_eq!(
+        (given[0]["kind"].as_str(), given[0]["lines"].as_u64(), given[0]["met"].as_u64()),
+        (Some("limit_verdict"), Some(2), Some(1))
+    );
+
+    for cfg in [EngineConfig::default(), EngineConfig { reminders: false, ..nudged_cfg("limitVerdicts") }] {
+        let h = Harness::new(vec![]);
+        script(&h);
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt(LIMITED)).await;
+        assert!(tool_results(&e).iter().all(|r| !r.1.contains("limits met")));
+        assert!(nudges(&h.transcript_text()).is_empty());
+    }
+}
+
+/// Stale deliverables (#8b): a result meeting every limit, then steps with the file the
+/// request asks for unchanged, is told after a few steps and once when the model would finish;
+/// writing the file, or measuring the file itself, says nothing.
+#[tokio::test]
+async fn a_result_meeting_every_limit_left_unwritten_is_told() {
+    let run = |sweep: &'static str, write: bool| async move {
+        let h = Harness::new(vec![]);
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        h.provider.push(MockTurn::tool("Bash", json!({"command": sweep})));
+        if write {
+            h.provider.push(MockTurn::tool("Write", json!({"file_path": h.cwd().join("plan.csv"), "content": "x"})));
+        }
+        exploring(&h, 4, vec![MockTurn::text("done")]);
+        let mut e = h.engine_with(
+            nudged_cfg("staleDeliverables"),
+            PermissionMode::BypassPermissions,
+            Arc::new(DenyPrompter),
+            json!({}),
+        );
+        e.submit(prompt(LIMITED)).await;
+        let reqs = h.provider.requests();
+        (nudges(&h.transcript_text()), reqs.iter().map(last_user_text).collect::<Vec<_>>())
+    };
+    let (given, texts) = run("printf 'cost=90 wait=4\\n'", false).await;
+    assert_eq!(given.len(), 2, "after a few steps, and at the end: {given:?}");
+    assert!(given.iter().all(|g| g["kind"] == "stale_deliverable" && g["files"] == json!(["plan.csv"])));
+    assert_eq!(given[0]["steps"].as_u64(), Some(3));
+    assert_eq!(given[1]["at_end"].as_bool(), Some(true));
+    let told = texts.iter().find(|t| t.contains("meets every limit")).expect("told");
+    assert!(
+        told.contains("cost=90 wait=4") && told.contains("`plan.csv` have not changed") && told.contains("Ignore this"),
+        "{told}"
+    );
+
+    let (given, _) = run("printf 'cost=90 wait=4\\n'", true).await;
+    assert!(given.is_empty(), "written after: {given:?}");
+    let (given, _) = run("cat plan.csv 2>/dev/null; printf 'cost=90 wait=4\\n'", false).await;
+    assert!(given.is_empty(), "the file itself measured: {given:?}");
+    let (given, _) = run("printf 'cost=190 wait=4\\n'", false).await;
+    assert!(given.is_empty(), "a limit not met: {given:?}");
+}
