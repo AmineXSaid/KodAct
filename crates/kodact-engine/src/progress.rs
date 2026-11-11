@@ -65,12 +65,15 @@ pub struct NudgeConfig {
     pub passing_snapshots: bool,
     /// A nudge followed by progress twice is not repeated in the run.
     pub back_off: bool,
+    /// The time-limit warning states the steps left at the run's own pace, comes earlier when
+    /// few are left, and names the files the request asks for that don't exist yet.
+    pub pace: bool,
 }
 
 impl NudgeConfig {
     /// The names used in settings and `KODACT_NUDGES`.
-    pub const NAMES: [&'static str; 7] =
-        ["progress", "progressEarly", "shellEdit", "constraints", "namedChecks", "passingSnapshots", "backOff"];
+    pub const NAMES: [&'static str; 8] =
+        ["progress", "progressEarly", "shellEdit", "constraints", "namedChecks", "passingSnapshots", "backOff", "pace"];
 
     /// From a list of names (`KODACT_NUDGES=progress,shellEdit`); `all` turns every one on,
     /// `none` (or an empty list) none. Unknown names are returned for a warning.
@@ -99,6 +102,7 @@ impl NudgeConfig {
             "namedChecks" => &mut self.named_checks,
             "passingSnapshots" => &mut self.passing_snapshots,
             "backOff" => &mut self.back_off,
+            "pace" => &mut self.pace,
             _ => return false,
         };
         *field = on;
@@ -237,6 +241,27 @@ pub(crate) fn decide(has_budget: bool, made_any: bool, s: Stretch, early: bool, 
         return None;
     }
     (pacing && s.calls >= NO_BUDGET_CALLS).then_some(Nudge::Progress)
+}
+
+/// Steps left at the time limit: the model calls the time left holds at the run's pace so far
+/// (`elapsed` over `calls`). `None` before two calls, when there is no pace yet.
+pub(crate) fn steps_left(left: Duration, elapsed: Duration, calls: u32) -> Option<(u32, Duration)> {
+    if calls < 2 || elapsed.is_zero() {
+        return None;
+    }
+    let pace = elapsed / calls;
+    let steps = (left.as_secs_f64() / pace.as_secs_f64()).floor();
+    Some((steps.min(f64::from(u32::MAX)) as u32, pace))
+}
+
+/// Steps left at or under which the time warning comes, whatever share of the time is left:
+/// on a run whose every step takes a minute, a fifth of half an hour is five steps.
+pub(crate) const FEW_STEPS: u32 = 5;
+
+/// Is the time-limit warning due: a fifth of the time left (at least a minute), or, with a pace
+/// known, [`FEW_STEPS`] steps or fewer.
+pub(crate) fn time_warning_due(left: Duration, total: Duration, steps: Option<u32>) -> bool {
+    left <= (total / 5).max(Duration::from_secs(60)) || steps.is_some_and(|n| n <= FEW_STEPS)
 }
 
 /// What the model is told, as a suggestion it can set aside.
@@ -389,6 +414,27 @@ mod tests {
         assert_eq!(b.progress(), vec![Nudge::Progress], "the second time silences it");
         assert!(!b.allows(Nudge::Progress));
         assert!(b.allows(Nudge::ShellEdit), "each nudge on its own count");
+    }
+
+    #[test]
+    fn steps_left_follow_the_runs_own_pace() {
+        let m = Duration::from_secs(60);
+        // 28 calls in 29 minutes: about a minute a step; 5 minutes left are 5 steps.
+        let (steps, pace) = steps_left(5 * m, 29 * m, 28).unwrap();
+        assert_eq!((steps, pace.as_secs()), (4, 62));
+        // A fast model: 2 seconds a step, 5 minutes are 150 steps.
+        assert_eq!(steps_left(5 * m, Duration::from_secs(60), 30).unwrap().0, 150);
+        assert_eq!(steps_left(5 * m, m, 1), None, "no pace from one call");
+    }
+
+    #[test]
+    fn the_time_warning_comes_when_few_steps_are_left_whatever_the_share() {
+        let m = Duration::from_secs(60);
+        // Half an hour, ten minutes left: not a fifth yet.
+        assert!(!time_warning_due(10 * m, 30 * m, None));
+        assert!(!time_warning_due(10 * m, 30 * m, Some(40)), "a fast run has 40 steps left");
+        assert!(time_warning_due(10 * m, 30 * m, Some(5)), "a slow run has 5: now");
+        assert!(time_warning_due(5 * m, 30 * m, Some(400)), "a fifth left: as before");
     }
 
     #[test]

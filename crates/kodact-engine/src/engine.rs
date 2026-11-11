@@ -732,6 +732,8 @@ pub struct Engine {
     progress: crate::progress::Progress,
     /// What this turn's request names: its files and commands.
     named: crate::named::Named,
+    /// The named files on disk, watched for progress.
+    watched: crate::named::Watched,
     /// Nudges silenced for the rest of the run (`nudges.backOff`).
     back_off: crate::progress::BackOff,
     /// The shell-edit suggestion was given this turn.
@@ -855,6 +857,7 @@ impl Engine {
             guard: Default::default(),
             progress: Default::default(),
             named: Default::default(),
+            watched: Default::default(),
             back_off: Default::default(),
             shell_edit_told: false,
             ran_commands: vec![],
@@ -2329,6 +2332,7 @@ impl Engine {
         self.guard = Default::default();
         self.progress = crate::progress::Progress::new(self.state.total_cost_usd);
         self.named = crate::named::Named::from_request(&prompt_text, &self.shared.tool_ctx.project_dir);
+        self.watched = crate::named::Watched::at_start(&self.named, &self.shared.tool_ctx.project_dir);
         self.shell_edit_told = false;
         self.ran_commands.clear();
         self.constraints_told = false;
@@ -2778,7 +2782,7 @@ impl Engine {
                     }
                 }
                 if self.cfg.reminders && !budget_warned && !interrupted {
-                    if let Some(text) = self.budget_warning(turn.api_calls) {
+                    if let Some(text) = self.budget_warning(turn.api_calls, started) {
                         budget_warned = true;
                         self.push_user(Message::user_text(text), true, None, true);
                     }
@@ -3049,31 +3053,64 @@ impl Engine {
 
     /// A heads-up when this run's turn, spending or time limit is close (GOALS pillar 5), so the model
     /// wraps up with a report instead of being cut off mid-change.
-    fn budget_warning(&self, calls: u32) -> Option<String> {
+    fn budget_warning(&self, calls: u32, started: Instant) -> Option<String> {
+        let pace = self.cfg.nudges.pace && !self.cfg.is_subagent;
         let turns_left = self.cfg.max_turns.filter(|m| *m >= 6).map(|m| m.saturating_sub(calls)).filter(|l| *l <= 3);
         let money_left = self
             .cfg
             .max_budget_usd
             .map(|b| b - self.state.total_cost_usd)
             .filter(|left| self.cfg.max_budget_usd.map(|b| *left <= b * 0.15).unwrap_or(false));
+        // With `nudges.pace`: the steps the time left holds at this turn's pace so far.
+        let steps = self
+            .cfg
+            .time_limit
+            .filter(|_| pace)
+            .and_then(|t| crate::progress::steps_left(t.remaining(), started.elapsed(), calls));
         let time_left = self
             .cfg
             .time_limit
             .map(|t| (t.remaining(), t.total))
-            .filter(|(left, total)| *left <= (*total / 5).max(Duration::from_secs(60)))
+            .filter(|(left, total)| crate::progress::time_warning_due(*left, *total, steps.map(|(n, _)| n)))
             .map(|(left, _)| left);
         let what = match (turns_left, money_left, time_left) {
             (Some(t), _, _) => {
                 format!("{t} model call{} left in this run (--max-turns)", if t == 1 { "" } else { "s" })
             }
             (None, Some(m), _) => format!("${m:.2} of the run's budget left (--max-budget-usd)"),
-            (None, None, Some(left)) => format!("{} of the run's time left (--max-time)", about(left)),
+            (None, None, Some(left)) => match steps {
+                Some((n, per)) => format!(
+                    "{} of the run's time left (--max-time); at this run's pace so far (about {} s a step), that \
+                     is about {n} more step{}",
+                    about(left),
+                    per.as_secs().max(1),
+                    if n == 1 { "" } else { "s" }
+                ),
+                None => format!("{} of the run's time left (--max-time)", about(left)),
+            },
             (None, None, None) => return None,
         };
+        // The files the request asks for that still don't exist: only what is on disk counts.
+        let missing = if pace { self.watched.still_missing() } else { vec![] };
+        let first = if missing.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " These files the request asks for don't exist yet: {}. Only what is in them when the run ends \
+                 counts: write your best version to them first, then improve it.",
+                missing.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ")
+            )
+        };
+        if pace && (steps.is_some() || !missing.is_empty()) {
+            self.system_event(
+                "nudge",
+                json!({"kind": "pace", "steps_left": steps.map(|(n, _)| n), "missing": missing}),
+            );
+        }
         Some(format!(
-            "<system-reminder>\nYou have {what}. Wrap up: if the version now in place tested worse than one you had \
-             before, put the better one back first. Then finish the most important change, check it, and end with \
-             what is done, what was verified and what remains.\n</system-reminder>"
+            "<system-reminder>\nYou have {what}.{first} Wrap up: if the version now in place tested worse than one \
+             you had before, put the better one back first. Then finish the most important change, check it, and \
+             end with what is done, what was verified and what remains.\n</system-reminder>"
         ))
     }
 
@@ -3477,16 +3514,22 @@ impl Engine {
         })
     }
 
-    /// Did this step make progress: a file written (by an edit tool, or by a sub-agent's), a
-    /// check that passed, or, when the request names no file, a shell command that changed
-    /// something? A failed or refused call made nothing.
+    /// Did this step make progress? A file the request names changed on disk (by any tool, a
+    /// script's output included), or a check passed. When the request asks for no new file,
+    /// any file written counts too, and when it names no file at all, so does a shell command
+    /// that changed something. Helper scripts and scratch files written while the files the
+    /// request asks for don't exist yet are not progress. A failed or refused call made nothing.
     fn made_progress(
-        &self,
+        &mut self,
         calls: &[(String, String, Value)],
         results: &[crate::exec::CallResult],
         writes_before: usize,
     ) -> bool {
-        if self.shared.history.writes_len() > writes_before {
+        if !self.watched.changed().is_empty() {
+            return true;
+        }
+        let any_write = !self.watched.asks_for_new();
+        if any_write && self.shared.history.writes_len() > writes_before {
             return true;
         }
         let configured = self.check_commands();
@@ -3496,7 +3539,7 @@ impl Engine {
                 return false;
             }
             match name.as_str() {
-                "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => true,
+                "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => any_write,
                 "Bash" => {
                     let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
                     crate::verify::is_check(command, &configured, &changed)

@@ -113,7 +113,15 @@ that aren't there, the request's own checks named by the verification loop,
 passing versions saved with Checkpoint and reported (never restored), and
 back-off for a nudge followed by progress twice. Each nudge is a `system/nudge`
 event; `kodact-eval` reports nudges, tokens and tool calls before the first
-write per run. Five eval tasks measure them.
+write per run. Six eval tasks measure them.
+
+Progress means the files the request names: when it names files that don't
+exist yet, writing helper scripts is not progress, and a script that writes a
+named file is (seen on disk). `nudges.pace` gives the time-limit warning the
+steps left at the run's own pace, brings it earlier when about 5 are left, and
+names the requested files that don't exist yet. Both come from a scheduling run
+that spent 99.9% of its 29.5 minutes thinking, wrote five helper scripts, and
+first wrote its two plan files in the last five minutes.
 
 ### Fixed: the pre-production pass on the terminal
 Found by driving the real binary in a pseudo-terminal and reading the screen

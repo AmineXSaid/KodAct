@@ -204,7 +204,10 @@ Each pillar lists what KodAct does about it and what shows that it works.
     loop, passing versions saved and reported (never restored), and back-off
     for a nudge followed by progress twice. Tasks `map-the-routes`,
     `rename-keyword`, `named-deliverables`, `optimize-under-time`,
-    `three-reports`; each turns on only after its before/after shows it helps;
+    `three-reports`, `two-plan-scheduler`; progress counts the files the
+    request names (helper scripts don't, a script that writes a named file
+    does), and `nudges.pace` states the steps left at the run's pace; each
+    turns on only after its before/after shows it helps;
   - the task list (TodoWrite) survives compaction: it is re-attached to the
     summary and recorded as `system/todos`. It also survives resume: it is
     rebuilt from the last TodoWrite call or that record;

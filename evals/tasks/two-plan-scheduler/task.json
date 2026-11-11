@@ -1,0 +1,19 @@
+{
+  "instruction": "Pack the jobs in input/jobs_a.jsonl and input/jobs_b.jsonl into batches: write output/plan_a.jsonl and output/plan_b.jsonl, one line per job, `{\"id\": ..., \"batch\": <int>, \"slot\": <int>}`. The rules and the scoring are in score.py (`python3 score.py input/jobs_a.jsonl output/plan_a.jsonl` scores a plan); baseline.py writes a valid plan that is far too costly. Each plan must meet its limits:\n\n| Plan | cost | waste | p95_wait |\n| --- | --- | --- | --- |\n| output/plan_a.jsonl | at most 1.55e7 | at most 0.53 | at most 1.6e3 |\n| output/plan_b.jsonl | at most 1.53e7 | at most 0.32 | at most 2.3e3 |\n\nAnd across both plans combined, at most 6 distinct slot sizes. Don't change the inputs or score.py.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "long-horizon",
+  "tags": [
+    "python",
+    "optimize",
+    "deliverables",
+    "time-limit",
+    "joint-limit",
+    "progress-nudges",
+    "pace"
+  ],
+  "timeout_secs": 900,
+  "args": [
+    "--max-time",
+    "600"
+  ]
+}

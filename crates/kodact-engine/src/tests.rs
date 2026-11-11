@@ -3217,3 +3217,78 @@ async fn a_nudge_followed_by_progress_twice_is_silenced() {
     }
     assert!(sent[1] < sent[0], "less sent with back-off: {sent:?}");
 }
+
+/// Progress is the files the request asks for, not helper scripts: a run that writes one
+/// experiment script after another while the named outputs don't exist is nudged; a script
+/// that writes a named output is progress, though no edit tool touched it.
+#[tokio::test]
+async fn helper_scripts_are_not_progress_while_the_named_outputs_are_missing() {
+    let request = "Read jobs.txt and write out/plan_a.txt and out/plan_b.txt.";
+    let setup = |h: &Harness, writes_output: bool| {
+        std::fs::create_dir_all(h.cwd().join("out")).unwrap();
+        std::fs::write(h.cwd().join("jobs.txt"), "1\n2\n").unwrap();
+        for i in 0..8 {
+            let f = h.cwd().join(format!("experiment_{i}.sh"));
+            h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "echo trying\n"})));
+            if i == 2 && writes_output {
+                // A script writes the deliverable: seen on disk.
+                h.provider.push(MockTurn::tool("Bash", json!({"command": "sh -c 'echo 1 > out/plan_a.txt'"})));
+            }
+        }
+        h.provider.push(MockTurn::text("done"));
+    };
+    let cfg = || EngineConfig { max_turns: Some(40), verify: None, ..nudged_cfg("progress,progressEarly") };
+    // Eight helper scripts, no output: the early nudge at a tenth of the budget (5 calls).
+    let h = Harness::new(vec![]);
+    setup(&h, false);
+    h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+        .submit(prompt(request))
+        .await;
+    let given = nudges(&h.transcript_text());
+    assert_eq!(given.len(), 1, "{given:?}");
+    assert_eq!((given[0]["kind"].as_str(), given[0]["calls"].as_u64()), (Some("progress_early"), Some(5)));
+
+    // A script writes out/plan_a.txt at the fourth call: progress, the count starts again, and
+    // the five calls after it are under a fifth of the budget.
+    let h = Harness::new(vec![]);
+    setup(&h, true);
+    h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+        .submit(prompt(request))
+        .await;
+    assert!(nudges(&h.transcript_text()).is_empty());
+}
+
+/// Pace (#2 of the scheduler post-mortem): the time warning says the steps left at the run's
+/// pace and names the files the request asks for that don't exist yet; off, it reads as before.
+#[tokio::test]
+async fn the_time_warning_names_steps_left_and_missing_deliverables() {
+    let request = "Write out/plan_a.txt and out/plan_b.txt from jobs.txt.";
+    for (list, paced) in [("pace", true), ("", false)] {
+        let h = Harness::new(vec![]);
+        std::fs::create_dir_all(h.cwd().join("out")).unwrap();
+        std::fs::write(h.cwd().join("jobs.txt"), "1\n").unwrap();
+        std::fs::write(h.cwd().join("out/plan_a.txt"), "old\n").unwrap();
+        for _ in 0..4 {
+            h.provider.push(MockTurn::tool("SafeA", json!({"tag": "look", "ms": 700})));
+        }
+        h.provider.push(MockTurn::text("done"));
+        // Half an hour, with a second more than a fifth left: the warning comes after the
+        // second 0.7 s step, when the turn has a pace.
+        let total = Duration::from_secs(30 * 60);
+        let limit = TimeLimit { started: Instant::now() - (total - total / 5 - Duration::from_secs(1)), total };
+        let cfg = EngineConfig { time_limit: Some(limit), verify: None, ..nudged_cfg(list) };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt(request)).await;
+        let warned = h
+            .provider
+            .requests()
+            .iter()
+            .map(last_user_text)
+            .find(|t| t.contains("of the run's time left"))
+            .expect("warned");
+        assert_eq!(warned.contains("more steps"), paced, "{list}: {warned}");
+        assert_eq!(warned.contains("don't exist yet: `out/plan_b.txt`"), paced, "{list}: {warned}");
+        assert!(!warned.contains("`out/plan_a.txt`"), "it exists: {warned}");
+        assert_eq!(nudges(&h.transcript_text()).iter().any(|n| n["kind"] == "pace"), paced);
+    }
+}

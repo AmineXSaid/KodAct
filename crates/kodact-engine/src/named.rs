@@ -137,6 +137,69 @@ pub(crate) fn report(n: &Named, project: &Path, ran: &[String]) -> Option<(Strin
     Some((format!("<system-reminder>\n{}\n</system-reminder>", lines.join("\n")), record))
 }
 
+/// A file as it is on disk: its size and modification time.
+type FileState = (u64, Option<std::time::SystemTime>);
+
+/// A file as it is on disk, or `None` when there is none.
+fn file_state(p: &Path) -> Option<FileState> {
+    let m = std::fs::metadata(p).ok().filter(|m| m.is_file())?;
+    Some((m.len(), m.modified().ok()))
+}
+
+/// The files a request names, watched on disk through a turn: what counts as progress.
+///
+/// The files that don't exist when the turn starts are what the request asks to be made, its
+/// deliverables. When there are some, only a change to a named file is progress: helper
+/// scripts and scratch files are work towards them, not them. A change is seen on disk, so a
+/// script that writes a deliverable counts as much as an edit tool does. When every named file
+/// already exists (a request to fix `parser.py`), a change can rightly land in a file the
+/// request didn't name, and any file written counts.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Watched {
+    files: Vec<(String, PathBuf, Option<FileState>)>,
+    asks_for_new: bool,
+}
+
+impl Watched {
+    pub fn at_start(n: &Named, project: &Path) -> Watched {
+        let files: Vec<_> = n
+            .files
+            .iter()
+            .map(|f| {
+                let p = resolve(f, project);
+                (f.clone(), file_state(&p), p)
+            })
+            .filter(|(_, _, p)| !p.is_dir())
+            .map(|(f, st, p)| (f, p, st))
+            .collect();
+        let asks_for_new = files.iter().any(|(_, _, st)| st.is_none());
+        Watched { files, asks_for_new }
+    }
+
+    /// The request names files that didn't exist when the turn started.
+    pub fn asks_for_new(&self) -> bool {
+        self.asks_for_new
+    }
+
+    /// Named files that changed since the last look (created, rewritten, removed).
+    pub fn changed(&mut self) -> Vec<String> {
+        let mut out = vec![];
+        for (name, path, st) in &mut self.files {
+            let now = file_state(path);
+            if now != *st {
+                *st = now;
+                out.push(name.clone());
+            }
+        }
+        out
+    }
+
+    /// Of the files the request asks to be made, those that still don't exist.
+    pub fn still_missing(&self) -> Vec<String> {
+        self.files.iter().filter(|(_, p, _)| !p.exists()).map(|(n, ..)| n.clone()).collect()
+    }
+}
+
 fn push(v: &mut Vec<String>, s: String) {
     if !v.contains(&s) {
         v.push(s);
@@ -333,5 +396,27 @@ mod tests {
             Named::from_request("Move config.ini to settings.toml and delete config.ini. Write notes.md.", d.path());
         assert_eq!(n.missing_files(d.path()), ["notes.md"]);
         assert_eq!(n.removed, ["config.ini", "settings.toml"]);
+    }
+
+    #[test]
+    fn deliverables_are_the_named_files_missing_at_the_start() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        std::fs::write(root.join("cost_model.py"), "x").unwrap();
+        std::fs::create_dir(root.join("out")).unwrap();
+        let n = Named::from_request("Use cost_model.py to write out/plan_a.jsonl and out/plan_b.jsonl.", root);
+        let mut w = Watched::at_start(&n, root);
+        assert!(w.asks_for_new());
+        assert_eq!(w.still_missing(), ["out/plan_a.jsonl", "out/plan_b.jsonl"]);
+        std::fs::write(root.join("helper.py"), "scratch").unwrap();
+        assert!(w.changed().is_empty(), "a helper script is not a named file");
+        // Written by a script, not an edit tool: seen on disk all the same.
+        std::fs::write(root.join("out/plan_a.jsonl"), "{}").unwrap();
+        assert_eq!(w.changed(), ["out/plan_a.jsonl"]);
+        assert!(w.changed().is_empty(), "seen once");
+        assert_eq!(w.still_missing(), ["out/plan_b.jsonl"]);
+        // Every named file exists: the request asks for nothing new.
+        let n = Named::from_request("Fix cost_model.py.", root);
+        assert!(!Watched::at_start(&n, root).asks_for_new());
     }
 }

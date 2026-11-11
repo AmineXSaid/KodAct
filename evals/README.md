@@ -78,6 +78,7 @@ and stderr.
 | named-deliverables | verification | Fix a parser so a named check passes, then write the failing input to repro.txt and add a CHANGES.md line: the two secondary deliverables are what runs drop. With `KODACT_NUDGES=constraints,namedChecks`: the constraint report (#4) and named checks (#5) |
 | optimize-under-time | long-horizon | Make a test pass, then make the function 100x faster, under `--max-time 240`; the test must pass at the end. With `KODACT_NUDGES=passingSnapshots` (#6) a passing version is saved, and a failing one at the end is reported with where the passing one is, never swapped back |
 | three-reports | long-horizon | Three reports, each needing a long read of a package before it is written: the pacing nudge comes back each stretch. With `KODACT_NUDGES=progress,progressEarly,backOff` against `progress,progressEarly`: back-off (#7) silences a nudge followed by progress twice; nudges and tokens should go down |
+| two-plan-scheduler | long-horizon | Pack two job files into two plan files with a supplied scorer, under `--max-time 600`: per-file limits on cost, waste and p95 wait, and a joint cap of 6 slot sizes across both plans, which per-file tuning breaks (12). Only the plan files count, so helper scripts and printed scores are not progress. Run with `KODACT_NUDGES=progress,progressEarly,pace` against none: whether the plans get written early and kept current, and whether the joint cap holds |
 
 Add tasks for every harness change, and name the pillar they exercise.
 
