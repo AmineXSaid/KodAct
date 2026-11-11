@@ -107,7 +107,7 @@ def test_verifier_timeout_is_verifier_error(tmp_path):
 
 def make_job(tmp: Path, trials: list[tuple[str, float, int, list[dict]]]) -> report.Job:
     """A job dir: per trial its task, reward, agent seconds and the KodAct system events it emitted."""
-    job = tmp / "forgecli-subset-test"
+    job = tmp / "kodact-subset-test"
     job.mkdir(parents=True)
     (job / "config.json").write_text(json.dumps({"agents": [{"name": "kodact_agent", "model_name": "m"}]}))
     for task, reward, secs, events in trials:

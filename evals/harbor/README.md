@@ -239,7 +239,7 @@ once against `capture_prompt.py`, a fake endpoint on localhost that records the
 request and answers "Done.", so nothing leaves the machine and no key is needed.
 
 ```bash
-evals/harbor/capture-prompts.sh          # forgecli, forgecode, ante and pi, those installed
+evals/harbor/capture-prompts.sh          # kodact, forgecode, ante and pi, those installed
 evals/harbor/capture-prompts.sh ante     # one of them
 ```
 

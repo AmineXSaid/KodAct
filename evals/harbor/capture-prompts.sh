@@ -4,7 +4,7 @@
 # talks to capture_prompt.py on localhost, which records the request and answers "Done.".
 #
 #   evals/harbor/capture-prompts.sh            # all of them that are installed
-#   evals/harbor/capture-prompts.sh ante       # one of: forgecli forgecode ante pi
+#   evals/harbor/capture-prompts.sh ante       # one of: kodact forgecode ante pi
 #
 # Output: evals/harbor/prompts/<harness>/system.md, tools.json, request-*.json, version.txt,
 # and agent.log / server.log to see why when nothing was captured.
@@ -18,7 +18,7 @@ port="${CAPTURE_PORT:-8765}"
 url="http://127.0.0.1:$port/v1"
 task="Reply with the single word: done."
 out="evals/harbor/prompts"
-which=("${@:-forgecli forgecode ante pi}")
+which=("${@:-kodact forgecode ante pi}")
 read -r -a which <<< "${which[*]}"
 
 capture() {  # name, binary, then the command to run with its environment
@@ -47,11 +47,11 @@ capture() {  # name, binary, then the command to run with its environment
 
 for h in "${which[@]}"; do
   case "$h" in
-    forgecli)
+    kodact | forgecli) # forgecli: the name it had before
       bin="${KODACT_BIN:-target-static/release/kodact}"; [ -x "$bin" ] || bin="target/release/kodact"
-      [ -x "$bin" ] || { echo "== forgecli: no binary (build it first)"; continue; }
+      [ -x "$bin" ] || { echo "== kodact: no binary (build it first)"; continue; }
       case "$bin" in /*) ;; *) bin="$repo/$bin" ;; esac
-      capture forgecli "$bin" KODACT_OPENAI_BASE_URL="$url" KODACT_OPENAI_API_KEY=capture \
+      capture kodact "$bin" KODACT_OPENAI_BASE_URL="$url" KODACT_OPENAI_API_KEY=capture \
         "$bin" -p "$task" --model capture --autonomous --dangerously-skip-permissions --output-format stream-json --verbose ;;
     forgecode)
       bin="${FORGECODE_BIN:-$HOME/.forgecode/forge}"
@@ -73,6 +73,6 @@ for h in "${which[@]}"; do
         "$url" > "$cfg/models.json"
       capture pi "$bin" PI_CODING_AGENT_DIR="$cfg" PI_OFFLINE=1 \
         "$bin" -p --no-session --provider capture --model capture "$task" ;;
-    *) echo "unknown harness: $h (forgecli, forgecode, ante, pi)" >&2 ;;
+    *) echo "unknown harness: $h (kodact, forgecode, ante, pi)" >&2 ;;
   esac
 done

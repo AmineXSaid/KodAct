@@ -251,7 +251,7 @@ def task_time_limit() -> float | None:
 class KodAct(BaseInstalledAgent):
     @staticmethod
     def name() -> str:
-        return "forgecli"
+        return "kodact"
 
     def get_version_command(self) -> str | None:
         return f"{REMOTE_BIN} --version"
@@ -298,7 +298,7 @@ class KodAct(BaseInstalledAgent):
         if limit and "--max-time" not in extra:
             flags += ["--max-time", str(max(60, int(limit) - TIME_MARGIN))]
         flags += extra
-        meta = {"harness": "forgecli", "model": model, "flags": flags, "time_limit_s": limit, "settings": settings(env)}
+        meta = {"harness": "kodact", "model": model, "flags": flags, "time_limit_s": limit, "settings": settings(env)}
         command = (
             f"mkdir -p {LOG_DIR}; "
             + record_run("KODACT_TASK", meta)
