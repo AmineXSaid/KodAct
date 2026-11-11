@@ -16,6 +16,8 @@
 #   KODACT_HARBOR_CA_BUNDLE   extra CAs to trust in containers (job name gets -hostca)
 #   KODACT_STATIC_BIN      use this binary as is (job name gets -custombin); by default
 #                         target-static/release/kodact is rebuilt when the source changed
+#   KODACT_NUDGES          the progress nudges on in every task (job name gets -n-<list>, so an
+#                         A/B of nudges off and on is two jobs told apart by name)
 #   KODACT_*               endpoint, key and limits, passed into the containers
 # Anything after the mode goes to `harbor run` (e.g. -i 'some-task*').
 set -euo pipefail
@@ -24,7 +26,7 @@ cd "$repo"
 mode="${1:-subset}"
 shift || true
 
-if [ -z "${KODACT_OPENAI_BASE_URL:-}${KODACT_BASE_URL:-}${KODACT_API_KEY:-}${KODACT_AUTH_TOKEN:-}" ]; then
+if [ -z "${KODACT_OPENAI_BASE_URL:-}${KODACT_BASE_URL:-}${KODACT_API_KEY:-}${KODACT_AUTH_TOKEN:-}${KODACT_GEMINI_API_KEY:-}" ]; then
   echo "error: no KODACT_* endpoint or key set; source your env file first" >&2
   exit 1
 fi
@@ -58,6 +60,7 @@ ca=""
 [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_UV_CACHE:-}" ] && ca="${ca}-uvcache"
 [ -n "${KODACT_HARBOR_PIP_CACHE:-}" ] && ca="${ca}-pipcache"
+[ -n "${KODACT_NUDGES:-}" ] && ca="${ca}-n-$(printf '%s' "$KODACT_NUDGES" | tr -c 'A-Za-z0-9' '.')"
 case "${KODACT_HARBOR_AUTONOMOUS:-1}" in 0|false|no|off) ca="${ca}-noauto" ;; esac
 model="${KODACT_HARBOR_MODEL:-deep-thinking}"
 model_tag="$(printf '%s' "${model#*/}" | tr -c 'A-Za-z0-9._-' '-')"
