@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Follow a Harbor job's agent conversations live, as readable text.
 
-    python3 evals/harbor/watch.py                 # the newest job under jobs/
+    python3 evals/harbor/watch.py                 # the newest job under jobs/, and each newer one
+                                                  # as it starts (a loop of jobs, one after another)
     python3 evals/harbor/watch.py jobs/<job-name> # a given job
     python3 evals/harbor/watch.py --from-start    # replay what's there, then follow
     python3 evals/harbor/watch.py --thinking      # also show the model's reasoning
@@ -12,7 +13,9 @@ model says, one short line per tool call, failed tool calls, and how the run
 ended, and so is Pi's event stream (pi.jsonl, read through pi_stream.py). Any
 other *.jsonl / *.stdout.txt / *.stderr.txt in a task's agent/ folder (Ante,
 Forge Code, ...) is shown line by line as plain text. A task's
-reward is shown when its verifier writes it.
+reward is shown when its verifier writes it; a trial that starts, and one that
+ends in a Harbor error (a container that doesn't start, tests that time out),
+are shown too, with whether the agent ran.
 
 A step appears when the model finishes it (a reasoning model can be quiet for
 minutes). Ctrl-C stops watching; the run itself isn't affected.
@@ -213,9 +216,35 @@ def newest_job() -> Path:
     return max(jobs, key=lambda p: p.stat().st_mtime)
 
 
+def trial_error(trial: Path) -> str:
+    """How a trial ended in a Harbor error, from its exception.txt: the error's last line."""
+    try:
+        lines = [ln.strip() for ln in (trial / "exception.txt").read_text(errors="replace").splitlines() if ln.strip()]
+    except OSError:
+        return ""
+    # The last line that names an error (`harbor.trial.errors.XError: ...`); text after it
+    # (the agent's captured stdout or stderr) is not the error.
+    errors = [ln for ln in lines if re.match(r"^[\w.]*(Error|Exception)\b(:|$)", ln)]
+    if not errors:
+        return ""
+    last = errors[-1]
+    name = last.split(":", 1)[0].rsplit(".", 1)[-1]
+    ran = any((trial / "agent").glob("*.jsonl"))
+    where = {
+        "EnvironmentStartTimeoutError": "the container didn't start; the agent never ran",
+        "VerifierTimeoutError": "the tests ran out of time; nothing was scored",
+        "NonZeroAgentExitCodeError": "the agent exited with an error",
+    }.get(name, "the agent ran" if ran else "the agent never ran")
+    detail = last.split(":", 1)[1].strip() if ":" in last else ""
+    # "Command failed (exit 1): <the whole agent command>": the exit status is what tells.
+    detail = re.sub(r"^(Command failed \(exit \d+\)):.*", r"\1", detail)
+    return f"{RED}{BOLD}✘ Harbor: {name}{RESET} · {where}" + (f" · {short(detail, 100)}" if detail else "")
+
+
 def main() -> None:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     from_start = "--from-start" in sys.argv
+    follow_newest = not args
     job = Path(args[0]) if args else newest_job()
     print(f"watching {job}  (Ctrl-C to stop)\n")
     offsets: dict[Path, int] = {}
@@ -223,6 +252,8 @@ def main() -> None:
     pending: dict[Path, str] = {}
     pi_streams: dict[Path, PiStream] = {}
     rewarded: set[Path] = set()
+    started: set[Path] = set()
+    failed: set[Path] = set()
     first_scan = True
 
     def show(task: str, text: str) -> None:
@@ -230,6 +261,25 @@ def main() -> None:
         print(f"{color}[{task}]{RESET} {text}", flush=True)
 
     while True:
+        # Without a job named: a newer job (the next of a loop) is followed from its start.
+        if follow_newest and (newer := newest_job()) != job and newer.stat().st_mtime > job.stat().st_mtime:
+            job = newer
+            print(f"\n{BOLD}=== next job: {job}{RESET}\n", flush=True)
+            for state in (offsets, pending, pi_streams):
+                state.clear()
+            rewarded.clear()
+            started.clear()
+            failed.clear()
+            from_start = True
+        for trial in sorted(p for p in job.glob("*__*") if p.is_dir()):
+            task = trial.name.split("__")[0]
+            if trial not in started:
+                started.add(trial)
+                if not first_scan or from_start:
+                    show(task, f"{DIM}trial {trial.name} started{RESET}")
+            if trial not in failed and (text := trial_error(trial)):
+                failed.add(trial)
+                show(task, text)
         found = {p for pat in PATTERNS for p in job.glob(f"*/agent/{pat}")}
         # A task's stderr after its other logs: an error usually ends what came before it.
         logs = sorted(found, key=lambda p: (p.parent.parent.name, p.name.endswith(".stderr.txt"), p.name))
