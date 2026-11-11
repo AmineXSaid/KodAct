@@ -72,7 +72,7 @@ Test names are `<crate or file>::<test>`; `e2e` is `crates/kodact-cli/tests/e2e.
 | Bash | done | `builtin::bash_runs_and_keeps_cwd_inside_project`, `bash_timeout_moves_the_command_to_the_background`, `bash_interrupt_returns_interrupted` | persistent cwd, timeout, background. Differs: a command still running at its `timeout` moves to the background instead of being killed (C22) |
 | BashOutput / KillShell (background shells) | done | `builtin::background_shell_output_and_kill`, `a_moved_command_can_be_stopped_with_its_children` | Differs: the model is told when a background shell exits (C22) |
 | Read | partial | `builtin::read_numbers_lines_and_pages`, `notebook_edit_replace_insert_delete`, `openai::tests::a_tool_result_never_carries_base64_and_its_images_follow` | Text, images, notebooks done. PDFs are sent whole: `pages` is passed as a hint, not extracted. On an OpenAI-compatible endpoint (no document block) a PDF goes as its extracted text (`pdf_text`, lopdf with a stream-scan fallback), and images a tool returned follow in the next user message |
-| Write | done | `builtin::write_creates_and_checkpoints` |  |
+| Write | done | `builtin::write_creates_and_checkpoints`, `files::tests::a_file_made_during_the_session_may_be_written_unread` | Beyond the reference: a file created after the session started (by a shell command or a script) may be written or edited unread; the person's files, and files put back by a checkpoint, must still be read first |
 | Edit | done | `builtin::edit_requires_read_and_unique_match`, `edit_preserves_crlf_and_multiedit_is_atomic` |  |
 | MultiEdit | done | `builtin::edit_preserves_crlf_and_multiedit_is_atomic` |  |
 | NotebookEdit | done | `builtin::notebook_edit_replace_insert_delete` |  |

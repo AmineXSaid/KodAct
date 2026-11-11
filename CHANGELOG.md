@@ -2,6 +2,16 @@
 
 ## 0.1.0 (unreleased)
 
+### Writing a file the session made itself
+- **Write and Edit no longer refuse a file created during the session**
+  because it wasn't read first: a file made by a shell command
+  (`cat > solver.py`) or by a script the model ran can be rewritten at once,
+  instead of costing a Read step. Files that existed when the session
+  started, and files put back by a checkpoint restore, must still be read
+  first, and any file read and then changed by something else must be read
+  again, as before. Where the file system records no creation time, the rule
+  is as strict as it was.
+
 ### KodAct's own name on the wire
 - **Model API requests send `User-Agent: kodact/<version>`** (was the old
   name, `forgecli/<version>`). A gateway or proxy that filters or logs by
