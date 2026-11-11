@@ -542,6 +542,9 @@ class Job:
         self.finished = self.result.get("finished_at")
         meta = next((t.run_meta for t in self.trials if t.run_meta), {})
         self.flags = meta.get("flags")
+        # What the endpoint served behind the model's name, and its window (run.sh's probe).
+        self.served = meta.get("served_model")
+        self.served_window = meta.get("served_window")
 
     def score(self) -> tuple[int, int]:
         return sum(1 for t in self.trials if (t.reward or 0) >= 1), len(self.trials)
@@ -559,7 +562,9 @@ class Job:
         out = [f"# {self.name}", ""]
         out += [
             f"- harness: **{self.harness}** (`{self.agent}`), version `{self.version}`",
-            f"- model: `{self.model}`",
+            f"- model: `{self.model}`"
+            + (f", served by `{self.served}`" if self.served else "")
+            + (f" (window {self.served_window} tokens)" if self.served_window else ""),
             f"- tasks in parallel: {self.concurrency}",
             f"- started {self.started}, finished {self.finished}: {fmt_s(wall)} wall clock, "
             f"{fmt_s(busy)} of agent time in total (wall clock includes waiting and any sleep of the machine)",
@@ -620,6 +625,8 @@ class Job:
             "started": self.started,
             "finished": self.finished,
             "flags": self.flags,
+            "served_model": self.served,
+            "served_window": self.served_window,
             "passed": passed,
             "trials": n,
             "valid_trials": len(valid),

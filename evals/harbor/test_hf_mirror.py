@@ -83,6 +83,11 @@ def test_off_nothing_changes():
     assert hf_env(KODACT_HARBOR_CA_BUNDLE="/etc/ssl/certs/ca.crt") == {}
 
 
+def test_the_job_name_shows_the_kodact_flags():
+    assert job_suffix(KODACT_HARBOR_ARGS="--effort low --max-turns 80") == "-args-effort-low-max-turns-80"
+    assert "args" not in job_suffix()
+
+
 def test_the_job_name_says_so():
     assert job_suffix(KODACT_HARBOR_HF_ENDPOINT=MIRROR, KODACT_HARBOR_CA_BUNDLE="x") == "-hostca-hfmirror"
     assert "hfmirror" not in job_suffix(KODACT_HARBOR_CA_BUNDLE="x")

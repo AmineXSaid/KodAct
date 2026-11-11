@@ -317,7 +317,16 @@ class KodAct(BaseInstalledAgent):
         if limit and "--max-time" not in extra:
             flags += ["--max-time", str(max(60, int(limit) - TIME_MARGIN))]
         flags += extra
-        meta = {"harness": "kodact", "model": model, "flags": flags, "time_limit_s": limit, "settings": settings(env)}
+        meta = {
+            "harness": "kodact",
+            "model": model,
+            # What the endpoint said it serves behind `model`, and its window, at job start (run.sh).
+            "served_model": os.environ.get("KODACT_HARBOR_SERVED_MODEL"),
+            "served_window": os.environ.get("KODACT_HARBOR_SERVED_WINDOW"),
+            "flags": flags,
+            "time_limit_s": limit,
+            "settings": settings(env),
+        }
         command = (
             f"mkdir -p {LOG_DIR}; "
             + record_run("KODACT_TASK", meta)

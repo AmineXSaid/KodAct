@@ -210,3 +210,12 @@ def test_valgrind_that_cannot_start_in_the_verifier_is_a_verifier_error(tmp_path
     trial = make_trial(tmp_path, "custom-memory-heap-crash", "0", stdout, ran_tests=6)
     assert trial.verdict == "verifier error"
 
+
+
+def test_the_report_names_the_model_the_endpoint_served(tmp_path):
+    job = make_job(tmp_path, [("fix-git", 1.0, 600, [])])
+    meta = {"harness": "kodact", "model": "deep-thinking", "served_model": "deepseek-v4-flash", "served_window": "524288"}
+    (job.path / "fix-git__T" / "agent" / "run.json").write_text(json.dumps(meta))
+    job = report.Job(job.path)
+    text = job.report()
+    assert "served by `deepseek-v4-flash` (window 524288 tokens)" in text, text[:600]

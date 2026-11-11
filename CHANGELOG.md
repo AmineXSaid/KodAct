@@ -2,6 +2,22 @@
 
 ## 0.1.0 (unreleased)
 
+### Thinking without acting, and benchmark runs that say what they ran
+- **`nudges.thinkingTimeBox`** (opt-in): a reply still all thinking past a
+  limit taken from the run's own pace (3× its usual reply, at least 2
+  minutes, at most a quarter of the time left under `--max-time`) is stopped;
+  its reasoning is handed back and the model asked for one concrete step. A
+  reply that has started its answer or an action is never cut.
+- **`adaptiveEffort` bounces back**: at `low` and still getting nowhere, the
+  level returns to yours, since thinking less didn't help either; a hard
+  problem isn't left at `low`.
+- **Summaries ask for the lowest reasoning level**, so a summary can't spend
+  its whole 32,000-token budget thinking and come back empty.
+- **Harbor**: job names show `KODACT_HARBOR_ARGS` (`-args-effort-low`), and
+  each job asks the endpoint which model it serves behind the alias and its
+  window, records both in the report, and sets `KODACT_CONTEXT_WINDOW` from it
+  when unset.
+
 ### The reasoning level, as the endpoint takes it, and adapting step by step
 - **A refused level becomes the closest one the endpoint takes.** Servers say
   which levels they take when they refuse one ("must be low, high, xhigh, max,

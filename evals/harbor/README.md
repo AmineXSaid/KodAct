@@ -62,7 +62,8 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | `KODACT_HARBOR_MODEL` | `deep-thinking` | the model as the endpoint names it (a `provider/` prefix is dropped); the same variable sets it for `run-forgecode.sh`, `run-ante.sh` and `run-pi.sh` |
 | `KODACT_HARBOR_DATASET` | `terminal-bench@2.0` | Harbor dataset |
 | `KODACT_HARBOR_JOBS` | `2` | Tasks in parallel |
-| `KODACT_HARBOR_ARGS` | | Extra `kodact` flags, e.g. `--max-turns 100` |
+| `KODACT_HARBOR_ARGS` | | Extra `kodact` flags, e.g. `--max-turns 100`; the job name gets `-args-max-turns-100` |
+| `KODACT_HARBOR_PROBE` | `1` | Asks the endpoint which model it serves behind `KODACT_HARBOR_MODEL`, and its window, at job start (`probe_model.py`): printed, kept in each trial's `run.json` and the report; the window becomes `KODACT_CONTEXT_WINDOW` when that is unset, and a different one set by hand is warned about. `0` skips it |
 | `KODACT_STATIC_BIN` | `target-static/release/kodact` | Binary copied into containers |
 | `KODACT_HARBOR_AUTONOMOUS` | `1` | `kodact --autonomous`; `0` turns it off (job name gets `-noauto`) |
 | `KODACT_HARBOR_TIME_LIMIT` | the task's own limit | Seconds for `kodact --max-time` |
