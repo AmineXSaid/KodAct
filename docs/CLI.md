@@ -422,9 +422,14 @@ the context window to compact in time, and prices to show costs.
   And when the endpoint refuses a request as too long and states its window
   ("maximum context length is 100000 tokens"), KodAct uses that window from
   then on, the same as a listed one, and sends the request again sized to fit;
-  it compacts only when the prompt itself doesn't fit. So a model's window is
-  learned whatever its size, with no setting. `evals/context-window/` tests
-  this end to end.
+  it compacts only when the prompt itself doesn't fit. A later refusal whose
+  prompt still fits (the server counted more than KodAct's estimate, or, like
+  vLLM, states only "at least" a size that is the window less the reply asked
+  for) is sent again asking for half the reply, down to 4,096 tokens, before
+  anything is compacted (`system/reply_shrunk`). One turn compacts again each
+  time the conversation overflows after growing, so a long `-p` run on a small
+  window goes on. So a model's window is learned whatever its size, with no
+  setting. `evals/context-window/` tests this end to end.
 - `modelPricing`: `{"<model id>": {"input": 0.3, "output": 1.2}}`, USD per
   million tokens.
 - Without these, KodAct assumes 1,000,000 tokens of context (so a large model is

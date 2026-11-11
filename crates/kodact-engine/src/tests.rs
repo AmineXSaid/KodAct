@@ -1585,6 +1585,9 @@ async fn a_reply_cut_off_while_reasoning_is_asked_to_act() {
     let asked = last_user_text(&h.provider.requests()[1]);
     assert!(asked.contains("still reasoning") && !asked.contains("Continue exactly"), "{asked}");
     assert!(h.transcript_text().contains(r#""subtype":"act_reminder""#));
+    // Asked to act, it gets no larger cap: twice the room would let it reason twice as long first.
+    assert_eq!(h.provider.requests()[1].max_tokens, 32_000);
+    assert!(!h.transcript_text().contains("output_limit"));
 
     // A cut-off reply with text is still continued as one answer.
     let h = Harness::new(vec![
@@ -3450,4 +3453,81 @@ async fn a_write_over_the_stated_size_is_told_with_its_result() {
     e.submit(prompt(ASK)).await;
     assert!(tool_results(&e).iter().all(|r| !r.1.contains("bytes over")));
     assert!(nudges(&h.transcript_text()).is_empty());
+}
+
+/// path-tracing (2026-11-10, a 100,000-token model behind vLLM and LiteLLM): once the window was
+/// known, a refusal stating the prompt "at least N" (the window less the reply asked, plus one,
+/// whatever the prompt's size) sized the next request to N and was refused again by the same
+/// margin, then compacted. A refusal whose prompt fits is sent again with half the reply, and
+/// nothing is compacted.
+#[tokio::test]
+async fn a_refusal_whose_prompt_fits_is_sent_again_with_half_the_reply() {
+    let refusal = |asked: u32| {
+        let at_least = 100_000 - asked + 1;
+        MockTurn::HttpError {
+            status: 400,
+            kind: "BadRequestError".into(),
+            message: format!(
+                "litellm.ContextWindowExceededError: This model's maximum context length is 100000 tokens. However, \
+                 you requested {asked} output tokens and your prompt contains at least {at_least} input tokens, for a \
+                 total of at least 100001 tokens."
+            ),
+        }
+    };
+    let h = Harness::new(vec![
+        MockTurn::text("one").with_usage(usage(60_000)),
+        refusal(32_000), // the window, learned: sent again sized to it
+        refusal(29_999), // still too much: half
+        MockTurn::text("answered"),
+    ]);
+    let cfg = EngineConfig { model: "shrink-reply-on-refusal".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("first")).await;
+    let r = e.submit(prompt("second")).await;
+    assert_eq!(r.result.as_deref(), Some("answered"));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 4, "no summary request");
+    assert_eq!(reqs[3].max_tokens, reqs[2].max_tokens / 2, "half the reply refused");
+    let t = h.transcript_text();
+    assert!(t.contains("reply_shrunk") && !t.contains("compact_boundary"), "{t}");
+}
+
+/// A long `-p` run is one turn: the conversation that overflowed and was compacted fills the
+/// window again, and is compacted again, where the second overflow used to end the run. One that
+/// overflows again before anything was added (the compaction made no room) still ends it.
+#[tokio::test]
+async fn one_turn_compacts_again_each_time_the_conversation_overflows() {
+    let too_long = || MockTurn::HttpError {
+        status: 400,
+        kind: "invalid_request_error".into(),
+        message: "prompt is too long: 1000001 tokens > 1000000 maximum".into(),
+    };
+    let h = Harness::new(vec![
+        MockTurn::tool("Bash", json!({"command": "echo 1"})).with_usage(usage(100)),
+        too_long(),
+        MockTurn::text("<summary>first part</summary>"),
+        MockTurn::tool("Bash", json!({"command": "echo 2"})),
+        too_long(),
+        MockTurn::text("<summary>second part</summary>"),
+        MockTurn::text("done"),
+    ]);
+    let mut e =
+        h.engine_with(EngineConfig::default(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("long job")).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    assert_eq!(h.transcript_text().matches(r#""subtype":"compact_boundary""#).count(), 2);
+
+    // Refused again right after a compaction, nothing added since: no loop, the run ends.
+    let h = Harness::new(vec![
+        MockTurn::tool("Bash", json!({"command": "echo 1"})).with_usage(usage(100)),
+        too_long(),
+        MockTurn::text("<summary>part</summary>"),
+        too_long(),
+        MockTurn::text("never"),
+    ]);
+    let mut e =
+        h.engine_with(EngineConfig::default(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("long job")).await;
+    assert_eq!(r.subtype, ResultSubtype::ErrorDuringExecution);
+    assert_eq!(h.provider.requests().len(), 4, "not compacted a second time");
 }

@@ -129,6 +129,10 @@ case("model-info-large-tui", "tui", {"models": {"fields": {}, "model_info": {"ma
 # path-tracing, 2026-11-10: no window listed; a 100k model refused 32,000 on a 68,001-token prompt.
 # The refusal gives the window and the prompt: the request goes again, fitted, with no compaction.
 case("refusal-learned-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"window": 100000, "prompt_tokens": 68001}}, {"max_tokens_eq": [32000, 29999], "summaries": 0, "exit": 0})
+# path-tracing, 2026-11-10, later in the run: the window known, the server counts more than KodAct's
+# estimate and states only "at least" the window less the reply asked, plus one. Sized to that, the
+# request was refused again by the same margin and the run ended; now the reply is halved instead.
+case("refusal-at-least-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"window": 100000, "prompt_tokens": 66000, "real_extra": 6000, "at_least": True}}, {"max_tokens_eq": [32000, 29999, 14999], "summaries": 0, "exit": 0})
 # A large model that is never refused keeps the whole cap.
 case("no-refusal-large-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"window": 1000000, "prompt_tokens": 68001}}, {"max_tokens_eq": [32000], "summaries": 0, "exit": 0})
 # 7. The reply limit.

@@ -88,6 +88,16 @@ impl Drop for AbortOnDrop {
 /// it is, and a refusal for length compacts the conversation and tries again.
 const MIN_REPLY: u32 = 4_096;
 
+/// Times a turn's request is sent again with half the reply budget, after refusals for length
+/// whose prompt fits the window: 32,000 → 16,000 → 8,000 → 4,096, then the conversation is
+/// compacted.
+const MAX_REPLY_SHRINKS: u32 = 3;
+
+/// Compactions one turn makes because the conversation no longer fits. More than one: a long
+/// `-p` run is one turn, and it fills a small window again after each compaction. Each needs the
+/// conversation to have grown since the last, so one that didn't make room isn't repeated.
+const MAX_LENGTH_COMPACTIONS: u32 = 8;
+
 /// A reply budget that fits the window: `cap`, but no more than what `window` has left after a
 /// `prompt` of that many tokens, less a margin for the parts of the prompt that are estimated (a
 /// fiftieth of the window, at least 1,024). Endpoints that count the requested output against the
@@ -763,6 +773,9 @@ pub struct Engine {
     lsp: Option<Arc<crate::lsp::Manager>>,
     /// This turn's raised output cap, after a `max_tokens` stop.
     output_cap: Option<u32>,
+    /// The most reply a request asks for after a refusal for length whose prompt fit the window
+    /// (`shrink_reply`); cleared when the turn starts and when a compaction makes room.
+    reply_shrink: Option<u32>,
     /// After `/clear`: attach the memory context to the next prompt again.
     reattach_context: bool,
     /// Notes for the model, attached to the next prompt (`/add-dir`, ...).
@@ -882,6 +895,7 @@ impl Engine {
             stale_end_told: false,
             size_told: HashMap::new(),
             output_cap: None,
+            reply_shrink: None,
             reattach_context: false,
             carried_requests: vec![],
             lsp: None,
@@ -992,7 +1006,8 @@ impl Engine {
     fn reply_budget(&self, model: &str) -> u32 {
         let cap = self.output_cap.unwrap_or(self.cfg.max_output_tokens);
         let window = kodact_api::models::model_info_or_default(model).context_window;
-        fit_reply(cap, window, self.projected_context_tokens())
+        let fitted = fit_reply(cap, window, self.projected_context_tokens());
+        self.reply_shrink.map_or(fitted, |s| fitted.min(s))
     }
 
     /// The window compaction is measured against, for `model`.
@@ -1688,6 +1703,7 @@ impl Engine {
         // reasoning from the same budget before writing the summary. At 20k, path-tracing-reverse
         // (9ef0955) reasoned to the limit and wrote nothing seven times in a row, and five of the
         // eight summaries that did come back that run used 18k to 20k.
+        let sent = req.max_tokens;
         let t0 = Instant::now();
         let outcome = self.stream_inner(req, cancel, false, false).await;
         turn.api_ms += t0.elapsed().as_millis() as u64;
@@ -1697,7 +1713,10 @@ impl Engine {
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
                 self.record_compact_failure(trigger, &reason, None);
-                self.learn_from_refusal(model, &e, false);
+                // The next attempt, sized to the window it states or with half the reply.
+                if !self.learn_from_refusal(model, &e, false) {
+                    self.shrink_reply(model, &e, sent);
+                }
                 return Err(reason);
             }
         };
@@ -1753,6 +1772,7 @@ impl Engine {
         }
         self.state.context_tokens = kodact_compact::estimate_tokens(&self.state.messages);
         self.state.counted = self.state.messages.len();
+        self.reply_shrink = None;
         self.forget_seen_results();
         CompactInfo { trigger: trigger.into(), pre_tokens, summary }
     }
@@ -1784,6 +1804,33 @@ impl Engine {
         );
         // Sending it again only helps when the prompt itself fits, with room for a reply.
         reported.prompt.is_none_or(|p| p.saturating_add(u64::from(MIN_REPLY)) <= window)
+    }
+
+    /// A refusal for length whose prompt fits the model's window, with room for a reply: the reply
+    /// asked for was what didn't fit. The prompt was larger than KodAct's estimate (a tool result
+    /// that tokenizes densely), or the server states only a lower bound: vLLM's "your prompt
+    /// contains at least N input tokens" is the window less the reply asked for, plus one,
+    /// whatever the prompt's size, so a budget sized to N is refused again by the same margin. The
+    /// next request asks for half the reply (at least [`MIN_REPLY`]), before anything is compacted:
+    /// path-tracing (2026-11-10) asked 28,537 tokens on a prompt "at least 71,464" in a 100,000
+    /// window, and the run ended there. True when it shrank, so the request is worth sending again.
+    fn shrink_reply(&mut self, model: &str, e: &ApiError, sent: u32) -> bool {
+        if !e.is_prompt_too_long() || sent <= MIN_REPLY {
+            return false;
+        }
+        let reported = e.reported_limits();
+        let window = reported.window.unwrap_or_else(|| kodact_api::models::model_info_or_default(model).context_window);
+        let prompt = reported.prompt.unwrap_or_else(|| self.projected_context_tokens());
+        if prompt.saturating_add(u64::from(MIN_REPLY)) > window {
+            return false;
+        }
+        let to = (sent / 2).max(MIN_REPLY);
+        self.reply_shrink = Some(self.reply_shrink.map_or(to, |s| s.min(to)));
+        self.system_event(
+            "reply_shrunk",
+            json!({"model": model, "from": sent, "to": to, "window": window, "prompt": prompt}),
+        );
+        true
     }
 
     /// A summary attempt that failed, recorded as `system/compact_failed`: why, and what the reply
@@ -2375,6 +2422,7 @@ impl Engine {
         self.stale_end_told = false;
         self.size_told.clear();
         self.output_cap = None;
+        self.reply_shrink = None;
         if self.verifying() {
             self.verify.fingerprint = self.worktree_fingerprint().await;
         }
@@ -2384,9 +2432,12 @@ impl Engine {
         let mut fallback: Option<String> = None;
         let mut fallbacks = self.cfg.fallback_models.clone().into_iter();
         let mut stop_hook_active = false;
-        let mut compacted_for_length = false;
+        // Compactions for length this turn, and the conversation's length right after the last.
+        let mut length_compactions = 0u32;
+        let mut compacted_len: Option<usize> = None;
         // A refusal that gave the model's real window: sent again once, sized to it.
         let mut learned_window = false;
+        let mut reply_shrinks = 0u32;
         let mut last_text: Option<String> = None;
         let mut continuations = 0;
         let mut reasoning_cutoffs = 0;
@@ -2425,6 +2476,7 @@ impl Engine {
                 self.maybe_compact(&model, true, &cancel, &mut turn).await;
             }
             let req = self.build_request(&model);
+            let sent = req.max_tokens;
             tracing::debug!(
                 model = %req.model,
                 messages = req.messages.len(),
@@ -2502,8 +2554,18 @@ impl Engine {
                     learned_window = true;
                     continue;
                 }
-                StreamOutcome::Failed(e) if e.is_prompt_too_long() && !compacted_for_length => {
-                    compacted_for_length = true;
+                StreamOutcome::Failed(e)
+                    if reply_shrinks < MAX_REPLY_SHRINKS && self.shrink_reply(&model, &e, sent) =>
+                {
+                    reply_shrinks += 1;
+                    continue;
+                }
+                StreamOutcome::Failed(e)
+                    if e.is_prompt_too_long()
+                        && length_compactions < MAX_LENGTH_COMPACTIONS
+                        && compacted_len.is_none_or(|n| self.state.messages.len() > n) =>
+                {
+                    length_compactions += 1;
                     self.notice(
                         NoticeLevel::Warning,
                         "The conversation no longer fits the context window; compacting.",
@@ -2512,7 +2574,11 @@ impl Engine {
                     // came back empty, the next attempt worked).
                     let compacted = self.compact_for_room(true, true, &model, &cancel, &mut turn).await;
                     match compacted {
-                        Ok(_) => continue,
+                        Ok(_) => {
+                            compacted_len = Some(self.state.messages.len());
+                            reply_shrinks = 0;
+                            continue;
+                        }
                         Err(err) => {
                             let text = format!("API Error: {e} (compaction failed: {err})");
                             self.notice(NoticeLevel::Error, text.clone());
@@ -2585,7 +2651,7 @@ impl Engine {
                         None,
                     );
                     // Still too long after compacting: the next turn would fail the same way.
-                    r.fatal = e.is_unrecoverable() || (e.is_prompt_too_long() && compacted_for_length);
+                    r.fatal = e.is_unrecoverable() || (e.is_prompt_too_long() && length_compactions > 0);
                     r.auth_failed = e.is_auth_failure();
                     return r;
                 }
@@ -2664,7 +2730,14 @@ impl Engine {
             // call is answered with an error by exec; cut-off text is continued.
             continuing = false;
             if stop_reason == Some(StopReason::MaxTokens) {
+                // Only output that needs the room gets a larger cap: text or a tool call cut off. A
+                // reply that was all reasoning is asked to act on what it has (ACT_PROMPT), and twice
+                // the room would let its next pass reason twice as long before it acts (path-tracing
+                // on a 100,000-token reasoning model, 2026-11-10: three replies of 32,000 tokens of
+                // reasoning each, minutes apiece, in a 30-minute run).
+                let cut_output = reply_has_text || !tool_uses.is_empty();
                 if self.cfg.escalate_output
+                    && cut_output
                     && self.output_cap.is_none()
                     && self.cfg.max_output_tokens < ESCALATED_OUTPUT_TOKENS
                 {

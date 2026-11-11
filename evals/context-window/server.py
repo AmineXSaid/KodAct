@@ -45,12 +45,16 @@ class H(BaseHTTPRequestHandler):
         if ch.get("error_over") and n > ch["error_over"]:
             return self.reply(400, json.dumps({"error": {"message": ch.get("error_text", "This model's maximum context length is 32768 tokens. However, your messages resulted in 40000 tokens."), "type": "invalid_request_error", "code": "context_length_exceeded"}}))
         # A server with a real window that refuses, in vLLM's words passed on by LiteLLM,
-        # a prompt plus requested reply larger than it.
-        pt = ch.get("prompt_tokens", 3000) + ch.get("per_message", 0) * len(msgs)
+        # a prompt plus requested reply larger than it. `real_extra`: the prompt it counts is that
+        # much larger than the size its replies report (a tokenizer that counts denser text than
+        # KodAct estimates). `at_least`: like vLLM, it states only a lower bound for the prompt,
+        # the window less the reply asked for, plus one.
+        pt = ch.get("prompt_tokens", 3000) + ch.get("per_message", 0) * len(msgs) + ch.get("real_extra", 0)
         mt = req.get("max_tokens") or req.get("max_completion_tokens") or 0
         if ch.get("window") and pt + mt > ch["window"]:
+            stated = ch["window"] - mt + 1 if ch.get("at_least") else pt
             inner = (f"This model's maximum context length is {ch['window']} tokens. However, you requested {mt} output tokens "
-                     f"and your prompt contains at least {pt} input tokens, for a total of at least {pt + mt} tokens.")
+                     f"and your prompt contains at least {stated} input tokens, for a total of at least {stated + mt} tokens.")
             return self.reply(400, json.dumps({"detail": "litellm.ContextWindowExceededError: litellm.BadRequestError: " + json.dumps({"error": {"message": inner}})}))
         self.send_response(200); self.send_header("content-type", "text/event-stream"); self.send_header("transfer-encoding", "chunked"); self.end_headers()
         def ev(d):

@@ -20,6 +20,7 @@ a model list that answers after 0.3 s to 30 s; a list that fails (401, 404,
 models; odd values (0, -1, text, decimals, 10M, 1,000); who wins
 (`KODACT_CONTEXT_WINDOW`, `modelLimits`, a known model; a value set for a
 small model while the endpoint lists a large one); LiteLLM's `/model/info`; a refusal
-that states the window, learned and sent again (and a large model never refused); the reply limit;
+that states the window, learned and sent again (and a large model never refused); a refusal
+that states only a lower bound for the prompt (vLLM's "at least"), answered with half the reply; the reply limit;
 compaction under and over the threshold on a 32k window; a server that
 rejects a too-long prompt.

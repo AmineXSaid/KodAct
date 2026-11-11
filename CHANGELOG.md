@@ -2,6 +2,20 @@
 
 ## 0.1.0 (unreleased)
 
+### Small-window reasoning models behind vLLM: runs that ended, and time lost
+Seen on a 100,000-token reasoning model behind LiteLLM and vLLM, in runs that
+ended on an error or ran out of time:
+- **A refusal for length whose prompt fits is sent again with half the
+  reply** (down to 4,096), for the conversation's requests and the summary's,
+  before anything is compacted. vLLM states the prompt as "at least" the
+  window less the reply asked for, plus one, so a request sized to that was
+  refused again by the same margin, every time.
+- **One turn compacts again each time the conversation overflows after
+  growing.** A `-p` run is one turn: the second overflow used to end it.
+- **A reply cut off while it was all reasoning gets no larger output cap.**
+  It is asked to act on what it has; the doubled cap let its next pass reason
+  twice as long first.
+
 ### Reasoning level for OpenAI-compatible endpoints
 - **`--effort` reaches an OpenAI-compatible endpoint as `reasoning_effort`**,
   for every model, one KodAct has no table entry for included. Before, only
