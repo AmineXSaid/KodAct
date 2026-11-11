@@ -1094,6 +1094,41 @@ async fn a_reminder_comes_once_per_set_of_changes() {
     assert_eq!(h.transcript_text().matches(r#""subtype":"verification""#).count(), 3);
 }
 
+/// gpt2-codegolf: a program written and compiled, then the turn ended without it ever running.
+/// A build that passes is asked to run once; running it (or not building one) asks nothing.
+#[tokio::test]
+async fn a_program_built_but_never_run_is_asked_to_run_once() {
+    // `gcc` here is a shell function, so the test needs no compiler.
+    let build = "gcc() { printf '#!/bin/sh\\n' > image && chmod +x image; }; gcc -O2 -o image image.c";
+    let cfg = || EngineConfig {
+        verify: Some(crate::verify::VerifyConfig { commands: vec![], max_reminders: 2 }),
+        ..Default::default()
+    };
+    let h = Harness::new(vec![]);
+    let src = h.cwd().join("image.c");
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": src, "content": "int main(){return 0;}\n"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": build})));
+    h.provider.push(MockTurn::text("done"));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "./image"})));
+    h.provider.push(MockTurn::text("ran it: done"));
+    let mut e = h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("write image.c")).await;
+    assert_eq!(r.result.as_deref(), Some("ran it: done"));
+    let t = h.transcript_text();
+    assert_eq!(t.matches(r#""kind":"built_not_run""#).count(), 1, "{t}");
+    assert!(t.contains(r#""artifact":"image""#));
+
+    // Built and run before finishing: nothing to ask.
+    let h = Harness::new(vec![]);
+    let src = h.cwd().join("image.c");
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": src, "content": "int main(){return 0;}\n"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": format!("{build} && ./image")})));
+    h.provider.push(MockTurn::text("done"));
+    let mut e = h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("write image.c")).await.result.as_deref(), Some("done"));
+    assert!(!h.transcript_text().contains(r#""subtype":"verification""#));
+}
+
 #[tokio::test]
 async fn verify_sees_shell_writes_through_git_and_failed_checks() {
     let h = Harness::new(vec![]);

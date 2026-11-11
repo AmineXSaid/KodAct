@@ -125,7 +125,9 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - the reminder asks the final message to state what was verified and what
     was not;
   - one reminder per set of changes, and an answer or data file read back
-    after its last change counts as checked (task `answer-file`).
+    after its last change counts as checked (task `answer-file`);
+  - a program a passing check built (`gcc -o app app.c`) and nothing ran
+    since is asked to run once before the turn ends.
   - `"reminders": false` or `KODACT_REMINDERS=0` turns all of KodAct's
     reminders off (this one, the loop guard, the act, attempt, next-step and
     todo reminders, the budget and time wrap-up), for A/B runs against the

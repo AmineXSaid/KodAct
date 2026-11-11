@@ -3294,10 +3294,22 @@ impl Engine {
                 }
                 continue;
             }
+            // Running the program a passing build made: it has been seen to work, or not.
+            if self.verify.built.as_ref().is_some_and(|(_, a)| crate::verify::runs_artifact(command, a)) {
+                self.verify.built = None;
+            }
             if crate::verify::is_check(command, &vc.commands, &changed) {
                 self.verify.write_mark = r.writes_after;
                 self.verify.shell_may_have_changed = false;
                 self.verify.last_check = Some((command.to_string(), r.output.is_error));
+                // A passing build is remembered until its program runs; any other passing check
+                // (tests, a run of the program) stands on its own.
+                if !r.output.is_error {
+                    // `gcc -o app app.c && ./app` builds and runs it in one go.
+                    self.verify.built = crate::verify::built_artifact(command)
+                        .filter(|a| !crate::verify::runs_artifact(command, a))
+                        .map(|a| (command.to_string(), a));
+                }
                 refresh = true;
             } else if !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true) {
                 self.verify.shell_may_have_changed = true;
@@ -3379,6 +3391,10 @@ impl Engine {
             crate::verify::Verified::Failed { command } if writes > 0 => {
                 crate::verify::Reminder::LastCheckFailed { command }
             }
+            crate::verify::Verified::Passed { .. } if writes > 0 => match self.verify.built.clone() {
+                Some((command, artifact)) => crate::verify::Reminder::BuiltNotRun { command, artifact },
+                None => return None,
+            },
             _ => return None,
         };
         self.verify.reminders += 1;
