@@ -232,6 +232,9 @@ pub struct EngineConfig {
     /// by default): types, imports and broken callers, which the parse check can't see. Only
     /// the main agent asks; `None` is off.
     pub language_servers: Option<crate::lsp::LspConfig>,
+    /// Run the edited file through its formatter when it was formatted before the edit
+    /// (`verification.format`, off by default); `None` is off.
+    pub formatters: Option<crate::format::FormatConfig>,
     /// The run ends with this turn and takes no further input (`-p` with its prompt given up
     /// front): a turn about to end with todo items open is sent back once, since a script gets
     /// what the turn left. Not for a session with a person or a host at the other end, where
@@ -314,6 +317,7 @@ impl Default for EngineConfig {
             verify: None,
             edit_diagnostics: false,
             language_servers: None,
+            formatters: None,
             one_shot: false,
             escalate_output: true,
             fast: false,
@@ -1065,6 +1069,28 @@ impl Engine {
         self.system_event("turn_recovered", json!({"pending": pending}));
     }
 
+    /// The model's notes (the Notes tool), for re-attaching after compaction (GOALS pillar 5):
+    /// in full within a share of the window (a twentieth of its tokens, half of what the
+    /// carried requests get), otherwise their end, which is the latest, with the way to read
+    /// the rest.
+    pub(crate) fn notes_context(&self, window: u64) -> Option<String> {
+        let notes = self.shared.tool_ctx.notes_text();
+        if notes.trim().is_empty() {
+            return None;
+        }
+        // About four characters to a token.
+        let room = usize::try_from(window / 20 * 4).unwrap_or(usize::MAX).max(2_000);
+        let total = notes.chars().count();
+        let body = if total > room {
+            let tail: String = notes.chars().skip(total - room).collect();
+            let tail = tail.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or(tail);
+            format!("(the earlier notes are left out here; `Notes` with action `read` returns all of them)\n{tail}")
+        } else {
+            notes
+        };
+        Some(format!("Your notes (the Notes tool) at the time of compaction. Keep them up to date:\n{body}"))
+    }
+
     /// The current task list, for re-attaching after compaction (GOALS pillar 5).
     fn plan_context(&self) -> Option<String> {
         let todos = self.shared.tool_ctx.todos.lock().unwrap().clone();
@@ -1651,6 +1677,7 @@ impl Engine {
             .iter()
             .cloned()
             .chain(self.plan_context())
+            .chain(self.notes_context(self.compact_window(model)))
             .chain(self.handle.skills_context())
             .collect();
         let context = (!context.is_empty()).then(|| context.join("\n\n"));
@@ -2642,14 +2669,16 @@ impl Engine {
                         // Could the call have changed files? Then a command run after it may give a
                         // new result, and the guard doesn't call a repeat of it a loop.
                         let may_change = match name.as_str() {
-                            "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | "Task" => !r.output.is_error,
+                            "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | "Task" | "Checkpoint" => {
+                                !r.output.is_error
+                            }
                             "Bash" => !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true),
                             _ => false,
                         };
                         self.guard.observe(name, input, &r.output.text_content(), r.output.is_error, may_change)
                     })
                     .collect();
-                if self.cfg.edit_diagnostics || self.cfg.language_servers.is_some() {
+                if self.cfg.edit_diagnostics || self.cfg.language_servers.is_some() || self.cfg.formatters.is_some() {
                     self.diagnose_edits(&tool_uses, &mut results, &model).await;
                 }
                 let mut interrupted = cancel.is_cancelled();
@@ -3142,23 +3171,45 @@ impl Engine {
             let Some(raw) = input.get("file_path").and_then(Value::as_str) else { continue };
             let path = kodact_tools::expand_path(raw, &root);
             let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
+            // The file before the edit, when the tool gave it: what the formatter and the
+            // language server compare the edit with.
+            let st = r.output.structured.as_ref();
+            let created = st.and_then(|s| s.get("type")).and_then(Value::as_str) == Some("create");
+            let original = st.and_then(|s| s.get("originalFile")).and_then(Value::as_str).map(str::to_string);
+            let mut formatted = String::new();
+            if let Some(cfg) = &self.cfg.formatters {
+                let done = crate::format::format(cfg, &root, &path, original.as_deref(), created).await;
+                if let Some(f) = done.filter(|f| std::fs::write(&path, &f.text).is_ok()) {
+                    // Still the model's own change: no new read is asked for before the next edit.
+                    self.shared.tool_ctx.files.record_write(&path);
+                    self.system_event("formatted", json!({"file": shown, "formatter": f.formatter, "lines": f.lines}));
+                    formatted = f.note(&shown);
+                }
+            }
             let parse = if self.cfg.edit_diagnostics { crate::diagnose::check(&path).await } else { None };
-            let text = match (parse, &servers) {
+            let found = match (parse, &servers) {
                 (Some(d), _) => {
                     self.system_event("diagnostics", json!({"file": shown, "parser": d.parser}));
-                    d.text(&shown)
+                    Some(d.text(&shown))
                 }
-                // A file that parses: what a compiler would say of it.
+                // A file that parses: what a compiler would say of it, beyond what it said
+                // before the edit.
                 (None, Some(servers)) => {
-                    let Some(report) = servers.check(&path).await else { continue };
-                    self.system_event(
-                        "diagnostics",
-                        json!({"file": shown, "server": report.server, "errors": report.problems.len()}),
-                    );
-                    report.text(&root, room)
+                    let baseline = if created { Some("") } else { original.as_deref() };
+                    servers.check(&path, baseline).await.map(|report| {
+                        self.system_event(
+                            "diagnostics",
+                            json!({"file": shown, "server": report.server, "errors": report.problems.len()}),
+                        );
+                        report.text(&root, room)
+                    })
                 }
-                (None, None) => continue,
+                (None, None) => None,
             };
+            let text = format!("{formatted}{}", found.unwrap_or_default());
+            if text.is_empty() {
+                continue;
+            }
             match &mut r.output.content {
                 kodact_types::ToolResultContent::Text(s) => s.push_str(&text),
                 kodact_types::ToolResultContent::Blocks(b) => b.push(ContentBlock::text(text.trim_start())),

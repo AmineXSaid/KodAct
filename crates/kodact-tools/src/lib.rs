@@ -18,7 +18,7 @@ mod util;
 pub use context::{Checkpointer, SandboxCell, ToolContext};
 pub use files::FileState;
 pub use registry::ToolRegistry;
-pub use util::{expand_path, fit_output, truncate_middle};
+pub use util::{expand_path, fit_output, missing_path_hint, truncate_middle};
 
 use kodact_permissions::Subject;
 use kodact_types::{ContentBlock, ToolResultContent};

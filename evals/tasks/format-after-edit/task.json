@@ -1,0 +1,11 @@
+{
+  "instruction": "Add a function `clamp(value, low, high)` to geometry.py that returns value limited to the range low..high, and use it in `scale` so the factor is limited to 0..10. This project is formatted with `ruff format` (`black` gives the same result here); its check rejects a file that is not.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": [
+    "python",
+    "formatter",
+    "edit-diagnostics"
+  ],
+  "timeout_secs": 600
+}

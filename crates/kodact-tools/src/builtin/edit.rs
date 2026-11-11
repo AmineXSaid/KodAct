@@ -324,14 +324,18 @@ impl Tool for Edit {
                         return Err(format!("start_line also needs {}.", missing.join(" and ")));
                     }
                     if !path.exists() {
-                        return Err(format!("File does not exist: {}", path.display()));
+                        return Err(format!(
+                            "File does not exist: {}.{}",
+                            path.display(),
+                            crate::missing_path_hint(&path)
+                        ));
                     }
                 }
                 (false, true) => {}
             }
         }
         if !path.exists() && !str_arg(input, "old_string").is_empty() {
-            return Err(format!("File does not exist: {}", path.display()));
+            return Err(format!("File does not exist: {}.{}", path.display(), crate::missing_path_hint(&path)));
         }
         ctx.files.check_writable(&path)
     }

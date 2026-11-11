@@ -143,9 +143,18 @@ Each pillar lists what KodAct does about it and what shows that it works.
     off by default until measured): the errors a server reports for the new
     text, in that file and others, within a share of the model's window (task
     `change-signature`);
+    only the errors the edit added are told: the file's text before the edit
+    is the baseline (then what the server last said of it), so a project the
+    server can't fully resolve doesn't repeat its standing errors;
+  - formatting after edits (`verification.format`, off by default until
+    measured): the edited file is run through its formatter and the result
+    says what moved, so a project whose checks reject unformatted code
+    doesn't cost a turn to find out. Only a file that was already in the
+    formatter's style before the edit is touched, so a project that doesn't
+    use the formatter is never rewritten by it (task `format-after-edit`);
   - `/goal`'s check is told the same record (`HARNESS:` line).
-- **To build:** formatter feedback after edits; a baseline of the errors
-  before an edit, so only new ones are told.
+- **To build:** language-server errors and formatting for what shell
+  commands change, not only the edit tools.
 - **Measured by:** false-finish rate and pass rate (tasks `fix-median`,
   `slugify-trap`, `invoice-rounding`).
 
@@ -162,11 +171,20 @@ Each pillar lists what KodAct does about it and what shows that it works.
   replacement costs a few tokens of input and can't fail on whitespace. The
   anchor catches line numbers that moved since the model read them, before
   anything is written (task `rewrite-block`).
+  Every built-in tool returns a structured result next to its text (LS and
+  NotebookEdit were the last without one). A call that fails or finds
+  nothing says the next step: a path that isn't there names the nearest
+  directory that is and the close names in it (another case, extension or
+  spelling); an empty Glob or Grep says what was searched, with which
+  filter, and the usual cause (a pattern without `**`, a case-sensitive
+  search, an unescaped regex character, an offset past the end); LS counts
+  its entries; NotebookEdit lists the cell ids it has (task
+  `near-miss-paths`).
 - **To build:**
-  - tool descriptions tuned against the eval suite;
-  - structured results everywhere;
-  - output that helps the model's next step: counts, truncation markers, and
-    what to try when a call fails.
+  - tool descriptions tuned against the eval suite. The means is there
+    (`scripts/eval-descriptions.sh` runs the suite with and without a set of
+    descriptions and prints the A/B table); the tuning itself needs runs on
+    a real model, and no description is changed without them.
 - **Measured by:** turns per task and invalid-call rate.
 
 ### 5. Long-horizon execution
@@ -203,15 +221,24 @@ Each pillar lists what KodAct does about it and what shows that it works.
     overwrite each other or the session's tree. The result names the branch
     and directory when the agent changed something; an untouched copy is
     removed (task `parallel-plugins`).
+  - a notes file (the Notes tool): what the model writes there is given back
+    after every compaction, whole within a twentieth of the model's window
+    and otherwise its latest part with the way to read the rest, and is kept
+    next to the transcript (`<session>.notes.md`), so a resumed session and
+    the person have it (task `notes-across-compaction`);
+  - checkpoints the model rolls back to itself (the Checkpoint tool): `save`
+    before an approach that may fail, `restore` to put every file changed
+    with the edit tools since back as it was and remove the ones created,
+    instead of undoing edits one by one (task `abandon-approach`).
 - **To build:**
-  - a notes file;
-  - checkpoints the model can roll back to itself.
+  - checkpoints that also cover what shell commands change, and that
+    outlast the process.
 - **Measured by:** pass rate on multi-step tasks, and success after a resume.
 
 ## Priority order
 
 1. `kodact-eval`: the task suite, the runner and A/B reports. **Done.** There
-   are 13 validated tasks across the pillars, plus `validate`, `run` and
+   are 40 validated tasks across the pillars, plus `validate`, `run` and
    `compare`. No measured baseline exists yet: the first `kodact-eval run` with
    a real API key sets it. How to record it, what to commit and how to read
    the A/B report: docs/BASELINE.md, "Recording the first real baseline"

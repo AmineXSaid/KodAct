@@ -281,7 +281,7 @@ async fn glob_and_grep() {
     let g = Glob.call(json!({"pattern": "**/*.rs"}), &c).await;
     let t = g.text_content();
     assert!(t.contains("a.rs") && t.contains("b.rs") && !t.contains("c.rs"), "{t}");
-    assert_eq!(Glob.call(json!({"pattern": "*.py"}), &c).await.text_content(), "No files found");
+    assert!(Glob.call(json!({"pattern": "*.py"}), &c).await.text_content().starts_with("No files found"));
 
     let files = Grep.call(json!({"pattern": "TODO"}), &c).await.text_content();
     assert!(files.starts_with("Found 2 files"), "{files}");
@@ -652,4 +652,143 @@ async fn edit_by_line_range_replaces_the_lines_and_refuses_stale_numbers() {
         .contains("end_line and anchor"));
     let out = edit.call(json!({"file_path": f, "old_string": "x = 1", "new_string": "x = 5"}), &c).await;
     assert!(!out.is_error, "{}", out.text_content());
+}
+
+/// Notes are kept next to the session's transcript, so another process resuming it has them.
+#[tokio::test]
+async fn notes_append_replace_and_outlast_the_process() {
+    let d = tempfile::tempdir().unwrap();
+    let mut c = ctx(d.path());
+    c.transcript_path = Some(d.path().join("s1.jsonl"));
+    assert_eq!(Notes.call(json!({"action": "read"}), &c).await.text_content(), "(no notes yet)");
+    Notes.call(json!({"action": "append", "text": "first finding"}), &c).await;
+    let out = Notes.call(json!({"action": "append", "text": "second finding"}), &c).await;
+    assert!(!out.is_error && out.text_content().contains("2 lines"), "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(d.path().join("s1.notes.md")).unwrap(), "first finding\nsecond finding");
+    // A new process (a new context) on the same session.
+    let mut resumed = ctx(d.path());
+    resumed.transcript_path = c.transcript_path.clone();
+    assert_eq!(resumed.notes_text(), "first finding\nsecond finding");
+    Notes.call(json!({"action": "replace", "text": "only this"}), &resumed).await;
+    assert_eq!(Notes.call(json!({"action": "read"}), &resumed).await.text_content(), "only this");
+    // Without a transcript they live in memory; text is required to write.
+    let plain = ctx(d.path());
+    Notes.call(json!({"action": "append", "text": "x"}), &plain).await;
+    assert_eq!(plain.notes_text(), "x");
+    assert!(Notes.validate(&json!({"action": "append"}), &plain).unwrap_err().contains("`text` is required"));
+}
+
+/// The model saves a checkpoint, changes and creates files, and goes back: its edits since
+/// are undone, files it created are removed, and an earlier change is left alone.
+#[tokio::test]
+async fn checkpoint_restores_the_files_edited_since() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let root = d.path().canonicalize().unwrap();
+    let (a, b, made) = (root.join("a.txt"), root.join("b.txt"), root.join("made.txt"));
+    std::fs::write(&a, "a0\n").unwrap();
+    std::fs::write(&b, "b0\n").unwrap();
+    c.files.record_read(&a);
+    c.files.record_read(&b);
+    Edit::default().call(json!({"file_path": a, "old_string": "a0", "new_string": "a1"}), &c).await;
+
+    assert!(Checkpoint
+        .validate(&json!({"action": "restore", "label": "try"}), &c)
+        .unwrap_err()
+        .contains("No checkpoint"));
+    Checkpoint.call(json!({"action": "save", "label": "try"}), &c).await;
+    assert!(Checkpoint
+        .validate(&json!({"action": "save", "label": "try"}), &c)
+        .unwrap_err()
+        .contains("exists already"));
+    Edit::default().call(json!({"file_path": a, "old_string": "a1", "new_string": "a2"}), &c).await;
+    Edit::default().call(json!({"file_path": a, "old_string": "a2", "new_string": "a3"}), &c).await;
+    Checkpoint.call(json!({"action": "save", "label": "later"}), &c).await;
+    Write.call(json!({"file_path": b, "content": "b1\n"}), &c).await;
+    Write.call(json!({"file_path": made, "content": "new\n"}), &c).await;
+    let listed = Checkpoint.call(json!({"action": "list"}), &c).await.text_content();
+    assert!(listed.contains("- try: 3 file(s)") && listed.contains("- later: 2 file(s)"), "{listed}");
+
+    assert!(
+        !Checkpoint.is_read_only(&json!({"action": "restore"})) && Checkpoint.is_read_only(&json!({"action": "save"}))
+    );
+    let out = Checkpoint.call(json!({"action": "restore", "label": "try"}), &c).await;
+    let said = out.text_content();
+    assert!(!out.is_error && said.contains("Put back") && said.contains("Removed (created since)"), "{said}");
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "a1\n", "as it was at the checkpoint, not at the start");
+    assert_eq!(std::fs::read_to_string(&b).unwrap(), "b0\n");
+    assert!(!made.exists());
+    // The later checkpoint is gone, the restored one starts over, and a restored file is read again.
+    let listed = Checkpoint.call(json!({"action": "list"}), &c).await.text_content();
+    assert_eq!(listed, "- try: 0 file(s) changed since");
+    let again = json!({"file_path": a, "old_string": "a1", "new_string": "a9"});
+    assert!(Edit::default().validate(&again, &c).unwrap_err().contains("not been read"));
+    let nothing = Checkpoint.call(json!({"action": "restore", "label": "try"}), &c).await.text_content();
+    assert!(nothing.contains("Nothing to restore"), "{nothing}");
+}
+
+/// A call that fails or finds nothing says what to try next (GOALS pillar 4).
+#[tokio::test]
+async fn failures_and_empty_results_say_what_to_try() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let root = d.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("src/util")).unwrap();
+    std::fs::write(root.join("src/Config.py"), "TIMEOUT = 3\ndef load(path):\n    return path\n").unwrap();
+    std::fs::write(root.join("src/util/helpers.py"), "x = 1\n").unwrap();
+
+    // A path that isn't there: the directory that is, and the close names in it.
+    let out = Read.call(json!({"file_path": root.join("src/config.py")}), &c).await.text_content();
+    assert!(out.contains("Its directory exists") && out.contains("Config.py"), "{out}");
+    let out = Read.call(json!({"file_path": root.join("lib/deep/config.rs")}), &c).await.text_content();
+    assert!(
+        out.contains("nearest directory that exists is") && out.contains("Nothing there has a similar name"),
+        "{out}"
+    );
+    let missing = json!({"file_path": root.join("src/helpers.py"), "old_string": "a", "new_string": "b"});
+    assert!(Edit::default().validate(&missing, &c).unwrap_err().contains("File does not exist"));
+    let out = Ls.call(json!({"path": root.join("src/Config.py")}), &c).await.text_content();
+    assert!(out.contains("is a file, not a directory"), "{out}");
+    let out = Ls.call(json!({"path": root.join("srcs")}), &c).await.text_content();
+    assert!(out.contains("Directory does not exist") && out.contains("src"), "{out}");
+
+    // Listings count what they show, in the text and in the structured result.
+    let out = Ls.call(json!({"path": root}), &c).await;
+    assert!(out.text_content().ends_with("4 entries."), "{}", out.text_content());
+    assert_eq!(out.structured.unwrap()["numEntries"], 4);
+
+    // An empty search says what it covered and the usual reasons.
+    let out = Glob.call(json!({"pattern": "helpers.py", "path": root}), &c).await.text_content();
+    assert!(out.contains("No files found for `helpers.py`") && out.contains("try `**/helpers.py`"), "{out}");
+    let out = Glob.call(json!({"pattern": "**/nothing.py", "path": root}), &c).await.text_content();
+    assert!(out.starts_with("No files found") && !out.contains("try `"), "{out}");
+    let out = Grep.call(json!({"pattern": "timeout", "path": root, "output_mode": "content"}), &c).await.text_content();
+    assert!(out.contains("No matches found for `timeout`") && out.contains("`-i` ignores case"), "{out}");
+    let out = Grep.call(json!({"pattern": "load(path)", "path": root, "glob": "*.rs"}), &c).await.text_content();
+    assert!(
+        out.contains("only files matching glob *.rs")
+            && out.contains("backslash")
+            && out.contains("without the file filter"),
+        "{out}"
+    );
+    let out = Grep.call(json!({"pattern": "TIMEOUT", "path": root, "offset": 10}), &c).await.text_content();
+    assert!(out.contains("from offset 10: there are 1 in all"), "{out}");
+}
+
+#[tokio::test]
+async fn notebook_edit_names_the_cells_it_has_and_returns_a_structured_result() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let f = d.path().canonicalize().unwrap().join("n.ipynb");
+    let nb = json!({"cells": [{"id": "intro", "cell_type": "markdown", "source": ["# t"]},
+                              {"cell_type": "code", "source": ["x = 1"], "outputs": []}], "nbformat": 4});
+    std::fs::write(&f, nb.to_string()).unwrap();
+    c.files.record_read(&f);
+    let out = NotebookEdit.call(json!({"notebook_path": f, "cell_id": "nope", "new_source": "y"}), &c).await;
+    let said = out.text_content();
+    assert!(out.is_error && said.contains("2 cell(s): intro, cell-1"), "{said}");
+    let out = NotebookEdit.call(json!({"notebook_path": f, "cell_id": "cell-1", "new_source": "x = 2"}), &c).await;
+    assert!(!out.is_error && out.text_content().contains("2 cell(s)"), "{}", out.text_content());
+    let st = out.structured.unwrap();
+    assert_eq!((st["editMode"].as_str(), st["numCells"].as_u64()), (Some("replace"), Some(2)));
 }

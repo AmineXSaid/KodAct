@@ -2,6 +2,24 @@
 
 ## 0.1.0 (unreleased)
 
+### The "to build" list in GOALS.md
+- **Notes that outlast the context** (the Notes tool): given back after
+  every compaction and kept in `<session>.notes.md` next to the transcript.
+- **Checkpoints the model goes back to itself** (the Checkpoint tool):
+  `save` before an approach that may fail, `restore` to put the files
+  changed with the edit tools since back as they were.
+- **Formatting after edits**, opt-in (`verification.format: true`): the
+  edited file is run through its formatter and the result says what moved.
+  Only a file that was already in the formatter's style is touched.
+- **The language server tells only the errors an edit added**
+  (`verification.languageServer`): the file before the edit is the baseline.
+- **Errors that say the next step:** a missing path names the nearest
+  directory and the close names in it; an empty Glob or Grep says what was
+  searched and the usual cause. LS and NotebookEdit return structured
+  results, as every other tool does.
+- `scripts/eval-descriptions.sh` measures a set of tool descriptions against
+  the built-in ones.
+
 ### Three gaps closed from a source comparison with other harnesses
 - **A session killed mid-turn says so when resumed.** The transcript records
   where each turn starts and ends. Resuming one whose last turn never ended

@@ -1,0 +1,11 @@
+{
+  "records": 321,
+  "total_cents": 12588864,
+  "regions": [
+    "east",
+    "north",
+    "south",
+    "west"
+  ],
+  "report": "east: 27777.30\nnorth: 36324.97\nsouth: 31267.39\nwest: 30518.98"
+}

@@ -46,7 +46,11 @@ impl Tool for Ls {
     async fn call(&self, input: Value, ctx: &ToolContext) -> ToolOutput {
         let root = expand_path(str_arg(&input, "path"), &ctx.project_dir);
         if !root.is_dir() {
-            return ToolOutput::error(format!("{} is not a directory", root.display()));
+            return ToolOutput::error(if root.is_file() {
+                format!("{} is a file, not a directory: Read it, or list its directory.", root.display())
+            } else {
+                format!("Directory does not exist: {}.{}", root.display(), crate::missing_path_hint(&root))
+            });
         }
         let mut gb = GlobSetBuilder::new();
         for g in input.get("ignore").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
@@ -61,7 +65,15 @@ impl Tool for Ls {
         if count >= MAX_ENTRIES {
             lines.insert(0, format!("There are more than {MAX_ENTRIES} entries; showing the first {MAX_ENTRIES}. Use Glob or a more specific path.\n"));
         }
-        ToolOutput::text(lines.join("\n"))
+        let truncated = count >= MAX_ENTRIES;
+        if count == 0 {
+            lines.push("  (empty, or everything in it is hidden or ignored)".into());
+        } else if !truncated {
+            lines.push(format!("\n{count} entries."));
+        }
+        ToolOutput::text(lines.join("\n")).with_structured(json!({
+            "path": root, "numEntries": count, "truncated": truncated,
+        }))
     }
 }
 

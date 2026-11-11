@@ -1,0 +1,2 @@
+TIMEOUT_SECONDS = 5
+PROXY = None

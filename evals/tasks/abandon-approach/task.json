@@ -1,0 +1,11 @@
+{
+  "instruction": "`python3 bench.py` reports how many times lookup.find scans the table for 2,000 queries; it must come down to at most 2,000 line reads in total. First try the idea in IDEA.md (a per-prefix cache across store.py, lookup.py and config.py) and run the bench. If the bench still reports more than 2,000, that idea is not good enough: take every part of it out again, so that none of its code, settings or files is left, and solve it another way. `python3 test_lookup.py` must pass.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "long-horizon",
+  "tags": [
+    "python",
+    "checkpoint",
+    "rollback"
+  ],
+  "timeout_secs": 900
+}

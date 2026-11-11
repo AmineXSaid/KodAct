@@ -2747,3 +2747,65 @@ async fn a_turn_cut_off_mid_tool_is_told_on_resume() {
     let sent = serde_json::to_string(&h.provider.requests()[2].messages.last()).unwrap();
     assert!(!sent.contains("did not end"), "{sent}");
 }
+
+/// The model's notes come back after a compaction: whole on a large window, their latest
+/// part with the way to read the rest on a small one.
+#[tokio::test]
+async fn notes_are_given_back_after_compaction_sized_to_the_window() {
+    let h = Harness::new(vec![
+        MockTurn::tool(
+            "Notes",
+            json!({"action": "append", "text": "The parser bug is in lexer.rs: tabs count as one column."}),
+        ),
+        MockTurn::text("working"),
+        MockTurn::text("<summary>Looked at the parser.</summary>"),
+        MockTurn::text("continuing"),
+    ]);
+    let mut e = h.engine();
+    e.submit(prompt("find the bug")).await;
+    e.compact(None).await.unwrap();
+    e.submit(prompt("go on")).await;
+    let t = h.provider.requests()[3].messages[0].text();
+    assert!(t.contains("Your notes") && t.contains("tabs count as one column"), "{t}");
+
+    // Long notes: a large window carries them whole, a small one their end.
+    let long: String = (1..=2_000).map(|i| format!("note {i}: something found\n")).collect();
+    let ctx = e.tool_ctx().clone();
+    kodact_tools::builtin::Notes.call(json!({"action": "replace", "text": long}), &ctx).await;
+    let large = e.notes_context(1_000_000).unwrap();
+    assert!(large.contains("note 1: ") && large.contains("note 2000: ") && !large.contains("left out"));
+    let small = e.notes_context(8_000).unwrap();
+    assert!(
+        small.contains("note 2000: ") && !small.contains("note 1: ") && small.contains("action `read`"),
+        "{}",
+        &small[..200]
+    );
+    assert!(small.len() < large.len() / 5);
+}
+
+/// With `verification.format`, an edit to a file that was formatted is formatted too, the
+/// result says what moved, and the next edit needs no new read.
+#[tokio::test]
+async fn an_edit_to_a_formatted_file_is_formatted_and_the_result_says_so() {
+    if std::process::Command::new("tr").arg("a").arg("a").stdin(std::process::Stdio::null()).output().is_err() {
+        return;
+    }
+    let h = Harness::new(vec![]);
+    let cwd = h.cwd();
+    std::fs::create_dir_all(&cwd).unwrap();
+    let f = cwd.join("a.zz");
+    std::fs::write(&f, "ONE\nTWO\n").unwrap();
+    h.provider.push(MockTurn::tool("Read", json!({"file_path": f})));
+    h.provider.push(MockTurn::tool("Edit", json!({"file_path": f, "old_string": "TWO", "new_string": "two\nthree"})));
+    h.provider.push(MockTurn::tool("Edit", json!({"file_path": f, "old_string": "THREE", "new_string": "FOUR"})));
+    h.provider.push(MockTurn::text("done"));
+    let formatters = crate::format::FormatConfig::from_settings(Some(true), Some(&json!({"zz": ["tr", "a-z", "A-Z"]})));
+    let cfg = EngineConfig { formatters, ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("edit it")).await;
+    let res = tool_results(&e);
+    assert!(res[1].1.contains("tr reformatted a.zz") && res[1].1.contains("THREE"), "{res:?}");
+    assert!(!res[2].2 && !res[2].1.contains("reformatted"), "the second edit was formatted already: {res:?}");
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "ONE\nTWO\nFOUR\n");
+    assert!(h.transcript_text().contains("\"formatted\""));
+}

@@ -138,6 +138,10 @@ API key and about an hour of model time. From the repository root:
    HEAD's tasks on each with the same model, window and arguments, and prints this
    table. Each side's directory records the commit and the window in `ab.txt`.
 
+   `scripts/eval-descriptions.sh --prompts <dir> --repeat 3 -- --model sonnet --dangerously-skip-permissions`
+   compares one build with and without a set of tool descriptions (`<dir>/tools/<ToolName>.md`),
+   which is how a description is tuned: it is kept only if the table says so.
+
 **Reading the A/B report.** `compare` prints one table: pass rate, cost per
 task, turns per task, wall time, false-finish rate (the agent said it was
 done but the check failed), invalid-call rate (tool calls that errored) and

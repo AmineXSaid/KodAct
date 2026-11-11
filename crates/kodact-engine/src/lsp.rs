@@ -162,6 +162,8 @@ fn errors_of(file: &Path, diagnostics: &Value) -> Vec<Problem> {
 pub(crate) struct Report {
     pub server: String,
     pub problems: Vec<Problem>,
+    /// The errors from before the edit were known and are left out: these are new.
+    pub new_only: bool,
 }
 
 impl Report {
@@ -182,10 +184,21 @@ impl Report {
             0 => String::new(),
             n => format!("(and {n} more)\n"),
         };
+        let (what, advice) = if self.new_only {
+            (
+                " that it did not report before it",
+                "Fix them before going on, unless a later edit you already planned resolves them.",
+            )
+        } else {
+            (
+                "",
+                "Fix what this change caused before going on. An error that was there before it, or that a later \
+                 edit you already planned resolves, needs nothing now.",
+            )
+        };
         format!(
-            "\n\n<system-reminder>\nAfter this change, the language server ({}) reports {} error{}:\n{body}{more}\
-             Fix what this change caused before going on. An error that was there before it, or that a later \
-             edit you already planned resolves, needs nothing now.\n</system-reminder>",
+            "\n\n<system-reminder>\nAfter this change, the language server ({}) reports {} error{}{what}:\n\
+             {body}{more}{advice}\n</system-reminder>",
             self.server,
             self.problems.len(),
             if self.problems.len() == 1 { "" } else { "s" },
@@ -408,11 +421,14 @@ pub(crate) struct Manager {
     /// Per extension: the running server, or `None` once none could be started or one stopped
     /// answering (it is not tried again this session).
     by_ext: tokio::sync::Mutex<HashMap<String, Option<Arc<Client>>>>,
+    /// The error messages last reported for each file: the baseline the next edit is compared
+    /// with, so an error that was already there is not told again with every edit.
+    known: Mutex<HashMap<PathBuf, Vec<String>>>,
 }
 
 impl Manager {
     pub fn new(cfg: LspConfig, root: PathBuf) -> Self {
-        Manager { cfg, root, by_ext: Default::default() }
+        Manager { cfg, root, by_ext: Default::default(), known: Default::default() }
     }
 
     pub fn config(&self) -> &LspConfig {
@@ -442,18 +458,63 @@ impl Manager {
         started
     }
 
-    /// The errors a language server reports for `path` as it is on disk now. `None` when no
-    /// server serves it, it has none, or the server did not answer in time.
-    pub async fn check(&self, path: &Path) -> Option<Report> {
+    /// Record `problems` as what is known of their files (and of `path`, which may have none),
+    /// and return the ones that were not known: per file, by message, since an edit moves
+    /// lines; one more of a message that was there twice is new once.
+    fn take_new(&self, path: &Path, problems: Vec<Problem>) -> Vec<Problem> {
+        let mut known = self.known.lock().unwrap();
+        let mut now: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        now.insert(path.to_path_buf(), vec![]);
+        let mut left: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        let mut new = vec![];
+        for p in problems {
+            now.entry(p.file.clone()).or_default().push(p.message.clone());
+            let before = left.entry(p.file.clone()).or_insert_with(|| known.get(&p.file).cloned().unwrap_or_default());
+            match before.iter().position(|m| *m == p.message) {
+                Some(i) => {
+                    before.swap_remove(i);
+                }
+                None => new.push(p),
+            }
+        }
+        known.extend(now);
+        new
+    }
+
+    /// The errors a language server reports for `path` as it is on disk now, without those it
+    /// reported before the edit. `original` is the file's text before the edit, when the tool
+    /// gave it: the baseline for a file the server has not been shown yet (an empty one is a
+    /// new file, with nothing before). `None` when no server serves the file, the edit added
+    /// no error, or the server did not answer in time.
+    pub async fn check(&self, path: &Path, original: Option<&str>) -> Option<Report> {
         let ext = path.extension().and_then(|e| e.to_str())?.to_ascii_lowercase();
         if !self.cfg.servers.iter().any(|s| s.extensions.contains(&ext)) {
             return None;
         }
         let text = tokio::fs::read_to_string(path).await.ok()?;
         let client = self.client_for(&ext).await?;
-        match client.diagnose(path, &text, self.cfg.wait).await {
+        let seen = self.known.lock().unwrap().contains_key(path);
+        let mut new_only = seen;
+        let mut answer = Some(vec![]);
+        if !seen {
+            match original {
+                Some("") => new_only = true,
+                Some(before) => {
+                    answer = client.diagnose(path, before, self.cfg.wait).await;
+                    if let Some(problems) = answer.clone() {
+                        self.take_new(path, problems);
+                        new_only = true;
+                    }
+                }
+                None => {}
+            }
+        }
+        if answer.is_some() {
+            answer = client.diagnose(path, &text, self.cfg.wait).await;
+        }
+        match answer.map(|problems| self.take_new(path, problems)) {
             Some(problems) if problems.is_empty() => None,
-            Some(problems) => Some(Report { server: client.name.clone(), problems }),
+            Some(problems) => Some(Report { server: client.name.clone(), problems, new_only }),
             None => {
                 // No answer in time: a server still indexing, or stuck. Each edit would wait
                 // again for nothing, so it is left alone for the rest of the session.
@@ -501,13 +562,13 @@ pub(crate) mod tests {
         let problems: Vec<Problem> = (1..=50)
             .map(|i| Problem { file: "/p/src/a.rs".into(), line: i, column: 1, message: format!("error number {i}") })
             .collect();
-        let r = Report { server: "rust-analyzer".into(), problems };
+        let r = Report { server: "rust-analyzer".into(), problems, new_only: false };
         let small = r.text(Path::new("/p"), 200);
         assert!(small.contains("reports 50 errors") && small.contains("src/a.rs:1:1: error number 1"), "{small}");
         assert!(small.contains("more)") && !small.contains("error number 50"), "{small}");
         let large = r.text(Path::new("/p"), 100_000);
         assert!(large.contains("error number 50") && !large.contains("more)"));
-        let one = Report { server: "gopls".into(), problems: r.problems[..1].to_vec() };
+        let one = Report { server: "gopls".into(), problems: r.problems[..1].to_vec(), new_only: false };
         assert!(one.text(Path::new("/p"), 10).contains("reports 1 error:"), "one is always shown");
     }
 
@@ -581,19 +642,19 @@ while True:
             let m = Manager::new(cfg, dir.path().to_path_buf());
             let f = dir.path().join("a.zz");
             std::fs::write(&f, "ok\n").unwrap();
-            assert_eq!(m.check(&f).await, None, "{mode}: a clean file adds nothing");
+            assert_eq!(m.check(&f, None).await, None, "{mode}: a clean file adds nothing");
             std::fs::write(&f, "ok\n\n    BROKEN\n").unwrap();
-            let r = m.check(&f).await.unwrap_or_else(|| panic!("{mode}: no report"));
+            let r = m.check(&f, None).await.unwrap_or_else(|| panic!("{mode}: no report"));
             assert_eq!(r.problems.len(), 1, "{mode}: the warning is left out");
             assert_eq!((r.problems[0].line, r.problems[0].column), (3, 5));
             assert!(r.text(dir.path(), 2_000).contains("a.zz:3:5: name BROKEN is not defined"));
             // Fixed again: the server is told the new text and reports nothing.
             std::fs::write(&f, "ok\n").unwrap();
-            assert_eq!(m.check(&f).await, None, "{mode}: fixed");
+            assert_eq!(m.check(&f, None).await, None, "{mode}: fixed");
             // A file no server serves is not looked at.
             let other = dir.path().join("a.txt");
             std::fs::write(&other, "BROKEN").unwrap();
-            assert_eq!(m.check(&other).await, None);
+            assert_eq!(m.check(&other, None).await, None);
         }
     }
 
@@ -611,16 +672,48 @@ while True:
             wait: Duration::from_millis(200),
         };
         let m = Manager::new(missing, dir.path().to_path_buf());
-        assert_eq!(m.check(&f).await, None);
-        assert_eq!(m.check(&f).await, None);
+        assert_eq!(m.check(&f, None).await, None);
+        assert_eq!(m.check(&f, None).await, None);
         // Starts, then never answers: the first edit waits, the next ones don't.
         let Some(cfg) = fake(dir.path(), "slow", 300) else { return };
         let m = Manager::new(cfg, dir.path().to_path_buf());
         let t = std::time::Instant::now();
-        assert_eq!(m.check(&f).await, None);
+        assert_eq!(m.check(&f, None).await, None);
         assert!(t.elapsed() >= Duration::from_millis(250));
         let t = std::time::Instant::now();
-        assert_eq!(m.check(&f).await, None);
+        assert_eq!(m.check(&f, None).await, None);
         assert!(t.elapsed() < Duration::from_millis(200), "not asked again: {:?}", t.elapsed());
+    }
+
+    /// An error the file already had is not told again with every edit: the text before the
+    /// edit is the baseline, and after that what the server last said.
+    #[tokio::test]
+    async fn only_the_errors_an_edit_added_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for mode in ["push", "pull"] {
+            let Some(cfg) = fake(&root, mode, 3000) else { return };
+            let m = Manager::new(cfg, root.clone());
+            // Broken before the edit and after it: nothing new.
+            let old = root.join(format!("old-{mode}.zz"));
+            std::fs::write(&old, "BROKEN\nand one more line\n").unwrap();
+            assert_eq!(m.check(&old, Some("BROKEN\n")).await, None, "{mode}");
+            assert_eq!(m.check(&old, None).await, None, "{mode}: still the same error");
+            // Fine before, broken by the edit: told, as new.
+            let f = root.join(format!("new-{mode}.zz"));
+            std::fs::write(&f, "x\ny\nBROKEN\n").unwrap();
+            let r = m.check(&f, Some("x\ny\n")).await.unwrap_or_else(|| panic!("{mode}: no report"));
+            assert!(r.new_only && r.problems.len() == 1, "{r:?}");
+            assert!(r.text(&root, 2_000).contains("that it did not report before it"));
+            // A file created broken has nothing before it, and costs no baseline pass.
+            let made = root.join(format!("made-{mode}.zz"));
+            std::fs::write(&made, "BROKEN").unwrap();
+            assert!(m.check(&made, Some("")).await.unwrap().new_only, "{mode}");
+            // No text from before (unknown): everything is told, and said to be possibly old.
+            let unknown = root.join(format!("unknown-{mode}.zz"));
+            std::fs::write(&unknown, "BROKEN").unwrap();
+            let r = m.check(&unknown, None).await.unwrap();
+            assert!(!r.new_only && r.text(&root, 2_000).contains("was there before"), "{mode}");
+        }
     }
 }

@@ -80,6 +80,8 @@ Test names are `<crate or file>::<test>`; `e2e` is `crates/kodact-cli/tests/e2e.
 | Grep | done | `builtin::glob_and_grep` |  |
 | LS | done | `builtin::ls_lists_tree` |  |
 | TodoWrite | done | `builtin::todo_write_validates_and_stores` |  |
+| Notes (KodAct extension) | done | `builtin::notes_append_replace_and_outlast_the_process`, `engine::notes_are_given_back_after_compaction_sized_to_the_window` | `append`, `replace`, `read`; kept in `<session>.notes.md` next to the transcript and re-attached after compaction |
+| Checkpoint (KodAct extension) | done | `builtin::checkpoint_restores_the_files_edited_since` | `save`, `restore`, `list`; restores files changed with the edit tools, not by shell commands; `restore` asks permission as an edit does; in memory only |
 | Task / Agent | done | `agents::explore_agent_reports_back_in_its_own_context`, `agents::parallel_agents_run_concurrently` | Named `Task` |
 | WebFetch | done | `builtin::web_fetch_converts_summarizes_and_reports_redirects`, `web::urls_are_upgraded_and_metadata_hosts_refused`, `html::converts_a_typical_page` | HTML to Markdown, small-model answer to `prompt`, cross-host redirects reported, metadata hosts blocked, 15 min cache, 10 MB cap |
 | WebSearch | done | `builtin::web_fetch_converts_summarizes_and_reports_redirects`, `web::search_results_list_their_sources` | Through the provider's `web_search_20250305` server tool (`webSearch.toolType` overrides); not offered with OpenAI-compatible providers. No live test |

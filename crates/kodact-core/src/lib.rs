@@ -296,6 +296,19 @@ pub(crate) fn edit_diagnostics(settings: &LoadedSettings, verifying: bool) -> bo
     verifying && settings.bool("/verification/syntaxCheck") != Some(false)
 }
 
+/// Formatting after edits: off unless `verification.format` is true (and the verification
+/// loop is on). `verification.formatters` maps file extensions to a command that formats
+/// stdin to stdout (`{"py": ["black", "-q", "-"]}`), used instead of the built-in ones.
+pub(crate) fn formatters(settings: &LoadedSettings, verifying: bool) -> Option<kodact_engine::format::FormatConfig> {
+    if !verifying {
+        return None;
+    }
+    kodact_engine::format::FormatConfig::from_settings(
+        settings.bool("/verification/format"),
+        settings.get("/verification/formatters"),
+    )
+}
+
 /// Language-server diagnostics after edits: off unless `verification.languageServer` is true
 /// (and the verification loop is on). `verification.languageServers` maps file extensions to a
 /// server's command (`{"py": ["pylsp"]}`), tried before the built-in table;
@@ -1073,6 +1086,7 @@ pub fn build_session(
         is_subagent: false,
         edit_diagnostics: edit_diagnostics(&settings, verify.is_some()),
         language_servers: language_servers(&settings, verify.is_some()),
+        formatters: formatters(&settings, verify.is_some()),
         one_shot: opts.one_shot,
         verify,
         escalate_output: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").is_none(),

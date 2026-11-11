@@ -454,6 +454,7 @@ fn apply_key(d: &mut Driver, name: &str, value: &Option<Value>) -> Result<Option
             };
             d.engine.cfg.edit_diagnostics = crate::edit_diagnostics(&settings, d.engine.cfg.verify.is_some());
             d.engine.cfg.language_servers = crate::language_servers(&settings, d.engine.cfg.verify.is_some());
+            d.engine.cfg.formatters = crate::formatters(&settings, d.engine.cfg.verify.is_some());
             // The prompt's "run these checks" line follows.
             d.prompt.env.checks = d.engine.cfg.verify.as_ref().map(|v| v.commands.clone()).unwrap_or_default();
             d.rebuild_system();
