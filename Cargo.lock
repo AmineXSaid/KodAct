@@ -1457,6 +1457,7 @@ dependencies = [
  "futures",
  "globset",
  "ignore",
+ "kodact-git",
  "kodact-permissions",
  "kodact-platform",
  "kodact-types",

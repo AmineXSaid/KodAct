@@ -424,11 +424,21 @@ pub(crate) struct Manager {
     /// The error messages last reported for each file: the baseline the next edit is compared
     /// with, so an error that was already there is not told again with every edit.
     known: Mutex<HashMap<PathBuf, Vec<String>>>,
+    /// A hash of the text each file had when it was last checked: a file that differs from
+    /// it was changed by something else (a shell command), and is checked again.
+    checked: Mutex<HashMap<PathBuf, u64>>,
+}
+
+fn text_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
 }
 
 impl Manager {
     pub fn new(cfg: LspConfig, root: PathBuf) -> Self {
-        Manager { cfg, root, by_ext: Default::default(), known: Default::default() }
+        Manager { cfg, root, by_ext: Default::default(), known: Default::default(), checked: Default::default() }
     }
 
     pub fn config(&self) -> &LspConfig {
@@ -481,6 +491,22 @@ impl Manager {
         new
     }
 
+    /// After a shell command: the files this session already had checked whose text is no
+    /// longer what was checked (`sed -i`, a code generator, `git checkout`), each checked
+    /// again against what the server last said of it. Only those files: the command's other
+    /// output is its own business, and the project's checks cover it.
+    pub async fn check_changed(&self) -> Vec<Report> {
+        let before: Vec<(PathBuf, u64)> = self.checked.lock().unwrap().iter().map(|(p, h)| (p.clone(), *h)).collect();
+        let mut out = vec![];
+        for (path, hash) in before {
+            let Ok(text) = tokio::fs::read_to_string(&path).await else { continue };
+            if text_hash(&text) != hash {
+                out.extend(self.check(&path, None).await);
+            }
+        }
+        out
+    }
+
     /// The errors a language server reports for `path` as it is on disk now, without those it
     /// reported before the edit. `original` is the file's text before the edit, when the tool
     /// gave it: the baseline for a file the server has not been shown yet (an empty one is a
@@ -493,6 +519,7 @@ impl Manager {
         }
         let text = tokio::fs::read_to_string(path).await.ok()?;
         let client = self.client_for(&ext).await?;
+        self.checked.lock().unwrap().insert(path.to_path_buf(), text_hash(&text));
         let seen = self.known.lock().unwrap().contains_key(path);
         let mut new_only = seen;
         let mut answer = Some(vec![]);
@@ -715,5 +742,28 @@ while True:
             let r = m.check(&unknown, None).await.unwrap();
             assert!(!r.new_only && r.text(&root, 2_000).contains("was there before"), "{mode}");
         }
+    }
+
+    /// A shell command that rewrites a file the session already had checked gets the same
+    /// check as an edit; files it left alone, or never seen here, are not looked at.
+    #[tokio::test]
+    async fn files_a_shell_command_changed_are_checked_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let Some(cfg) = fake(&root, "push", 3000) else { return };
+        let m = Manager::new(cfg, root.clone());
+        let (a, b, unseen) = (root.join("a.zz"), root.join("b.zz"), root.join("unseen.zz"));
+        std::fs::write(&a, "fine\n").unwrap();
+        std::fs::write(&b, "fine\n").unwrap();
+        assert_eq!(m.check(&a, Some("")).await, None);
+        assert_eq!(m.check(&b, Some("")).await, None);
+        assert!(m.check_changed().await.is_empty(), "nothing changed");
+        // As `sed -i` would.
+        std::fs::write(&a, "now BROKEN\n").unwrap();
+        std::fs::write(&unseen, "BROKEN\n").unwrap();
+        let reports = m.check_changed().await;
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert!(reports[0].new_only && reports[0].problems[0].file == a, "{reports:?}");
+        assert!(m.check_changed().await.is_empty(), "told once");
     }
 }

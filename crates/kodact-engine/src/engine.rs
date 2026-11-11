@@ -3165,6 +3165,25 @@ impl Engine {
         // large one.
         let room = usize::try_from(self.context_window(model) / 50).unwrap_or(usize::MAX).clamp(1_500, 20_000);
         for ((_, name, input), r) in calls.iter().zip(results.iter_mut()) {
+            // A shell command that rewrote a file the server already knows: checked as an edit
+            // of it would be.
+            if name == "Bash" && r.denial.is_none() {
+                let read_only = self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true);
+                if let (false, Some(servers)) = (read_only, &servers) {
+                    for report in servers.check_changed().await {
+                        self.system_event(
+                            "diagnostics",
+                            json!({"server": report.server, "errors": report.problems.len(), "after": "Bash"}),
+                        );
+                        let text = report.text(&root, room);
+                        match &mut r.output.content {
+                            kodact_types::ToolResultContent::Text(s) => s.push_str(&text),
+                            kodact_types::ToolResultContent::Blocks(b) => b.push(ContentBlock::text(text.trim_start())),
+                        }
+                    }
+                }
+                continue;
+            }
             if !matches!(name.as_str(), "Edit" | "MultiEdit" | "Write") || r.output.is_error || r.denial.is_some() {
                 continue;
             }

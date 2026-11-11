@@ -153,8 +153,11 @@ Each pillar lists what KodAct does about it and what shows that it works.
     formatter's style before the edit is touched, so a project that doesn't
     use the formatter is never rewritten by it (task `format-after-edit`);
   - `/goal`'s check is told the same record (`HARNESS:` line).
-- **To build:** language-server errors and formatting for what shell
-  commands change, not only the edit tools.
+  - a file a shell command rewrote (`sed -i`, a generator, `git checkout`)
+    gets the language server's check too, when the session had already had it
+    checked: told with the command's result. Formatting is not applied to
+    what a command wrote: its output is its own, and the project's checks
+    cover it.
 - **Measured by:** false-finish rate and pass rate (tasks `fix-median`,
   `slugify-trap`, `invoice-rounding`).
 
@@ -227,12 +230,14 @@ Each pillar lists what KodAct does about it and what shows that it works.
     next to the transcript (`<session>.notes.md`), so a resumed session and
     the person have it (task `notes-across-compaction`);
   - checkpoints the model rolls back to itself (the Checkpoint tool): `save`
-    before an approach that may fail, `restore` to put every file changed
-    with the edit tools since back as it was and remove the ones created,
-    instead of undoing edits one by one (task `abandon-approach`).
-- **To build:**
-  - checkpoints that also cover what shell commands change, and that
-    outlast the process.
+    before an approach that may fail, `restore` to put the files back as
+    they were and remove the ones created since, instead of undoing changes
+    one by one (task `abandon-approach`). In a git repository a checkpoint
+    is the whole working tree (every file git does not ignore), kept under a
+    ref of the session's own: it covers what shell commands changed, leaves
+    the index and the branches alone, and a resumed session still has it.
+    Outside a repository it covers the files changed with the edit tools,
+    for the run of the session.
 - **Measured by:** pass rate on multi-step tasks, and success after a resume.
 
 ## Priority order

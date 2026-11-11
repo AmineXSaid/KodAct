@@ -792,3 +792,55 @@ async fn notebook_edit_names_the_cells_it_has_and_returns_a_structured_result() 
     let st = out.structured.unwrap();
     assert_eq!((st["editMode"].as_str(), st["numCells"].as_u64()), (Some("replace"), Some(2)));
 }
+
+/// In a git repository a checkpoint is the whole working tree: what a shell command changed
+/// comes back too, the index is left alone, and another process on the session still has it.
+#[tokio::test]
+async fn checkpoint_in_a_repository_covers_shell_changes_and_outlasts_the_process() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().canonicalize().unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git").args(args).current_dir(&root).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("a.txt"), "a0\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "start"]);
+    let mut c = ctx(&root);
+    c.session_id = "sess-1".into();
+
+    Checkpoint.call(json!({"action": "save", "label": "before sed"}), &c).await;
+    // Not through the edit tools: as a shell command would.
+    std::fs::write(root.join("a.txt"), "rewritten by a script\n").unwrap();
+    std::fs::write(root.join("generated.txt"), "g\n").unwrap();
+    let listed = Checkpoint.call(json!({"action": "list"}), &c).await.text_content();
+    assert_eq!(listed, "- before sed: 2 file(s) changed since");
+
+    // Another process resuming the session.
+    let mut resumed = ctx(&root);
+    resumed.session_id = "sess-1".into();
+    assert!(Checkpoint
+        .validate(&json!({"action": "save", "label": "before sed"}), &resumed)
+        .unwrap_err()
+        .contains("exists already"));
+    Checkpoint.call(json!({"action": "save", "label": "later"}), &resumed).await;
+    let out = Checkpoint.call(json!({"action": "restore", "label": "before sed"}), &resumed).await;
+    let said = out.text_content();
+    assert!(!out.is_error && said.contains("Put back") && said.contains("generated.txt"), "{said}");
+    assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "a0\n");
+    assert!(!root.join("generated.txt").exists());
+    assert_eq!(git(&["status", "--porcelain"]), "", "the tree is as committed, and nothing was staged");
+    assert_eq!(
+        Checkpoint.call(json!({"action": "list"}), &resumed).await.text_content(),
+        "- before sed: 0 file(s) changed since"
+    );
+    // Another session in the same repository has its own.
+    let mut other = ctx(&root);
+    other.session_id = "sess-2".into();
+    assert!(Checkpoint
+        .validate(&json!({"action": "restore", "label": "before sed"}), &other)
+        .unwrap_err()
+        .contains("No checkpoint"));
+}

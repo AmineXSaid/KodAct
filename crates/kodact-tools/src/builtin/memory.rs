@@ -154,6 +154,45 @@ impl Checkpoints {
     }
 }
 
+/// In a git repository a checkpoint is the whole working tree, kept under a ref of the
+/// session's own (`refs/kodact/checkpoints/<session>/<n>`, the label as its subject): it
+/// covers what shell commands changed too, and a resumed session still has it. The index,
+/// HEAD and the branches are never touched.
+struct GitCheckpoints {
+    repo: PathBuf,
+    prefix: String,
+}
+
+impl GitCheckpoints {
+    fn of(ctx: &ToolContext) -> Option<Self> {
+        let repo = kodact_git::repo_root(&ctx.project_dir)?;
+        let session = if ctx.session_id.is_empty() { "local" } else { ctx.session_id.as_str() };
+        Some(GitCheckpoints { repo, prefix: format!("refs/kodact/checkpoints/{session}/") })
+    }
+
+    /// `(ref, label)`, oldest first.
+    fn list(&self) -> Vec<(String, String)> {
+        kodact_git::refs_under(&self.repo, &self.prefix)
+    }
+
+    fn save(&self, label: &str) -> Result<(), String> {
+        let next = self.list().last().and_then(|(r, _)| r.rsplit('/').next()?.parse::<u32>().ok()).unwrap_or(0) + 1;
+        kodact_git::save_worktree(&self.repo, &format!("{}{next:04}", self.prefix), label)
+    }
+}
+
+/// The checkpoints a call can name: git's in a repository, the in-memory ones elsewhere.
+fn known_labels(ctx: &ToolContext) -> Vec<String> {
+    match GitCheckpoints::of(ctx) {
+        Some(g) => g.list().into_iter().map(|(_, l)| l).collect(),
+        None => ctx.checkpoints.labels().into_iter().map(|(l, _)| l).collect(),
+    }
+}
+
+fn shown(paths: &[PathBuf]) -> Vec<String> {
+    paths.iter().map(|p| p.display().to_string()).collect()
+}
+
 pub struct Checkpoint;
 
 #[async_trait::async_trait]
@@ -163,13 +202,14 @@ impl Tool for Checkpoint {
     }
 
     fn description(&self) -> String {
-        "Save a point you can bring your file changes back to, and go back to it. `save` (with a short \
+        "Save a point you can bring the project's files back to, and go back to it. `save` (with a short \
          `label`) before trying something you may want to undo: a risky refactor, one of several approaches. \
-         `restore` puts every file you changed with Edit, MultiEdit, Write or NotebookEdit since that \
-         checkpoint back as it was then (files you created since are removed), and drops the checkpoints \
-         saved after it. `list` shows them. Use it instead of undoing edits one by one when an approach \
-         fails. It does not undo what shell commands changed, and checkpoints last only for this run of \
-         the session; commits are for work to keep."
+         `restore` puts the files back as they were at that checkpoint (files created since are removed) \
+         and drops the checkpoints saved after it. `list` shows them. Use it instead of undoing changes one \
+         by one when an approach fails. In a git repository it covers every file git does not ignore, \
+         whatever changed it (your edits, shell commands), without touching the index or any branch, and a \
+         resumed session still has its checkpoints. Outside one it covers the files you change with Edit, \
+         MultiEdit, Write or NotebookEdit, for this run of the session. Commits are for work to keep."
             .into()
     }
 
@@ -201,19 +241,19 @@ impl Tool for Checkpoint {
     fn validate(&self, input: &Value, ctx: &ToolContext) -> Result<(), String> {
         crate::validate_required(&self.input_schema(), input)?;
         let label = str_arg(input, "label").trim();
-        let known = ctx.checkpoints.labels();
+        let known = known_labels(ctx);
         let names = || match known.is_empty() {
-            true => "No checkpoint has been saved in this run of the session.".to_string(),
-            false => format!("Saved: {}.", known.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>().join(", ")),
+            true => "No checkpoint has been saved in this session.".to_string(),
+            false => format!("Saved: {}.", known.join(", ")),
         };
         match str_arg(input, "action") {
             "list" => Ok(()),
             "save" | "restore" if label.is_empty() => Err("`label` is required for save and restore.".into()),
-            "save" if known.iter().any(|(l, _)| l == label) => {
+            "save" if known.iter().any(|l| l == label) => {
                 Err(format!("A checkpoint named {label:?} exists already; pick another label. {}", names()))
             }
             "save" => Ok(()),
-            "restore" if known.iter().any(|(l, _)| l == label) => Ok(()),
+            "restore" if known.iter().any(|l| l == label) => Ok(()),
             "restore" => Err(format!("No checkpoint named {label:?}. {}", names())),
             other => Err(format!("Unknown action {other:?}: use save, restore or list.")),
         }
@@ -221,6 +261,9 @@ impl Tool for Checkpoint {
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> ToolOutput {
         let label = str_arg(&input, "label").trim().to_string();
+        if let Some(git) = GitCheckpoints::of(ctx) {
+            return git_call(&git, str_arg(&input, "action"), &label, ctx);
+        }
         match str_arg(&input, "action") {
             "save" => {
                 ctx.checkpoints.saved.lock().unwrap().push(Saved {
@@ -297,7 +340,7 @@ impl Tool for Checkpoint {
             _ => {
                 let known = ctx.checkpoints.labels();
                 let text = if known.is_empty() {
-                    "No checkpoint has been saved in this run of the session.".to_string()
+                    "No checkpoint has been saved in this session.".to_string()
                 } else {
                     known
                         .iter()
@@ -310,6 +353,86 @@ impl Tool for Checkpoint {
                     "checkpoints": known.iter().map(|(l, n)| json!({"label": l, "filesChanged": n})).collect::<Vec<_>>(),
                 }))
             }
+        }
+    }
+}
+
+fn git_call(git: &GitCheckpoints, action: &str, label: &str, ctx: &ToolContext) -> ToolOutput {
+    match action {
+        "save" => match git.save(label) {
+            Ok(()) => ToolOutput::text(format!(
+                "Checkpoint {label:?} saved: every file git does not ignore, as it is now. `restore` brings \
+                 them back, whatever changes them from here on."
+            ))
+            .with_structured(json!({"action": "save", "label": label})),
+            Err(e) => ToolOutput::error(format!("Could not save the checkpoint: {e}")),
+        },
+        "restore" => {
+            let all = git.list();
+            let Some(at) = all.iter().position(|(_, l)| l == label) else {
+                return ToolOutput::error(format!("No checkpoint named {label:?}."));
+            };
+            let saved = &all[at].0;
+            let (restore, remove) = match kodact_git::worktree_changes_since(&git.repo, saved) {
+                Ok(c) => c,
+                Err(e) => return ToolOutput::error(format!("Could not compare with the checkpoint: {e}")),
+            };
+            // The person's own checkpoints (rewind) see this as one more write of each file.
+            for p in restore.iter().chain(&remove) {
+                ctx.checkpoint(p);
+            }
+            if let Err(e) = kodact_git::restore_worktree(&git.repo, saved, &restore, &remove) {
+                return ToolOutput::error(format!("Could not restore checkpoint {label:?}: {e}"));
+            }
+            for p in restore.iter().chain(&remove) {
+                // What the model last read of it is no longer what is there.
+                ctx.files.forget(p);
+            }
+            for (later, _) in &all[at + 1..] {
+                let _ = kodact_git::delete_ref(&git.repo, later);
+            }
+            let (restored, removed) = (shown(&restore), shown(&remove));
+            let mut text = if restored.is_empty() && removed.is_empty() {
+                format!("Nothing to restore: no file differs from checkpoint {label:?}.")
+            } else {
+                format!("Restored to checkpoint {label:?}.")
+            };
+            for (what, list) in [("Put back", &restored), ("Removed (created since)", &removed)] {
+                if !list.is_empty() {
+                    let more = if list.len() > 40 { format!(" (and {} more)", list.len() - 40) } else { String::new() };
+                    text.push_str(&format!(
+                        "\n{what}: {}{more}",
+                        list.iter().take(40).cloned().collect::<Vec<_>>().join(", ")
+                    ));
+                }
+            }
+            if !restored.is_empty() {
+                text.push_str("\nRead a restored file again before editing it.");
+            }
+            text.push_str("\nFiles git ignores (build output, installed packages) are as they were left.");
+            ToolOutput::text(text).with_structured(
+                json!({"action": "restore", "label": label, "restored": restored, "removed": removed, "failed": []}),
+            )
+        }
+        _ => {
+            let all = git.list();
+            let rows: Vec<(String, usize)> = all
+                .iter()
+                .map(|(r, l)| {
+                    let n =
+                        kodact_git::worktree_changes_since(&git.repo, r).map(|(a, b)| a.len() + b.len()).unwrap_or(0);
+                    (l.clone(), n)
+                })
+                .collect();
+            let text = if rows.is_empty() {
+                "No checkpoint has been saved in this session.".to_string()
+            } else {
+                rows.iter().map(|(l, n)| format!("- {l}: {n} file(s) changed since")).collect::<Vec<_>>().join("\n")
+            };
+            ToolOutput::text(text).with_structured(json!({
+                "action": "list",
+                "checkpoints": rows.iter().map(|(l, n)| json!({"label": l, "filesChanged": n})).collect::<Vec<_>>(),
+            }))
         }
     }
 }

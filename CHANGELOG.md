@@ -6,13 +6,17 @@
 - **Notes that outlast the context** (the Notes tool): given back after
   every compaction and kept in `<session>.notes.md` next to the transcript.
 - **Checkpoints the model goes back to itself** (the Checkpoint tool):
-  `save` before an approach that may fail, `restore` to put the files
-  changed with the edit tools since back as they were.
+  `save` before an approach that may fail, `restore` to put the files back
+  as they were. In a git repository a checkpoint is the whole working tree,
+  shell changes included, kept under `refs/kodact/checkpoints/` without
+  touching the index or a branch, and it survives a resume.
 - **Formatting after edits**, opt-in (`verification.format: true`): the
   edited file is run through its formatter and the result says what moved.
   Only a file that was already in the formatter's style is touched.
 - **The language server tells only the errors an edit added**
   (`verification.languageServer`): the file before the edit is the baseline.
+  A file a shell command rewrote is checked too, when the session had
+  already had it checked.
 - **Errors that say the next step:** a missing path names the nearest
   directory and the close names in it; an empty Glob or Grep says what was
   searched and the usual cause. LS and NotebookEdit return structured
