@@ -23,6 +23,8 @@ minutes). Ctrl-C stops watching; the run itself isn't affected.
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -216,6 +218,68 @@ def newest_job() -> Path:
     return max(jobs, key=lambda p: p.stat().st_mtime)
 
 
+# The agent's logs as KodAct writes them in the container (see kodact_agent.py).
+LIVE_LOGS = ["kodact.jsonl", "kodact.stderr.txt"]
+DOCKER = shutil.which("docker")
+_containers: dict[Path, str | None] = {}
+
+
+def container(trial: Path) -> str | None:
+    """The running container of a trial: Harbor names its compose project `<trial>__env`
+    (lower case) and the task's container is the service `main`."""
+    if trial not in _containers or _containers[trial] is None:
+        project = re.sub(r"[^a-z0-9_-]", "-", f"{trial.name}__env".lower())
+        try:
+            out = subprocess.run(
+                [DOCKER, "ps", "-q", "--filter", f"label=com.docker.compose.project={project}",
+                 "--filter", "label=com.docker.compose.service=main"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            out = []
+        _containers[trial] = out[0] if out else None
+    return _containers[trial]
+
+
+def read_from(log: Path, offset: int) -> bytes | None:
+    """What a log has past `offset`, or None when there is nothing new or it can't be read.
+    While a trial runs, Harbor's bind-mounted logs belong to the container's user and this
+    machine's can't read them, so they are read from inside the container."""
+    try:
+        if log.stat().st_size <= offset:
+            return None
+        with log.open("rb") as f:
+            f.seek(offset)
+            return f.read()
+    except PermissionError:
+        pass
+    except FileNotFoundError:
+        if not DOCKER:
+            return None
+    trial = log.parent.parent
+    if not DOCKER or (trial / "result.json").exists() or not (cid := container(trial)):
+        return None
+    try:
+        r = subprocess.run(
+            [DOCKER, "exec", cid, "sh", "-c", f'tail -c +{offset + 1} "/logs/agent/{log.name}" 2>/dev/null'],
+            capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        _containers[trial] = None  # gone, or not yet up: look it up again next time
+    return r.stdout or None
+
+
+def size_of(log: Path) -> int:
+    """A log's size now, from here or from the trial's container."""
+    try:
+        return log.stat().st_size
+    except OSError:
+        data = read_from(log, 0)
+        return len(data) if data else 0
+
+
 def trial_error(trial: Path) -> str:
     """How a trial ended in a Harbor error, from its exception.txt: the error's last line."""
     try:
@@ -281,19 +345,20 @@ def main() -> None:
                 failed.add(trial)
                 show(task, text)
         found = {p for pat in PATTERNS for p in job.glob(f"*/agent/{pat}")}
+        # A running trial's logs, readable here or not: read from its container if need be.
+        if DOCKER:
+            found |= {t / "agent" / n for t in started if not (t / "result.json").exists() for n in LIVE_LOGS}
         # A task's stderr after its other logs: an error usually ends what came before it.
         logs = sorted(found, key=lambda p: (p.parent.parent.name, p.name.endswith(".stderr.txt"), p.name))
         for log in logs:
             if log not in offsets:
                 # Logs there at start are followed from their end; a task that starts later, from its beginning.
-                offsets[log] = 0 if from_start or not first_scan else log.stat().st_size
-            size = log.stat().st_size
-            if size <= offsets[log]:
+                offsets[log] = 0 if from_start or not first_scan else size_of(log)
+            new = read_from(log, offsets[log])
+            if not new:
                 continue
-            with log.open(errors="replace") as f:
-                f.seek(offsets[log])
-                chunk = pending.pop(log, "") + f.read()
-                offsets[log] = f.tell()
+            offsets[log] += len(new)
+            chunk = pending.pop(log, "") + new.decode(errors="replace")
             lines = chunk.split("\n")
             if log.suffix == ".jsonl":
                 if lines[-1]:
