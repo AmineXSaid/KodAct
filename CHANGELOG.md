@@ -2,6 +2,11 @@
 
 ## 0.1.0 (unreleased)
 
+### KodAct's own name on the wire
+- **Model API requests send `User-Agent: kodact/<version>`** (was the old
+  name, `forgecli/<version>`). A gateway or proxy that filters or logs by
+  User-Agent sees KodAct; WebFetch already sent `KodAct/<version>`.
+
 ### A network drop doesn't end a script
 - **`kodact -p` retries an endpoint it hasn't reached yet**, 3 times over
   about half a minute: a failed name lookup or a VPN reconnecting no longer

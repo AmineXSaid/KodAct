@@ -61,7 +61,7 @@ impl Default for MessagesConfig {
             max_retries: 3,
             // No total deadline (long generations stream for many minutes); a stall of this long between reads fails the request.
             timeout: Duration::from_secs(300),
-            user_agent: format!("forgecli/{}", env!("CARGO_PKG_VERSION")),
+            user_agent: format!("kodact/{}", env!("CARGO_PKG_VERSION")),
             url_from: None,
             key_helper: None,
         }
