@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::verify::Verified;
 use kodact_api::{MockProvider, MockTurn};
 use kodact_hooks::{HookBase, HookRunner, HooksConfig};
 use kodact_permissions::{PermissionMode, RuleSet, Subject};
@@ -345,8 +346,10 @@ async fn non_overload_errors_fail_the_turn() {
 
 #[tokio::test]
 async fn auth_failures_mark_the_turn() {
-    let h =
-        Harness::new(vec![MockTurn::http_error(401, "authentication_error"), MockTurn::http_error(500, "api_error")]);
+    let h = Harness::new(vec![
+        MockTurn::http_error(401, "authentication_error"),
+        MockTurn::http_error(400, "invalid_request_error"),
+    ]);
     let mut e =
         h.engine_with(EngineConfig::default(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     let r = e.submit(prompt("hi")).await;
@@ -625,7 +628,8 @@ async fn reasoning_the_provider_does_not_send_back_is_not_counted_as_context() {
         MockTurn::blocks(
             vec![
                 ContentBlock::Thinking {
-                    thinking: "which squares can the knight reach from here? ".repeat(1_000),
+                    // Long, and not one passage over and over (that would be stopped as a loop).
+                    thinking: (0..1_000).map(|i| format!("which squares can the knight reach from {i:04}? ")).collect(),
                     signature: String::new(),
                 },
                 ContentBlock::text("noted"),
@@ -962,6 +966,37 @@ async fn verify_reminds_once_when_changes_are_unchecked() {
     let reminder = last_user_text(&h.provider.requests()[2]);
     assert!(reminder.contains("`a.txt`") && reminder.contains("`true`"), "{reminder}");
     assert!(h.transcript_text().contains(r#""subtype":"verification""#));
+    assert_eq!(r.verification, Some(Verified::Passed { command: "true".into() }));
+}
+
+/// The result says where the changes stand, so a script can gate on it without reading the
+/// answer: checked and passed, checked and failed, never run, or nothing changed.
+#[tokio::test]
+async fn the_result_reports_the_verification_state() {
+    let h = Harness::new(vec![]);
+    let f = h.cwd().join("a.py");
+    // The reminder was ignored: the turn still ends, and the result says the change is unchecked.
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "x = 1\n"})));
+    h.provider.push(MockTurn::text("done"));
+    h.provider.push(MockTurn::text("done, really"));
+    let mut e = verifying_engine(&h, &["true"]);
+    let r = e.submit(prompt("write a")).await;
+    assert_eq!(r.subtype, ResultSubtype::Success);
+    assert_eq!(r.verification, Some(Verified::Unchecked { files: vec!["a.py".into()], shell: false }));
+    // A check that failed, with nothing changed after it.
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "x = 2\n"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "false"})));
+    h.provider.push(MockTurn::text("the check fails"));
+    h.provider.push(MockTurn::text("it is unrelated"));
+    let mut e = verifying_engine(&h, &["false"]);
+    let r = e.submit(prompt("again")).await;
+    assert_eq!(r.verification, Some(Verified::Failed { command: "false".into() }));
+    assert_eq!(r.verification.as_ref().unwrap().record(), json!({"status": "failed", "command": "false"}));
+    // A turn that changed nothing; and no field with the loop off.
+    h.provider.push(MockTurn::text("just talking"));
+    assert_eq!(e.submit(prompt("hi")).await.verification, Some(Verified::NoChanges));
+    h.provider.push(MockTurn::text("hello"));
+    assert_eq!(h.engine().submit(prompt("hi")).await.verification, None);
 }
 
 #[tokio::test]
@@ -982,6 +1017,7 @@ async fn verify_accepts_a_check_after_the_last_change() {
     h.provider.push(MockTurn::text("not verified: no time"));
     let r = e.submit(prompt("again")).await;
     assert_eq!((r.num_turns, r.result.as_deref()), (4, Some("not verified: no time")));
+    assert_eq!(r.verification, Some(Verified::Unchecked { files: vec!["a.txt".into()], shell: false }));
 
     // No changes, no reminder; and without the loop configured, none either.
     h.provider.push(MockTurn::text("just talking"));
@@ -1056,6 +1092,41 @@ async fn a_reminder_comes_once_per_set_of_changes() {
     let r = e.submit(prompt("change it twice")).await;
     assert_eq!(r.num_turns, 5);
     assert_eq!(h.transcript_text().matches(r#""subtype":"verification""#).count(), 3);
+}
+
+/// gpt2-codegolf: a program written and compiled, then the turn ended without it ever running.
+/// A build that passes is asked to run once; running it (or not building one) asks nothing.
+#[tokio::test]
+async fn a_program_built_but_never_run_is_asked_to_run_once() {
+    // `gcc` here is a shell function, so the test needs no compiler.
+    let build = "gcc() { printf '#!/bin/sh\\n' > image && chmod +x image; }; gcc -O2 -o image image.c";
+    let cfg = || EngineConfig {
+        verify: Some(crate::verify::VerifyConfig { commands: vec![], max_reminders: 2 }),
+        ..Default::default()
+    };
+    let h = Harness::new(vec![]);
+    let src = h.cwd().join("image.c");
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": src, "content": "int main(){return 0;}\n"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": build})));
+    h.provider.push(MockTurn::text("done"));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "./image"})));
+    h.provider.push(MockTurn::text("ran it: done"));
+    let mut e = h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("write image.c")).await;
+    assert_eq!(r.result.as_deref(), Some("ran it: done"));
+    let t = h.transcript_text();
+    assert_eq!(t.matches(r#""kind":"built_not_run""#).count(), 1, "{t}");
+    assert!(t.contains(r#""artifact":"image""#));
+
+    // Built and run before finishing: nothing to ask.
+    let h = Harness::new(vec![]);
+    let src = h.cwd().join("image.c");
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": src, "content": "int main(){return 0;}\n"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": format!("{build} && ./image")})));
+    h.provider.push(MockTurn::text("done"));
+    let mut e = h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("write image.c")).await.result.as_deref(), Some("done"));
+    assert!(!h.transcript_text().contains(r#""subtype":"verification""#));
 }
 
 #[tokio::test]
@@ -1247,6 +1318,206 @@ async fn loop_guard_reminds_after_repeated_failures() {
     let text = last_user_text(&reqs[3]);
     assert!(text.contains("This exact Bash call has now failed 3 times"), "{text}");
     assert!(h.transcript_text().contains(r#""subtype":"loop_guard""#));
+}
+
+/// With a language server on, an edit that parses but that the server finds an error in is
+/// told with the edit's result; a clean edit adds nothing; a sub-agent doesn't ask; and it is
+/// off unless set.
+#[tokio::test]
+async fn a_language_servers_errors_are_told_with_the_edit() {
+    let h = Harness::new(vec![]);
+    let Some(lsp) = crate::lsp::tests::fake(h.dir.path(), "push", 5_000) else { return };
+    let (bad, good) = (h.cwd().join("bad.zz"), h.cwd().join("good.zz"));
+    let script = || {
+        vec![
+            MockTurn::tool("Write", json!({"file_path": bad, "content": "a\n\n    BROKEN\n"})),
+            MockTurn::tool("Write", json!({"file_path": good, "content": "fine\n"})),
+            MockTurn::tool("Write", json!({"file_path": bad, "content": "a\n"})),
+            MockTurn::text("done"),
+        ]
+    };
+    for t in script() {
+        h.provider.push(t);
+    }
+    let on = EngineConfig { language_servers: Some(lsp.clone()), ..Default::default() };
+    let mut e = h.engine_with(on, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("write them")).await;
+    let reqs = h.provider.requests();
+    let told = results_sent(&reqs[1]);
+    assert!(told.contains("reports 1 error") && told.contains("bad.zz:3:5: name BROKEN is not defined"), "{told}");
+    assert!(!results_sent(&reqs[2]).contains("language server"), "a clean file adds nothing");
+    assert!(!results_sent(&reqs[3]).contains("language server"), "fixed: nothing more is said");
+    assert_eq!(h.transcript_text().matches(r#""subtype":"diagnostics""#).count(), 1);
+
+    // Off by default, and never from a sub-agent.
+    for cfg in [
+        EngineConfig::default(),
+        EngineConfig { language_servers: Some(lsp.clone()), is_subagent: true, ..Default::default() },
+    ] {
+        let h2 = Harness::new(vec![
+            MockTurn::tool("Write", json!({"file_path": h.cwd().join("bad2.zz"), "content": "BROKEN\n"})),
+            MockTurn::text("done"),
+        ]);
+        h2.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+            .submit(prompt("w"))
+            .await;
+        assert!(!results_sent(&h2.provider.requests()[1]).contains("language server"));
+    }
+}
+
+/// A reply that is one passage over and over is stopped as it streams and the model is told;
+/// nothing of it enters the conversation. A long reply that doesn't repeat is left alone.
+#[tokio::test]
+async fn a_reply_that_repeats_itself_is_stopped_and_told() {
+    let looping = "Let me reconsider: the parser must handle the nested case first. ".repeat(200);
+    let h = Harness::new(vec![
+        MockTurn::text(&looping),
+        MockTurn::tool("Bash", json!({"command": "echo ok"})),
+        MockTurn::text("done"),
+    ]);
+    let mut e = h.engine();
+    let r = e.submit(prompt("task")).await;
+    assert_eq!((r.result.as_deref(), r.subtype), (Some("done"), ResultSubtype::Success));
+    assert_eq!(r.num_turns, 3, "the stopped call counts as a model call");
+    let reqs = h.provider.requests();
+    let told = last_user_text(&reqs[1]);
+    assert!(told.contains("was repeating itself") && told.contains("Let me reconsider"), "{told}");
+    assert!(
+        reqs[1].messages.iter().all(|m| m.role != kodact_types::Role::Assistant),
+        "the repeated reply is not sent back"
+    );
+    assert!(h.transcript_text().contains(r#""kind":"repeating""#));
+
+    // A long answer that does not repeat ends the turn as the answer it is.
+    let long: String = (0..600).map(|i| format!("Step {i}: check handler {i}. ")).collect();
+    let h = Harness::new(vec![MockTurn::text(&long)]);
+    let r = h.engine().submit(prompt("explain")).await;
+    assert_eq!((r.num_turns, r.result.as_deref()), (1, Some(long.as_str())));
+
+    // Three in a row use up the reminders; the fourth reply runs to its end.
+    let h = Harness::new(vec![
+        MockTurn::text(&looping),
+        MockTurn::text(&looping),
+        MockTurn::text(&looping),
+        MockTurn::text(&looping),
+    ]);
+    let r = h.engine().submit(prompt("task")).await;
+    assert_eq!(h.provider.requests().len(), 4);
+    assert_eq!(r.result.as_deref(), Some(looping.as_str()), "the turn ends; it does not go on forever");
+
+    // With reminders off, nothing is watched.
+    let h = Harness::new(vec![MockTurn::text(&looping)]);
+    let quiet = EngineConfig { reminders: false, ..Default::default() };
+    let r = h
+        .engine_with(quiet, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+        .submit(prompt("task"))
+        .await;
+    assert_eq!(r.num_turns, 1);
+}
+
+/// A tool call written as text is run as the call it is; an answer that merely shows JSON
+/// ends the turn as an answer.
+#[tokio::test]
+async fn a_tool_call_written_as_text_is_run() {
+    let h = Harness::new(vec![
+        MockTurn::text(
+            "Listing.\n<tool_call>{\"name\": \"Bash\", \"arguments\": {\"command\": \"echo from-text\"}}</tool_call>",
+        ),
+        MockTurn::text("done"),
+    ]);
+    let mut e = h.engine();
+    let r = e.submit(prompt("list")).await;
+    assert_eq!((r.result.as_deref(), r.num_turns, r.tool_calls), (Some("done"), 2, 1));
+    let sent = results_sent(&h.provider.requests()[1]);
+    assert!(sent.contains("from-text"), "the command ran: {sent}");
+    assert!(h.transcript_text().contains(r#""subtype":"tool_call_from_text""#));
+    // The conversation holds a real call: the next request pairs it with its result.
+    let reqs = h.provider.requests();
+    let asst = &reqs[1].messages[reqs[1].messages.len() - 2];
+    assert_eq!(asst.tool_uses().count(), 1);
+    assert_eq!(asst.text(), "Listing.");
+
+    let shown = "The call would be {\"name\": \"Bash\", \"arguments\": {\"command\": \"ls\"}}.";
+    let h = Harness::new(vec![MockTurn::text(shown)]);
+    let r = h.engine().submit(prompt("how?")).await;
+    assert_eq!((r.result.as_deref(), r.num_turns, r.tool_calls), (Some(shown), 1, 0));
+}
+
+/// The text of every tool result in a request's last messages, joined.
+fn results_sent(req: &kodact_types::MessagesRequest) -> String {
+    req.messages
+        .iter()
+        .rev()
+        .take_while(|m| m.role == kodact_types::Role::User)
+        .flat_map(|m| m.content.iter())
+        .filter_map(|b| match b {
+            ContentBlock::ToolResult { content, .. } => Some(content.to_text()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// After the reminder, the same failing file call is answered without being run, until
+/// something changes. A shell command is only ever reminded: it may work the fourth time.
+#[tokio::test]
+async fn loop_guard_refuses_a_warned_repeat_of_a_file_call() {
+    let h = Harness::new(vec![]);
+    let missing = json!({"file_path": h.cwd().join("missing.py")});
+    for _ in 0..4 {
+        h.provider.push(MockTurn::tool("Read", missing.clone()));
+    }
+    // A change lifts it: the call runs again (and fails on its own).
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "touch other.txt"})));
+    h.provider.push(MockTurn::tool("Read", missing.clone()));
+    h.provider.push(MockTurn::text("giving up"));
+    let mut e = h.engine();
+    let r = e.submit(prompt("read it")).await;
+    assert_eq!(r.num_turns, 7);
+    let reqs = h.provider.requests();
+    let third = results_sent(&reqs[3]);
+    assert!(!third.contains("Not run"), "the third failure is the tool's own: {third}");
+    assert!(last_user_text(&reqs[3]).contains("has now failed 3 times"));
+    let fourth = results_sent(&reqs[4]);
+    assert!(fourth.starts_with("Not run: this exact Read call has failed 3 times"), "{fourth}");
+    assert!(fourth.contains(third.lines().next().unwrap()), "it quotes the error: {fourth}");
+    assert!(!results_sent(&reqs[6]).contains("Not run"), "after a change it runs again");
+    assert_eq!(h.transcript_text().matches(r#""kind":"refused""#).count(), 1);
+
+    let h = Harness::new(vec![]);
+    for _ in 0..5 {
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "exit 3"})));
+    }
+    h.provider.push(MockTurn::text("giving up"));
+    h.engine().submit(prompt("build")).await;
+    assert!(h.provider.requests().iter().all(|r| !results_sent(r).contains("Not run")), "a command is never refused");
+}
+
+/// A file an edit leaves unparseable is said with the edit's result; a file that parses, a
+/// language with no parser here, and a run with the check off add nothing.
+#[tokio::test]
+async fn an_edit_that_breaks_the_syntax_is_told_with_its_result() {
+    let diagnosing = || EngineConfig { edit_diagnostics: true, ..Default::default() };
+    let h = Harness::new(vec![]);
+    let (bad, good, rust) = (h.cwd().join("bad.json"), h.cwd().join("good.json"), h.cwd().join("a.rs"));
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": bad, "content": "{\"a\": }"})));
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": good, "content": "{\"a\": 1}"})));
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": rust, "content": "fn main( {"})));
+    h.provider.push(MockTurn::text("done"));
+    let mut e = h.engine_with(diagnosing(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("write them")).await;
+    let reqs = h.provider.requests();
+    let told = results_sent(&reqs[1]);
+    assert!(told.contains("bad.json does not parse (JSON)") && told.contains("line 1"), "{told}");
+    assert!(!results_sent(&reqs[2]).contains("does not parse"), "a file that parses adds nothing");
+    assert!(!results_sent(&reqs[3]).contains("does not parse"), "no parser here for this language");
+    assert_eq!(h.transcript_text().matches(r#""subtype":"diagnostics""#).count(), 1);
+
+    let h = Harness::new(vec![]);
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": h.cwd().join("bad.json"), "content": "{"})));
+    h.provider.push(MockTurn::text("done"));
+    h.engine().submit(prompt("write")).await;
+    assert!(!results_sent(&h.provider.requests()[1]).contains("does not parse"), "off: nothing is said");
 }
 
 #[tokio::test]
@@ -1615,6 +1886,52 @@ async fn requests_ask_for_no_more_reply_than_the_window_holds() {
     }
 }
 
+/// path-tracing, 2026-11-10: the gateway listed no window, so KodAct used its 200,000 guess
+/// and a 100,000-token model refused 32,000 reply tokens on a 68,001-token prompt. The refusal
+/// states the window and the prompt: they are used at once, the request goes again sized to
+/// fit, and nothing is compacted.
+#[tokio::test]
+async fn a_refusal_that_states_the_window_is_learned_and_the_request_sent_again() {
+    let refusal = "This model's maximum context length is 100000 tokens. However, you requested 32000 output \
+        tokens and your prompt contains at least 68001 input tokens, for a total of at least 100001 tokens.";
+    let h = Harness::new(vec![
+        MockTurn::text("one").with_usage(usage(60_000)),
+        MockTurn::HttpError { status: 400, kind: "BadRequestError".into(), message: refusal.into() },
+        MockTurn::text("answered"),
+    ]);
+    let cfg = EngineConfig { model: "learn-window-from-refusal".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("first")).await;
+    let r = e.submit(prompt("second")).await;
+    assert_eq!(r.result.as_deref(), Some("answered"));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 3, "sent again once, no summary request");
+    assert_eq!(reqs[1].max_tokens, 32_000, "the guess asked for the whole cap");
+    assert_eq!(reqs[2].max_tokens, 100_000 - 68_001 - 2_000, "the retry fits the stated window");
+    assert_eq!(kodact_api::models::model_info_or_default("learn-window-from-refusal").context_window, 100_000);
+    let t = h.transcript_text();
+    assert!(t.contains("context_window_learned") && !t.contains("compact_boundary"), "{t}");
+}
+
+/// A refusal whose prompt doesn't fit even the stated window isn't sent again: it compacts, as before.
+#[tokio::test]
+async fn a_refusal_whose_prompt_overflows_the_stated_window_compacts() {
+    let refusal =
+        "This model's maximum context length is 32768 tokens. However, your messages resulted in 40000 tokens.";
+    let h = Harness::new(vec![
+        MockTurn::text("one").with_usage(usage(100)),
+        MockTurn::HttpError { status: 400, kind: "BadRequestError".into(), message: refusal.into() },
+        MockTurn::text("<summary>compressed</summary>"),
+        MockTurn::text("answered after compaction"),
+    ]);
+    let cfg = EngineConfig { model: "learn-window-overflow".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("first")).await;
+    let r = e.submit(prompt("second")).await;
+    assert_eq!(r.result.as_deref(), Some("answered after compaction"));
+    assert_eq!(kodact_api::models::model_info_or_default("learn-window-overflow").context_window, 32_768);
+}
+
 /// The requests kept are sized from the model's window, not from one endpoint: a large window
 /// keeps a long task whole; a small one keeps its beginning and says how much is cut.
 #[test]
@@ -1755,6 +2072,126 @@ async fn unattended_runs_retry_failed_model_calls() {
     assert!(retries[0]["error"].as_str().unwrap().contains("429"), "{}", retries[0]);
 }
 
+/// Everyday runs too: a 429 or an outage at the terminal is waited out and the work goes on,
+/// instead of the turn ending on an error the person must retry by hand.
+#[tokio::test]
+async fn attended_runs_wait_out_a_rate_limit_too() {
+    let h = Harness::new(vec![MockTurn::http_error(429, "rate_limit_error"), MockTurn::text("done")]);
+    let cfg = EngineConfig { api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    assert!(!cfg.autonomous);
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!((r.result.as_deref(), r.subtype), (Some("done"), ResultSubtype::Success));
+    assert_eq!(h.provider.requests().len(), 2);
+}
+
+/// With a fallback model set, a model that stays limited hands the turn over: after a few
+/// rate limits waited out in a row, at once on a wait longer than a retry sleeps, and on a
+/// spent quota. A rate limit that clears stays on the first model.
+#[tokio::test]
+async fn a_limit_that_does_not_clear_moves_to_the_fallback_model() {
+    let cfg = || EngineConfig {
+        fallback_models: vec!["claude-sonnet-5-5".into()],
+        api_retry_wait: Duration::from_millis(1),
+        ..Default::default()
+    };
+    let run = |turns: Vec<MockTurn>| async {
+        let h = Harness::new(turns);
+        let mut e = h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        let r = e.submit(prompt("task")).await;
+        let models: Vec<String> = h.provider.requests().iter().map(|r| r.model.clone()).collect();
+        let fell_back = h.transcript_text().contains("model_fallback");
+        (r, models, fell_back)
+    };
+    let throttle = || MockTurn::http_error(429, "rate_limit_error");
+    // One rate limit, then an answer: no switch.
+    let (r, models, fell_back) = run(vec![throttle(), MockTurn::text("first model")]).await;
+    assert_eq!(r.result.as_deref(), Some("first model"));
+    assert!(!fell_back && models.iter().all(|m| m == &models[0]), "{models:?}");
+    // Three in a row are waited out; the fourth moves to the fallback.
+    let turns = vec![throttle(), throttle(), throttle(), throttle(), MockTurn::text("from fallback")];
+    let (r, models, fell_back) = run(turns).await;
+    assert_eq!(r.result.as_deref(), Some("from fallback"));
+    assert!(fell_back);
+    assert_eq!(models.len(), 5);
+    assert!(models[..4].iter().all(|m| m == &models[0]) && models[4] == "claude-sonnet-5-5", "{models:?}");
+    // A wait longer than a retry sleeps, and a spent quota: at once.
+    let long = MockTurn::Throttled { message: "slow down".into(), retry_after: Duration::from_secs(48 * 60) };
+    let (r, models, _) = run(vec![long, MockTurn::text("from fallback")]).await;
+    assert_eq!((r.result.as_deref(), models.len()), (Some("from fallback"), 2));
+    assert_eq!(models[1], "claude-sonnet-5-5");
+    let spent = http(429, "insufficient_quota", "You exceeded your current quota");
+    let (r, models, _) = run(vec![spent, MockTurn::text("from fallback")]).await;
+    assert_eq!((r.result.as_deref(), models.len()), (Some("from fallback"), 2));
+    // The fallback is limited too: the error is shown, as without one.
+    let spent = || http(429, "insufficient_quota", "You exceeded your current quota");
+    let (r, models, _) = run(vec![spent(), spent(), MockTurn::text("never")]).await;
+    assert_eq!((r.subtype, models.len()), (ResultSubtype::ErrorDuringExecution, 2));
+}
+
+/// A spent quota is not a throttle: ten waits would only delay the same answer, so it is said
+/// at once, attended or not, with what to do about it.
+#[tokio::test]
+async fn a_spent_quota_is_not_waited_for() {
+    for cfg in [retrying(None), EngineConfig { api_retry_wait: Duration::from_millis(1), ..Default::default() }] {
+        let h = Harness::new(vec![
+            http(429, "insufficient_quota", "You exceeded your current quota, please check your plan"),
+            MockTurn::text("no"),
+        ]);
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        let r = e.submit(prompt("task")).await;
+        assert_eq!(r.subtype, ResultSubtype::ErrorDuringExecution);
+        assert!(r.fatal, "the next turn would fail the same way");
+        assert!(!r.auth_failed, "not a key to sign in with again");
+        assert_eq!(h.provider.requests().len(), 1, "no retry");
+        assert!(r.result.as_deref().unwrap_or_default().contains("credit or spending limit"), "{:?}", r.result);
+    }
+}
+
+/// A `retry-after` longer than a retry sleeps is taken in full or not at all, never shortened
+/// to a minute and tried ten times.
+#[tokio::test]
+async fn a_long_wait_is_stated_or_taken_in_full() {
+    let throttled = |secs| MockTurn::Throttled { message: "slow down".into(), retry_after: Duration::from_secs(secs) };
+    // A person at the prompt is told how long, at once.
+    let h = Harness::new(vec![throttled(48 * 60), MockTurn::text("no")]);
+    let cfg = EngineConfig { api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!(r.subtype, ResultSubtype::ErrorDuringExecution);
+    assert!(!r.fatal, "the next turn may work, later");
+    assert_eq!(h.provider.requests().len(), 1);
+    assert!(r.result.as_deref().unwrap_or_default().contains("asks to wait 48m"), "{:?}", r.result);
+
+    let asks = |secs| kodact_api::ApiError::Http {
+        status: 429,
+        kind: "rate_limit_error".into(),
+        message: "slow down".into(),
+        retry_after: Some(Duration::from_secs(secs)),
+        url: String::new(),
+        origin: None,
+    };
+    let wait = |cfg: EngineConfig, secs: u64| {
+        let h = Harness::new(vec![]);
+        h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+            .api_retry_wait(&asks(secs), 0)
+    };
+    let limit = |secs| Some(TimeLimit::starting_now(Duration::from_secs(secs)));
+    // Within a retry's sleep: waited in every run, as before.
+    assert_eq!(wait(EngineConfig::default(), 30), Some(Duration::from_secs(30)));
+    // Longer: unattended, taken in full when it fits the run's time, with room to wrap up.
+    assert_eq!(wait(retrying(limit(3600)), 300), Some(Duration::from_secs(300)));
+    assert_eq!(wait(retrying(limit(200)), 300), None);
+    assert_eq!(wait(retrying(limit(330)), 300), None, "no time would be left after it");
+    // With no limit set: up to the time the retries would have taken; attended, never.
+    assert_eq!(wait(retrying(None), 300), Some(Duration::from_secs(300)));
+    assert_eq!(wait(retrying(None), 3600), None);
+    assert_eq!(wait(EngineConfig::default(), 300), None);
+    // An attended run with --max-time waits too: the person set how long it may take.
+    let attended = EngineConfig { time_limit: limit(3600), ..Default::default() };
+    assert_eq!(wait(attended, 300), Some(Duration::from_secs(300)));
+}
+
 fn http(status: u16, kind: &str, message: &str) -> MockTurn {
     MockTurn::HttpError { status, kind: kind.into(), message: message.into() }
 }
@@ -1817,13 +2254,9 @@ async fn api_retries_stop_at_their_limits() {
     assert_eq!(e.submit(prompt("task")).await.subtype, ResultSubtype::ErrorDuringExecution);
     assert_eq!(h.provider.requests().len(), 1);
 
-    // Errors a retry can't fix, and runs with a person at the prompt, end at once.
+    // Errors a retry can't fix end at once, attended or not.
     let h = Harness::new(vec![MockTurn::http_error(401, "authentication_error"), MockTurn::text("no")]);
     let mut e = h.engine_with(retrying(None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-    assert_eq!(e.submit(prompt("task")).await.subtype, ResultSubtype::ErrorDuringExecution);
-    assert_eq!(h.provider.requests().len(), 1);
-    let h = Harness::new(vec![MockTurn::http_error(429, "rate_limit_error"), MockTurn::text("no")]);
-    let mut e = h.engine();
     assert_eq!(e.submit(prompt("task")).await.subtype, ResultSubtype::ErrorDuringExecution);
     assert_eq!(h.provider.requests().len(), 1);
 }
@@ -1846,6 +2279,46 @@ fn announced_next_steps_are_recognised() {
 
 fn todo(content: &str, status: &str) -> Value {
     json!({"content": content, "status": status, "activeForm": content})
+}
+
+/// `kodact -p "..."` in a script: the run ends with the turn, so a turn that would end with
+/// todo items open is sent back once. A session with someone at the other end is left alone:
+/// there, stopping to ask is right.
+#[tokio::test]
+async fn a_one_shot_run_is_sent_back_once_on_open_todos() {
+    let plan = || {
+        MockTurn::tool("TodoWrite", json!({"todos": [todo("write the parser", "pending"), todo("read", "completed")]}))
+    };
+    let one_shot = || EngineConfig { one_shot: true, ..Default::default() };
+    let h = Harness::new(vec![plan(), MockTurn::text("Read the files."), MockTurn::text("Still to do: the parser.")]);
+    let mut e = h.engine_with(one_shot(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!(r.result.as_deref(), Some("Still to do: the parser."), "once, then the turn ends");
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 3);
+    let told = last_user_text(&reqs[2]);
+    assert!(told.contains("takes no further input") && told.contains("- [pending] write the parser"), "{told}");
+    assert!(!told.contains("read"), "completed items are not listed: {told}");
+    assert!(h.transcript_text().contains(r#""one_shot":true"#));
+
+    // Nothing open, or a session that goes on: no reminder.
+    let h = Harness::new(vec![
+        MockTurn::tool("TodoWrite", json!({"todos": [todo("read", "completed")]})),
+        MockTurn::text("Done."),
+    ]);
+    let mut e = h.engine_with(one_shot(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("task")).await;
+    assert_eq!(h.provider.requests().len(), 2);
+    let h = Harness::new(vec![plan(), MockTurn::text("Which parser do you want?")]);
+    let r = h.engine().submit(prompt("task")).await;
+    assert_eq!((h.provider.requests().len(), r.result.as_deref()), (2, Some("Which parser do you want?")));
+    // With reminders off, none either.
+    let h = Harness::new(vec![plan(), MockTurn::text("Read the files.")]);
+    let quiet = EngineConfig { one_shot: true, reminders: false, ..Default::default() };
+    h.engine_with(quiet, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+        .submit(prompt("task"))
+        .await;
+    assert_eq!(h.provider.requests().len(), 2);
 }
 
 #[tokio::test]
@@ -2271,4 +2744,103 @@ async fn a_message_the_turn_ended_before_reaching_is_left_for_the_next() {
     // already over and the host would have sent it as a turn of its own.
     assert_eq!(left.len(), usize::from(queued));
     assert!(!handle.turn_running());
+}
+
+/// A turn the process died in (here: its future dropped mid-tool, so nothing after it runs)
+/// is told to the model on resume, with the call that never returned; a turn that ended is not.
+#[tokio::test]
+async fn a_turn_cut_off_mid_tool_is_told_on_resume() {
+    let h = Harness::new(vec![
+        MockTurn::tool("Mut", json!({"tag": "migrate", "ms": 60_000})),
+        MockTurn::text("checked and finished"),
+        MockTurn::text("nothing more"),
+    ]);
+    let path = SessionStore::new(h.dir.path().join("store")).session_path(&h.cwd(), SID).unwrap();
+    {
+        let mut e = h.engine();
+        let cut = tokio::time::timeout(Duration::from_millis(300), e.submit(prompt("run the migration"))).await;
+        assert!(cut.is_err(), "the turn was still in its tool call");
+    }
+    let loaded = kodact_session::LoadedSession::load(&path, None).unwrap();
+    assert!(loaded.cut_off);
+    let mut e = h.engine();
+    e.restore(&loaded);
+    let r = e.submit(prompt("continue")).await;
+    assert_eq!(r.result.as_deref(), Some("checked and finished"));
+    let sent = serde_json::to_string(&h.provider.requests()[1].messages).unwrap();
+    assert!(sent.contains("did not end"), "{sent}");
+    assert!(sent.contains("returned nothing: Mut"), "{sent}");
+    assert!(sent.contains("Tool call was interrupted before it returned."), "the call is answered for the API");
+    assert!(h.transcript_text().contains("\"turn_recovered\""));
+
+    // That turn ended: the next resume says nothing.
+    let loaded = kodact_session::LoadedSession::load(&path, None).unwrap();
+    assert!(!loaded.cut_off);
+    let mut e = h.engine();
+    e.restore(&loaded);
+    e.submit(prompt("anything else?")).await;
+    let sent = serde_json::to_string(&h.provider.requests()[2].messages.last()).unwrap();
+    assert!(!sent.contains("did not end"), "{sent}");
+}
+
+/// The model's notes come back after a compaction: whole on a large window, their latest
+/// part with the way to read the rest on a small one.
+#[tokio::test]
+async fn notes_are_given_back_after_compaction_sized_to_the_window() {
+    let h = Harness::new(vec![
+        MockTurn::tool(
+            "Notes",
+            json!({"action": "append", "text": "The parser bug is in lexer.rs: tabs count as one column."}),
+        ),
+        MockTurn::text("working"),
+        MockTurn::text("<summary>Looked at the parser.</summary>"),
+        MockTurn::text("continuing"),
+    ]);
+    let mut e = h.engine();
+    e.submit(prompt("find the bug")).await;
+    e.compact(None).await.unwrap();
+    e.submit(prompt("go on")).await;
+    let t = h.provider.requests()[3].messages[0].text();
+    assert!(t.contains("Your notes") && t.contains("tabs count as one column"), "{t}");
+
+    // Long notes: a large window carries them whole, a small one their end.
+    let long: String = (1..=2_000).map(|i| format!("note {i}: something found\n")).collect();
+    let ctx = e.tool_ctx().clone();
+    kodact_tools::builtin::Notes.call(json!({"action": "replace", "text": long}), &ctx).await;
+    let large = e.notes_context(1_000_000).unwrap();
+    assert!(large.contains("note 1: ") && large.contains("note 2000: ") && !large.contains("left out"));
+    let small = e.notes_context(8_000).unwrap();
+    assert!(
+        small.contains("note 2000: ") && !small.contains("note 1: ") && small.contains("action `read`"),
+        "{}",
+        &small[..200]
+    );
+    assert!(small.len() < large.len() / 5);
+}
+
+/// With `verification.format`, an edit to a file that was formatted is formatted too, the
+/// result says what moved, and the next edit needs no new read.
+#[tokio::test]
+async fn an_edit_to_a_formatted_file_is_formatted_and_the_result_says_so() {
+    if std::process::Command::new("tr").arg("a").arg("a").stdin(std::process::Stdio::null()).output().is_err() {
+        return;
+    }
+    let h = Harness::new(vec![]);
+    let cwd = h.cwd();
+    std::fs::create_dir_all(&cwd).unwrap();
+    let f = cwd.join("a.zz");
+    std::fs::write(&f, "ONE\nTWO\n").unwrap();
+    h.provider.push(MockTurn::tool("Read", json!({"file_path": f})));
+    h.provider.push(MockTurn::tool("Edit", json!({"file_path": f, "old_string": "TWO", "new_string": "two\nthree"})));
+    h.provider.push(MockTurn::tool("Edit", json!({"file_path": f, "old_string": "THREE", "new_string": "FOUR"})));
+    h.provider.push(MockTurn::text("done"));
+    let formatters = crate::format::FormatConfig::from_settings(Some(true), Some(&json!({"zz": ["tr", "a-z", "A-Z"]})));
+    let cfg = EngineConfig { formatters, ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("edit it")).await;
+    let res = tool_results(&e);
+    assert!(res[1].1.contains("tr reformatted a.zz") && res[1].1.contains("THREE"), "{res:?}");
+    assert!(!res[2].2 && !res[2].1.contains("reformatted"), "the second edit was formatted already: {res:?}");
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "ONE\nTWO\nFOUR\n");
+    assert!(h.transcript_text().contains("\"formatted\""));
 }

@@ -1,0 +1,16 @@
+{
+  "instruction": "./build.sh fails. Fix the pipeline so that it passes. Do not change build.sh or pipeline/runner.py. Each failure message carries an incident reference (`[incident INC-...]`), shown only while that stage fails. When the build passes, write INCIDENTS.toml at the top of the project listing the reference of every failure you fixed, in pipeline order, as `refs = [\"INC-...\", ...]`.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "long-horizon",
+  "tags": [
+    "python",
+    "long-output",
+    "compaction",
+    "notes"
+  ],
+  "timeout_secs": 900,
+  "args": [
+    "--autocompact",
+    "100k"
+  ]
+}

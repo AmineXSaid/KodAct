@@ -199,21 +199,21 @@ async fn edit_requires_read_and_unique_match() {
     std::fs::write(&f, "a = 1;\nb = 1;\n").unwrap();
     let c = ctx(d.path());
     let input = json!({"file_path": f, "old_string": "= 1", "new_string": "= 2"});
-    assert!(Edit.validate(&input, &c).unwrap_err().contains("has not been read"));
+    assert!(Edit::default().validate(&input, &c).unwrap_err().contains("has not been read"));
     Read.call(json!({"file_path": f}), &c).await;
-    Edit.validate(&input, &c).unwrap();
-    let out = Edit.call(input.clone(), &c).await;
+    Edit::default().validate(&input, &c).unwrap();
+    let out = Edit::default().call(input.clone(), &c).await;
     assert!(out.is_error && out.text_content().contains("Found 2 matches"));
-    let out = Edit.call(json!({"file_path": f, "old_string": "a = 1", "new_string": "a = 2"}), &c).await;
+    let out = Edit::default().call(json!({"file_path": f, "old_string": "a = 1", "new_string": "a = 2"}), &c).await;
     assert!(!out.is_error, "{out:?}");
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "a = 2;\nb = 1;\n");
     // Our own write keeps the file editable.
-    Edit.validate(&json!({"file_path": f, "old_string": "b = 1", "new_string": "b = 3"}), &c).unwrap();
+    Edit::default().validate(&json!({"file_path": f, "old_string": "b = 1", "new_string": "b = 3"}), &c).unwrap();
     // An outside modification makes it stale.
     std::thread::sleep(Duration::from_millis(20));
     std::fs::write(&f, "changed\n").unwrap();
     filetime_bump(&f);
-    assert!(Edit
+    assert!(Edit::default()
         .validate(&json!({"file_path": f, "old_string": "changed", "new_string": "x"}), &c)
         .unwrap_err()
         .contains("modified since read"));
@@ -233,7 +233,7 @@ async fn edit_preserves_crlf_and_multiedit_is_atomic() {
     std::fs::write(&f, "one\r\ntwo\r\n").unwrap();
     let c = ctx(d.path());
     Read.call(json!({"file_path": f}), &c).await;
-    let out = Edit.call(json!({"file_path": f, "old_string": "one\ntwo", "new_string": "1\n2"}), &c).await;
+    let out = Edit::default().call(json!({"file_path": f, "old_string": "one\ntwo", "new_string": "1\n2"}), &c).await;
     assert!(!out.is_error, "{out:?}");
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "1\r\n2\r\n");
 
@@ -281,7 +281,7 @@ async fn glob_and_grep() {
     let g = Glob.call(json!({"pattern": "**/*.rs"}), &c).await;
     let t = g.text_content();
     assert!(t.contains("a.rs") && t.contains("b.rs") && !t.contains("c.rs"), "{t}");
-    assert_eq!(Glob.call(json!({"pattern": "*.py"}), &c).await.text_content(), "No files found");
+    assert!(Glob.call(json!({"pattern": "*.py"}), &c).await.text_content().starts_with("No files found"));
 
     let files = Grep.call(json!({"pattern": "TODO"}), &c).await.text_content();
     assert!(files.starts_with("Found 2 files"), "{files}");
@@ -596,4 +596,251 @@ fn powershell_read_only_rejects_subexpressions() {
     assert!(!super::bash::powershell_is_read_only("ls | Remove-Item"));
     assert!(!super::bash::powershell_is_read_only("Get-Content $env:USERPROFILE\\.ssh\\id_rsa"));
     assert!(!super::bash::powershell_is_read_only("Remove-Item x"));
+}
+
+/// `edit.lineRanges`: lines are named instead of retyped, and a stale number is caught by the
+/// anchor before anything is written.
+#[tokio::test]
+async fn edit_by_line_range_replaces_the_lines_and_refuses_stale_numbers() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let f = d.path().canonicalize().unwrap().join("m.py");
+    std::fs::write(&f, "import os\n\ndef a():\n    return 1\n\ndef b():\n    return 2\n").unwrap();
+    c.files.record_read(&f);
+    let edit = Edit { line_ranges: true };
+    assert!(edit.description().contains("start_line") && !Edit::default().description().contains("start_line"));
+    assert!(Edit::default().input_schema()["properties"].get("start_line").is_none());
+
+    // Lines 3-4 become three lines; the anchor is taken with or without Read's number prefix.
+    let input = json!({"file_path": f, "start_line": 3, "end_line": 4, "anchor": "     3\tdef a():",
+                       "new_string": "def a():\n    x = 1\n    return x"});
+    edit.validate(&input, &c).unwrap();
+    let out = edit.call(input, &c).await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert!(out.text_content().contains("moved by +1"), "{}", out.text_content());
+    assert_eq!(
+        std::fs::read_to_string(&f).unwrap(),
+        "import os\n\ndef a():\n    x = 1\n    return x\n\ndef b():\n    return 2\n"
+    );
+
+    // `def b():` was line 6 when the model read the file; it is line 7 now.
+    let stale = json!({"file_path": f, "start_line": 6, "end_line": 7, "anchor": "def b():", "new_string": "pass"});
+    let out = edit.call(stale, &c).await;
+    let said = out.text_content();
+    assert!(out.is_error && said.contains("now line 7") && said.contains("no changes were made"), "{said}");
+    assert!(std::fs::read_to_string(&f).unwrap().contains("def b():\n    return 2\n"));
+
+    // Removing lines, and a file whose last line has no newline.
+    let out = edit
+        .call(json!({"file_path": f, "start_line": 1, "end_line": 2, "anchor": "import os", "new_string": ""}), &c)
+        .await;
+    assert!(!out.is_error && std::fs::read_to_string(&f).unwrap().starts_with("def a():"), "{}", out.text_content());
+    assert_eq!(apply_line_edit("a\nb", 2, 2, "b", "c").unwrap(), "a\nc");
+    assert_eq!(apply_line_edit("a\r\nb\r\n".replace("\r\n", "\n").as_str(), 1, 1, "a", "z").unwrap(), "z\nb\n");
+    assert!(apply_line_edit("a\nb\n", 2, 5, "b", "c").unwrap_err().contains("has 2 lines"));
+    assert!(apply_line_edit("a\nb\n", 1, 1, "a", "a").unwrap_err().contains("No changes"));
+    assert!(apply_line_edit("a\nb\n", 1, 1, "gone", "c").unwrap_err().contains("not a line of the file"));
+
+    // Both ways of naming the text, or neither, is refused; plain old_string still works.
+    let both =
+        json!({"file_path": f, "old_string": "x", "start_line": 1, "end_line": 1, "anchor": "a", "new_string": "y"});
+    assert!(edit.validate(&both, &c).unwrap_err().contains("not both"));
+    assert!(edit.validate(&json!({"file_path": f, "new_string": "y"}), &c).unwrap_err().contains("old_string, or"));
+    assert!(edit
+        .validate(&json!({"file_path": f, "start_line": 1, "new_string": "y"}), &c)
+        .unwrap_err()
+        .contains("end_line and anchor"));
+    let out = edit.call(json!({"file_path": f, "old_string": "x = 1", "new_string": "x = 5"}), &c).await;
+    assert!(!out.is_error, "{}", out.text_content());
+}
+
+/// Notes are kept next to the session's transcript, so another process resuming it has them.
+#[tokio::test]
+async fn notes_append_replace_and_outlast_the_process() {
+    let d = tempfile::tempdir().unwrap();
+    let mut c = ctx(d.path());
+    c.transcript_path = Some(d.path().join("s1.jsonl"));
+    assert_eq!(Notes.call(json!({"action": "read"}), &c).await.text_content(), "(no notes yet)");
+    Notes.call(json!({"action": "append", "text": "first finding"}), &c).await;
+    let out = Notes.call(json!({"action": "append", "text": "second finding"}), &c).await;
+    assert!(!out.is_error && out.text_content().contains("2 lines"), "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(d.path().join("s1.notes.md")).unwrap(), "first finding\nsecond finding");
+    // A new process (a new context) on the same session.
+    let mut resumed = ctx(d.path());
+    resumed.transcript_path = c.transcript_path.clone();
+    assert_eq!(resumed.notes_text(), "first finding\nsecond finding");
+    Notes.call(json!({"action": "replace", "text": "only this"}), &resumed).await;
+    assert_eq!(Notes.call(json!({"action": "read"}), &resumed).await.text_content(), "only this");
+    // Without a transcript they live in memory; text is required to write.
+    let plain = ctx(d.path());
+    Notes.call(json!({"action": "append", "text": "x"}), &plain).await;
+    assert_eq!(plain.notes_text(), "x");
+    assert!(Notes.validate(&json!({"action": "append"}), &plain).unwrap_err().contains("`text` is required"));
+}
+
+/// The model saves a checkpoint, changes and creates files, and goes back: its edits since
+/// are undone, files it created are removed, and an earlier change is left alone.
+#[tokio::test]
+async fn checkpoint_restores_the_files_edited_since() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let root = d.path().canonicalize().unwrap();
+    let (a, b, made) = (root.join("a.txt"), root.join("b.txt"), root.join("made.txt"));
+    std::fs::write(&a, "a0\n").unwrap();
+    std::fs::write(&b, "b0\n").unwrap();
+    c.files.record_read(&a);
+    c.files.record_read(&b);
+    Edit::default().call(json!({"file_path": a, "old_string": "a0", "new_string": "a1"}), &c).await;
+
+    assert!(Checkpoint
+        .validate(&json!({"action": "restore", "label": "try"}), &c)
+        .unwrap_err()
+        .contains("No checkpoint"));
+    Checkpoint.call(json!({"action": "save", "label": "try"}), &c).await;
+    assert!(Checkpoint
+        .validate(&json!({"action": "save", "label": "try"}), &c)
+        .unwrap_err()
+        .contains("exists already"));
+    Edit::default().call(json!({"file_path": a, "old_string": "a1", "new_string": "a2"}), &c).await;
+    Edit::default().call(json!({"file_path": a, "old_string": "a2", "new_string": "a3"}), &c).await;
+    Checkpoint.call(json!({"action": "save", "label": "later"}), &c).await;
+    Write.call(json!({"file_path": b, "content": "b1\n"}), &c).await;
+    Write.call(json!({"file_path": made, "content": "new\n"}), &c).await;
+    let listed = Checkpoint.call(json!({"action": "list"}), &c).await.text_content();
+    assert!(listed.contains("- try: 3 file(s)") && listed.contains("- later: 2 file(s)"), "{listed}");
+
+    assert!(
+        !Checkpoint.is_read_only(&json!({"action": "restore"})) && Checkpoint.is_read_only(&json!({"action": "save"}))
+    );
+    let out = Checkpoint.call(json!({"action": "restore", "label": "try"}), &c).await;
+    let said = out.text_content();
+    assert!(!out.is_error && said.contains("Put back") && said.contains("Removed (created since)"), "{said}");
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "a1\n", "as it was at the checkpoint, not at the start");
+    assert_eq!(std::fs::read_to_string(&b).unwrap(), "b0\n");
+    assert!(!made.exists());
+    // The later checkpoint is gone, the restored one starts over, and a restored file is read again.
+    let listed = Checkpoint.call(json!({"action": "list"}), &c).await.text_content();
+    assert_eq!(listed, "- try: 0 file(s) changed since");
+    let again = json!({"file_path": a, "old_string": "a1", "new_string": "a9"});
+    assert!(Edit::default().validate(&again, &c).unwrap_err().contains("not been read"));
+    let nothing = Checkpoint.call(json!({"action": "restore", "label": "try"}), &c).await.text_content();
+    assert!(nothing.contains("Nothing to restore"), "{nothing}");
+}
+
+/// A call that fails or finds nothing says what to try next (GOALS pillar 4).
+#[tokio::test]
+async fn failures_and_empty_results_say_what_to_try() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let root = d.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("src/util")).unwrap();
+    std::fs::write(root.join("src/Config.py"), "TIMEOUT = 3\ndef load(path):\n    return path\n").unwrap();
+    std::fs::write(root.join("src/util/helpers.py"), "x = 1\n").unwrap();
+
+    // A path that isn't there: the directory that is, and the close names in it.
+    let out = Read.call(json!({"file_path": root.join("src/config.py")}), &c).await.text_content();
+    assert!(out.contains("Its directory exists") && out.contains("Config.py"), "{out}");
+    let out = Read.call(json!({"file_path": root.join("lib/deep/config.rs")}), &c).await.text_content();
+    assert!(
+        out.contains("nearest directory that exists is") && out.contains("Nothing there has a similar name"),
+        "{out}"
+    );
+    let missing = json!({"file_path": root.join("src/helpers.py"), "old_string": "a", "new_string": "b"});
+    assert!(Edit::default().validate(&missing, &c).unwrap_err().contains("File does not exist"));
+    let out = Ls.call(json!({"path": root.join("src/Config.py")}), &c).await.text_content();
+    assert!(out.contains("is a file, not a directory"), "{out}");
+    let out = Ls.call(json!({"path": root.join("srcs")}), &c).await.text_content();
+    assert!(out.contains("Directory does not exist") && out.contains("src"), "{out}");
+
+    // Listings count what they show, in the text and in the structured result.
+    let out = Ls.call(json!({"path": root}), &c).await;
+    assert!(out.text_content().ends_with("4 entries."), "{}", out.text_content());
+    assert_eq!(out.structured.unwrap()["numEntries"], 4);
+
+    // An empty search says what it covered and the usual reasons.
+    let out = Glob.call(json!({"pattern": "helpers.py", "path": root}), &c).await.text_content();
+    assert!(out.contains("No files found for `helpers.py`") && out.contains("try `**/helpers.py`"), "{out}");
+    let out = Glob.call(json!({"pattern": "**/nothing.py", "path": root}), &c).await.text_content();
+    assert!(out.starts_with("No files found") && !out.contains("try `"), "{out}");
+    let out = Grep.call(json!({"pattern": "timeout", "path": root, "output_mode": "content"}), &c).await.text_content();
+    assert!(out.contains("No matches found for `timeout`") && out.contains("`-i` ignores case"), "{out}");
+    let out = Grep.call(json!({"pattern": "load(path)", "path": root, "glob": "*.rs"}), &c).await.text_content();
+    assert!(
+        out.contains("only files matching glob *.rs")
+            && out.contains("backslash")
+            && out.contains("without the file filter"),
+        "{out}"
+    );
+    let out = Grep.call(json!({"pattern": "TIMEOUT", "path": root, "offset": 10}), &c).await.text_content();
+    assert!(out.contains("from offset 10: there are 1 in all"), "{out}");
+}
+
+#[tokio::test]
+async fn notebook_edit_names_the_cells_it_has_and_returns_a_structured_result() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let f = d.path().canonicalize().unwrap().join("n.ipynb");
+    let nb = json!({"cells": [{"id": "intro", "cell_type": "markdown", "source": ["# t"]},
+                              {"cell_type": "code", "source": ["x = 1"], "outputs": []}], "nbformat": 4});
+    std::fs::write(&f, nb.to_string()).unwrap();
+    c.files.record_read(&f);
+    let out = NotebookEdit.call(json!({"notebook_path": f, "cell_id": "nope", "new_source": "y"}), &c).await;
+    let said = out.text_content();
+    assert!(out.is_error && said.contains("2 cell(s): intro, cell-1"), "{said}");
+    let out = NotebookEdit.call(json!({"notebook_path": f, "cell_id": "cell-1", "new_source": "x = 2"}), &c).await;
+    assert!(!out.is_error && out.text_content().contains("2 cell(s)"), "{}", out.text_content());
+    let st = out.structured.unwrap();
+    assert_eq!((st["editMode"].as_str(), st["numCells"].as_u64()), (Some("replace"), Some(2)));
+}
+
+/// In a git repository a checkpoint is the whole working tree: what a shell command changed
+/// comes back too, the index is left alone, and another process on the session still has it.
+#[tokio::test]
+async fn checkpoint_in_a_repository_covers_shell_changes_and_outlasts_the_process() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().canonicalize().unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git").args(args).current_dir(&root).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("a.txt"), "a0\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "start"]);
+    let mut c = ctx(&root);
+    c.session_id = "sess-1".into();
+
+    Checkpoint.call(json!({"action": "save", "label": "before sed"}), &c).await;
+    // Not through the edit tools: as a shell command would.
+    std::fs::write(root.join("a.txt"), "rewritten by a script\n").unwrap();
+    std::fs::write(root.join("generated.txt"), "g\n").unwrap();
+    let listed = Checkpoint.call(json!({"action": "list"}), &c).await.text_content();
+    assert_eq!(listed, "- before sed: 2 file(s) changed since");
+
+    // Another process resuming the session.
+    let mut resumed = ctx(&root);
+    resumed.session_id = "sess-1".into();
+    assert!(Checkpoint
+        .validate(&json!({"action": "save", "label": "before sed"}), &resumed)
+        .unwrap_err()
+        .contains("exists already"));
+    Checkpoint.call(json!({"action": "save", "label": "later"}), &resumed).await;
+    let out = Checkpoint.call(json!({"action": "restore", "label": "before sed"}), &resumed).await;
+    let said = out.text_content();
+    assert!(!out.is_error && said.contains("Put back") && said.contains("generated.txt"), "{said}");
+    assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "a0\n");
+    assert!(!root.join("generated.txt").exists());
+    assert_eq!(git(&["status", "--porcelain"]), "", "the tree is as committed, and nothing was staged");
+    assert_eq!(
+        Checkpoint.call(json!({"action": "list"}), &resumed).await.text_content(),
+        "- before sed: 0 file(s) changed since"
+    );
+    // Another session in the same repository has its own.
+    let mut other = ctx(&root);
+    other.session_id = "sess-2".into();
+    assert!(Checkpoint
+        .validate(&json!({"action": "restore", "label": "before sed"}), &other)
+        .unwrap_err()
+        .contains("No checkpoint"));
 }

@@ -1,0 +1,11 @@
+{
+  "instruction": "Requests time out too early. Raise the timeout in src/settings/network.py from 5 to 30 seconds, and the retry count in src/settings/Retry.py from 1 to 4. Change nothing else.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": [
+    "python",
+    "paths",
+    "errors"
+  ],
+  "timeout_secs": 600
+}

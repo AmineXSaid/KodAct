@@ -35,6 +35,8 @@ pub struct AgentRuntime {
     pub sandbox: kodact_tools::SandboxCell,
     /// The session's shell (Bash tool), the same for sub-agents.
     pub shell: kodact_tools::shells::ShellChoice,
+    /// Edit may name lines instead of retyping them (`edit.lineRanges`), as in the session.
+    pub line_edits: bool,
     /// Task agents that may run at once (`maxParallelAgents`); more wait their turn.
     pub agent_slots: Arc<tokio::sync::Semaphore>,
     /// Tools beyond the built-ins (MCP servers' tools), offered to sub-agents too.
@@ -66,6 +68,9 @@ pub struct ChildSpec<'a> {
     /// (added with `FileHistory::add_turn`), not the user's current turn: a
     /// background subtask's edits aren't part of whatever prompt runs meanwhile.
     pub checkpoint_turn: Option<String>,
+    /// Run in this directory instead of the session's (an isolated worktree): it is the
+    /// child's project and its only working directory besides the session's added ones.
+    pub dir: Option<PathBuf>,
 }
 
 /// Snapshots files under one fixed turn of the session's file history.
@@ -124,8 +129,13 @@ impl AgentRuntime {
             ),
         }
         .map_err(|e| e.to_string())?;
-        let mut tool_ctx = ToolContext::new(&self.project_dir);
-        tool_ctx.working_dirs = self.working_dirs.clone();
+        let mut tool_ctx = ToolContext::new(spec.dir.as_deref().unwrap_or(&self.project_dir));
+        if spec.dir.is_some() {
+            let extra: Vec<PathBuf> = self.working_dirs.read().unwrap().iter().skip(1).cloned().collect();
+            tool_ctx.working_dirs.write().unwrap().extend(extra);
+        } else {
+            tool_ctx.working_dirs = self.working_dirs.clone();
+        }
         tool_ctx.env = self.env.clone();
         tool_ctx.sandbox = self.sandbox.clone();
         tool_ctx.shell = self.shell.clone();
@@ -135,7 +145,14 @@ impl AgentRuntime {
         }
         let mut cfg = spec.cfg;
         cfg.is_subagent = true;
-        let permissions = parent.handle.permissions.read().unwrap().clone();
+        let mut permissions = parent.handle.permissions.read().unwrap().clone();
+        if let Some(dir) = &spec.dir {
+            // Its edits belong in its own tree: the session's is outside its working directories.
+            let extra: Vec<PathBuf> = permissions.working_dirs.iter().skip(1).cloned().collect();
+            let fresh = kodact_permissions::Engine::new(permissions.mode, permissions.rules.clone(), dir, &extra);
+            permissions.cwd = fresh.cwd;
+            permissions.working_dirs = fresh.working_dirs;
+        }
         let parts = EngineParts {
             provider: self.provider.clone(),
             tools: spec.tools,
@@ -272,6 +289,63 @@ impl Tool for Unavailable {
     }
 }
 
+/// A sub-agent's own git worktree (`isolation: "worktree"`): a copy of HEAD on a new branch
+/// under `.kodact/worktrees/`, where its edits can't collide with the session's or another
+/// agent's.
+struct Isolated {
+    repo: PathBuf,
+    path: PathBuf,
+    branch: String,
+    /// Where the agent starts: the session's directory, inside the copy.
+    cwd: PathBuf,
+    base: Option<String>,
+}
+
+impl Isolated {
+    fn create(project_dir: &std::path::Path) -> Result<Self, String> {
+        // One at a time: agents started together would race for git's locks.
+        static CREATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _one = CREATING.lock().unwrap_or_else(|e| e.into_inner());
+        let repo = kodact_git::repo_root(project_dir).ok_or("not a git repository")?;
+        let name = format!("agent-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let path = repo.join(".kodact").join("worktrees").join(&name);
+        let branch = format!("kodact/{name}");
+        kodact_git::add_worktree(&repo, &path, &branch)?;
+        let _ = kodact_git::exclude(&repo, ".kodact/worktrees/");
+        let rel = project_dir.strip_prefix(&repo).unwrap_or(std::path::Path::new(""));
+        let cwd = if path.join(rel).is_dir() { path.join(rel) } else { path.clone() };
+        let base = kodact_git::head(&path);
+        Ok(Isolated { repo, path, branch, cwd, base })
+    }
+
+    /// Remove the copy when the agent left nothing in it; otherwise keep it and say where the
+    /// work is. Nothing is merged or deleted on the agent's behalf.
+    fn finish(&self) -> Option<String> {
+        let committed = kodact_git::head(&self.path) != self.base;
+        let dirty = kodact_git::is_dirty(&self.path);
+        if !committed && !dirty {
+            let _ = kodact_git::remove_worktree(&self.repo, &self.path);
+            let _ = kodact_git::delete_branch(&self.repo, &self.branch);
+            return None;
+        }
+        let state = match (committed, dirty) {
+            (true, false) => "committed on that branch",
+            (true, true) => "partly committed on that branch, partly uncommitted in that directory",
+            _ => "uncommitted in that directory",
+        };
+        Some(format!(
+            "\n\n[The agent worked in its own worktree: {} (branch {}). Its changes are {state}; they are not \
+             in your working tree. Review them (`git -C {} status`, `git diff HEAD...{}`) and bring over what \
+             you want (commit there, then `git merge` or `git cherry-pick`; or copy the files). Remove the \
+             worktree with `git worktree remove` once done.]",
+            self.path.display(),
+            self.branch,
+            self.path.display(),
+            self.branch,
+        ))
+    }
+}
+
 pub struct TaskTool {
     pub rt: Arc<AgentRuntime>,
 }
@@ -286,6 +360,7 @@ impl TaskTool {
         let mut reg = ToolRegistry::new();
         kodact_tools::builtin::register_core(&mut reg);
         kodact_tools::builtin::set_shell(&mut reg, &self.rt.shell);
+        kodact_tools::builtin::set_line_edits(&mut reg, self.rt.line_edits);
         for t in &self.rt.extra_tools {
             reg.register(t.clone());
         }
@@ -335,7 +410,8 @@ impl Tool for TaskTool {
             "properties": {
                 "description": {"type": "string", "description": "A short (3-5 word) description of the task"},
                 "prompt": {"type": "string", "description": "The complete, self-contained task for the agent"},
-                "subagent_type": {"type": "string", "enum": names, "description": "Which agent to run (default general-purpose)"}
+                "subagent_type": {"type": "string", "enum": names, "description": "Which agent to run (default general-purpose)"},
+                "isolation": {"type": "string", "enum": ["worktree"], "description": "\"worktree\": the agent works in its own git worktree, a copy of the last commit on a new branch. Use it when agents running in parallel change files, so they can't overwrite each other. Uncommitted changes are not in the copy. The result names the branch and the directory when the agent changed anything; merge it yourself"}
             },
             "required": ["description", "prompt"],
             "additionalProperties": false
@@ -361,6 +437,11 @@ impl Tool for TaskTool {
         if self.agent(name).is_none() {
             let names: Vec<&str> = self.rt.agents.iter().map(|a| a.name.as_str()).collect();
             return Err(format!("Unknown subagent_type {name:?}. Available: {}", names.join(", ")));
+        }
+        if input.get("isolation").is_some() && kodact_git::repo_root(&self.rt.project_dir).is_none() {
+            return Err("isolation \"worktree\" needs a git repository, and this project is not one. Run the \
+                        agent without it."
+                .into());
         }
         let _ = ctx;
         Ok(())
@@ -395,8 +476,16 @@ impl Tool for TaskTool {
             Some(m) => kodact_api::resolve_model(m),
             None => parent.handle.model(),
         };
+        let isolated = match input.get("isolation").and_then(Value::as_str) {
+            Some(_) => match Isolated::create(&self.rt.project_dir) {
+                Ok(w) => Some(w),
+                Err(e) => return ToolOutput::error(format!("Could not create the agent's worktree: {e}")),
+            },
+            None => None,
+        };
         let dirs: Vec<PathBuf> = self.rt.working_dirs.read().unwrap().iter().skip(1).cloned().collect();
-        let mut env = EnvInfo::collect(&self.rt.project_dir, &dirs, &model);
+        let agent_dir = isolated.as_ref().map(|w| w.cwd.clone());
+        let mut env = EnvInfo::collect(agent_dir.as_deref().unwrap_or(&self.rt.project_dir), &dirs, &model);
         env.shell = kodact_platform::shell::env_line(&self.rt.shell);
         let mut sys = kodact_types::SystemBlock::text(format!("{}\n\n{}", agent.prompt, env.render()));
         sys.cache_control = Some(kodact_types::CacheControl::ephemeral());
@@ -412,10 +501,16 @@ impl Tool for TaskTool {
             sink: Arc::new(ForwardSink { parent: self.rt.sink.clone(), parent_tool_use_id: ctx.tool_use_id.clone() }),
             seed: None,
             checkpoint_turn: None,
+            dir: agent_dir,
         };
         let Child { id: child_id, engine: mut child } = match self.rt.child(spec) {
             Ok(c) => c,
-            Err(e) => return ToolOutput::error(format!("Could not start the sub-agent: {e}")),
+            Err(e) => {
+                if let Some(w) = &isolated {
+                    w.finish();
+                }
+                return ToolOutput::error(format!("Could not start the sub-agent: {e}"));
+            }
         };
         // Interrupting the caller interrupts the agent.
         let handle = child.handle();
@@ -438,7 +533,7 @@ impl Tool for TaskTool {
             .flat_map(|m| m.content.iter())
             .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
             .count();
-        let structured = json!({
+        let mut structured = json!({
             "agentType": agent.name,
             "agentId": child_id,
             "status": if stopped { "stopped" } else { status_of(&result) },
@@ -446,7 +541,15 @@ impl Tool for TaskTool {
             "totalDurationMs": started.elapsed().as_millis() as u64,
             "subagentUsage": usage_of(&result),
         });
-        let text = result.result.clone().unwrap_or_default();
+        let mut text = result.result.clone().unwrap_or_default();
+        // Whatever way it ended, the parent is told where its changes are (or that the copy is gone).
+        if let Some(w) = &isolated {
+            let kept = w.finish();
+            structured["worktree"] = json!({"path": w.path, "branch": w.branch, "kept": kept.is_some()});
+            if let Some(note) = kept {
+                text.push_str(&note);
+            }
+        }
         if stopped {
             return stopped_output(&agent.name, &text, structured);
         }

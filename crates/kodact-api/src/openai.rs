@@ -103,6 +103,34 @@ fn dropped_keys(before: &Value, after: &Value) -> Vec<String> {
 }
 
 impl OpenAiProvider {
+    /// LiteLLM's per-model limits, at `<base>/model/info` or, for a base ending in `/v1`, at
+    /// the gateway's root. Errors and other servers' pages are ignored: this only adds windows.
+    async fn read_model_info(&self) {
+        let base = self.config.base_url.trim_end_matches('/');
+        let mut urls = vec![format!("{base}/model/info")];
+        if let Some(root) = base.strip_suffix("/v1") {
+            urls.push(format!("{root}/model/info"));
+        }
+        for url in urls {
+            let mut rb = self.http.get(&url).timeout(Duration::from_secs(5));
+            if let Some(k) = &self.config.api_key {
+                rb = rb.bearer_auth(k);
+            }
+            for (k, v) in &self.config.extra_headers {
+                rb = rb.header(k, v);
+            }
+            let Ok(res) = rb.send().await else { continue };
+            if !res.status().is_success() {
+                continue;
+            }
+            if let Ok(body) = res.json::<Value>().await {
+                if record_model_info(&body) {
+                    return;
+                }
+            }
+        }
+    }
+
     pub fn new(config: OpenAiConfig) -> Result<Self, ApiError> {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(30))
@@ -788,6 +816,22 @@ pub fn listed_limits(entry: &Value) -> crate::models::Limits {
     }
 }
 
+/// Record the limits LiteLLM's `/model/info` gives each model (`model_name`, with
+/// `model_info.max_input_tokens` and `max_output_tokens`), for models without a window yet.
+/// True when the page held at least one model.
+pub fn record_model_info(body: &Value) -> bool {
+    let mut any = false;
+    for m in body["data"].as_array().into_iter().flatten() {
+        let Some(id) = m["model_name"].as_str() else { continue };
+        any = true;
+        let l = listed_limits(m);
+        if l.context_window.is_some() && crate::models::window_unknown(id) {
+            crate::models::listed_limits(id, l);
+        }
+    }
+    any
+}
+
 /// Record the limits each listed model reports, so compaction uses the real window.
 pub fn record_listed_limits(body: &Value) {
     for m in body["data"].as_array().into_iter().flatten() {
@@ -835,7 +879,13 @@ impl Provider for OpenAiProvider {
             }
             let body: Value = res.json().await.map_err(|e| ApiError::Parse(e.to_string()))?;
             record_listed_limits(&body);
-            Ok(model_ids(&body))
+            let ids = model_ids(&body);
+            // A LiteLLM gateway lists no window in /models but keeps one per model in
+            // /model/info (`model_info.max_input_tokens`): ask there when a model lacks one.
+            if ids.iter().any(|id| crate::models::window_unknown(id)) {
+                self.read_model_info().await;
+            }
+            Ok(ids)
         }
         .await;
         Some(r.map_err(|e| e.with_origin(self.config.origin())))
@@ -913,7 +963,7 @@ impl Provider for OpenAiProvider {
                     tracing::warn!(error = %e, "the endpoint refused a parameter; sending again without it");
                     adaptations += 1;
                 }
-                Err(e) if e.is_retryable() && attempt < self.config.max_retries => {
+                Err(e) if e.retries_quickly() && attempt < self.config.max_retries => {
                     let retry_after = match &e {
                         ApiError::Http { retry_after, .. } => *retry_after,
                         _ => None,
@@ -949,6 +999,22 @@ impl Provider for OpenAiProvider {
 
 #[cfg(test)]
 mod tests {
+    /// LiteLLM's /model/info: a window per model name, read only for models without one.
+    #[test]
+    fn litellm_model_info_gives_each_model_its_window() {
+        let body = json!({"data": [
+            {"model_name": "info-small", "litellm_params": {"model": "hosted_vllm/Qwen"}, "model_info": {"max_input_tokens": 100000, "max_output_tokens": 32000}},
+            {"model_name": "info-large", "model_info": {"max_input_tokens": 1000000}},
+            {"model_name": "info-none", "model_info": {"max_input_tokens": null}}
+        ]});
+        assert!(record_model_info(&body));
+        let w = |id: &str| crate::models::model_info_or_default(id).context_window;
+        assert_eq!((w("info-small"), crate::models::model_info_or_default("info-small").max_output), (100_000, 32_000));
+        assert_eq!(w("info-large"), 1_000_000);
+        assert!(crate::models::window_unknown("info-none"));
+        assert!(!record_model_info(&json!({"data": [{"id": "not-model-info"}]})), "another server's page");
+    }
+
     use super::*;
     use crate::MessageAccumulator;
 

@@ -192,7 +192,7 @@ impl Provider for LimitedProvider {
                     self.limiter.succeeded();
                     return Ok(Box::pin(Held { inner: s, _slot: slot }));
                 }
-                Err(e @ ApiError::Http { status: 429, .. }) if attempt < RATE_LIMIT_RETRIES => {
+                Err(e @ ApiError::Http { status: 429, .. }) if attempt < RATE_LIMIT_RETRIES && e.retries_quickly() => {
                     let retry_after = match &e {
                         ApiError::Http { retry_after, .. } => *retry_after,
                         _ => None,

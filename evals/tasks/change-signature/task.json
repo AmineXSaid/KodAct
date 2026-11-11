@@ -1,0 +1,7 @@
+{
+  "instruction": "Give `total` in shop/pricing.py a third, required parameter `discount` (cents taken off the subtotal before tax). Every existing caller keeps its current result by passing a discount of 0. `python3 main.py` must still run.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["python", "refactor", "callers", "edit-diagnostics"],
+  "timeout_secs": 600
+}

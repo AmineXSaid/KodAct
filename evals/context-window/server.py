@@ -29,6 +29,10 @@ class H(BaseHTTPRequestHandler):
             entry = {"id": c.get("model", "probe-model"), "object": "model", **m.get("fields", {})}
             data = m.get("extra", []) + ([] if m.get("omit_model") else [entry])
             return self.reply(m.get("status", 200), json.dumps({"object": "list", "data": data}))
+        # LiteLLM's per-model limits page, when the case gives one.
+        if self.path.rstrip("/").endswith("/model/info") and "model_info" in m:
+            data = [{"model_name": c.get("model", "probe-model"), "litellm_params": {"model": "hosted_vllm/x"}, "model_info": m["model_info"]}]
+            return self.reply(200, json.dumps({"data": data}))
         self.reply(404, '{"error":{"message":"not found"}}')
     def do_POST(self):
         c = cfg(); n = int(self.headers.get("content-length", 0)); req = json.loads(self.rfile.read(n) or b"{}")
@@ -40,6 +44,14 @@ class H(BaseHTTPRequestHandler):
         time.sleep(ch.get("delay", 0))
         if ch.get("error_over") and n > ch["error_over"]:
             return self.reply(400, json.dumps({"error": {"message": ch.get("error_text", "This model's maximum context length is 32768 tokens. However, your messages resulted in 40000 tokens."), "type": "invalid_request_error", "code": "context_length_exceeded"}}))
+        # A server with a real window that refuses, in vLLM's words passed on by LiteLLM,
+        # a prompt plus requested reply larger than it.
+        pt = ch.get("prompt_tokens", 3000) + ch.get("per_message", 0) * len(msgs)
+        mt = req.get("max_tokens") or req.get("max_completion_tokens") or 0
+        if ch.get("window") and pt + mt > ch["window"]:
+            inner = (f"This model's maximum context length is {ch['window']} tokens. However, you requested {mt} output tokens "
+                     f"and your prompt contains at least {pt} input tokens, for a total of at least {pt + mt} tokens.")
+            return self.reply(400, json.dumps({"detail": "litellm.ContextWindowExceededError: litellm.BadRequestError: " + json.dumps({"error": {"message": inner}})}))
         self.send_response(200); self.send_header("content-type", "text/event-stream"); self.send_header("transfer-encoding", "chunked"); self.end_headers()
         def ev(d):
             b = b"data: " + json.dumps(d).encode() + b"\n\n"

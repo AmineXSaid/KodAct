@@ -973,6 +973,7 @@ mod tests {
             fatal: false,
             auth_failed: false,
             tool_calls: 0,
+            verification: None,
         };
         assert!(matches!(reply_for(&base), Some(UiEvent::Reply { text, is_error: false }) if text == "ok"));
         let model = TurnResult { num_turns: 1, stop_reason: Some("end_turn".into()), ..base.clone() };

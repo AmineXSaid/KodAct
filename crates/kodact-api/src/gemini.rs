@@ -835,7 +835,7 @@ impl Conn {
                 adaptations += 1;
                 continue;
             }
-            if err.is_retryable() && attempt < self.config.max_retries {
+            if err.retries_quickly() && attempt < self.config.max_retries {
                 let retry_after = match &err {
                     ApiError::Http { retry_after, .. } => *retry_after,
                     _ => None,

@@ -148,6 +148,8 @@ not happen, unless a later successful tool result shows it was done again.\n\
 If the goal depends on them, it is not met.\n\
 - If the goal names a check (tests pass, a build succeeds, a file exists), the transcript must show that check \
 succeeding after the last change.\n\
+- A HARNESS line is the agent harness's own record of the last turn (which changed files no check has run on, \
+whether the last check passed or failed). It is evidence, and it outranks an AGENT claim that contradicts it.\n\
 - When in doubt, the answer is not_met.\n\n\
 Reply with only a JSON object: {\"verdict\": \"met\" | \"not_met\" | \"impossible\", \"evidence\": [\"the \
 tool results that prove it, quoted or closely paraphrased\"], \"reason\": \"one or two sentences\"}.\n\
@@ -234,6 +236,30 @@ fn first_chars(s: &str, max: usize) -> String {
     }
 }
 
+/// What KodAct itself recorded about the last turn's changes, for the evaluator: the same
+/// state the verification reminder and the result's `verification` field are decided on. Said
+/// only where it bears on a goal: changes nobody checked, and how the last check ended. A turn
+/// that changed nothing says nothing (an earlier turn's changes are in the transcript).
+pub fn harness_note(state: Option<&kodact_engine::Verified>) -> String {
+    use kodact_engine::Verified;
+    let said = match state {
+        Some(Verified::Unchecked { files, shell: false }) if !files.is_empty() => {
+            format!("in the last turn these files changed and no check has run since: {}.", files.join(", "))
+        }
+        Some(Verified::Unchecked { .. }) => {
+            "in the last turn files changed through shell commands and no check has run since.".to_string()
+        }
+        Some(Verified::Failed { command }) => {
+            format!("the last check (`{command}`) failed, and nothing changed after it.")
+        }
+        Some(Verified::Passed { command }) => {
+            format!("the last check (`{command}`) passed, and nothing changed after it.")
+        }
+        _ => return String::new(),
+    };
+    format!("\n\nHARNESS: {said}")
+}
+
 /// The prompt that continues the work after a check.
 pub fn continue_prompt(condition: &str, reason: &str) -> String {
     let reason = if reason.is_empty() { String::new() } else { format!(" {reason}") };
@@ -266,6 +292,24 @@ mod tests {
         assert_eq!(parse_verdict(r#"{"verdict":"impossible","reason":"no network"}"#).0, Verdict::Impossible);
         assert_eq!(parse_verdict("met!").0, Verdict::NotMet, "no JSON is never a pass");
         assert_eq!(parse_verdict(r#"{"verdict":"maybe"}"#).0, Verdict::NotMet);
+    }
+
+    #[test]
+    fn the_harness_note_says_what_bears_on_a_goal() {
+        use kodact_engine::Verified;
+        let unchecked = Verified::Unchecked { files: vec!["a.py".into(), "b.py".into()], shell: false };
+        assert_eq!(
+            harness_note(Some(&unchecked)),
+            "\n\nHARNESS: in the last turn these files changed and no check has run since: a.py, b.py."
+        );
+        assert!(harness_note(Some(&Verified::Unchecked { files: vec![], shell: true })).contains("shell commands"));
+        assert!(harness_note(Some(&Verified::Failed { command: "make test".into() })).contains("(`make test`) failed"));
+        assert!(harness_note(Some(&Verified::Passed { command: "make test".into() })).contains("passed"));
+        // Nothing to say of a turn that changed nothing, or with the loop off.
+        assert_eq!(harness_note(Some(&Verified::NoChanges)), "");
+        assert_eq!(harness_note(Some(&Verified::ReadBack)), "");
+        assert_eq!(harness_note(None), "");
+        assert!(EVALUATOR_PROMPT.contains("A HARNESS line"));
     }
 
     #[test]

@@ -131,7 +131,8 @@ async fn text_results_on_stdout_diagnostics_on_stderr() {
     let api = MockApi::start(vec![MockTurn::text("the answer")]).await;
     let (code, out, err) = run(with_api(kodact(&e, &["-p", "q"]), &api));
     assert_eq!((code, out.as_str()), (0, "the answer\n"), "{err}");
-    let api = MockApi::start(vec![MockTurn::http_error(500, "api_error")]).await;
+    // An error no retry fixes (a 500 or a 429 is waited out first).
+    let api = MockApi::start(vec![MockTurn::http_error(400, "invalid_request_error")]).await;
     let (code, out, err) = run(with_api(kodact(&e, &["-p", "q"]), &api));
     assert_eq!(code, 1);
     assert!(out.is_empty(), "errors never go to stdout: {out}");

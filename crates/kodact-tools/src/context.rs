@@ -33,6 +33,10 @@ pub struct ToolContext {
     pub checkpointer: Option<Arc<dyn Checkpointer>>,
     pub shells: Arc<ShellManager>,
     pub todos: Arc<Mutex<Vec<Value>>>,
+    /// The model's notes (the Notes tool), re-attached after compaction.
+    pub notes: Arc<crate::builtin::NotesStore>,
+    /// The model's own checkpoints of its edits (the Checkpoint tool).
+    pub checkpoints: Arc<crate::builtin::Checkpoints>,
     /// Extra environment for spawned commands.
     pub env: Arc<HashMap<String, String>>,
     /// Upper bound for Bash output kept in a result.
@@ -61,6 +65,8 @@ impl ToolContext {
             checkpointer: None,
             shells: Arc::new(ShellManager::default()),
             todos: Arc::new(Mutex::new(vec![])),
+            notes: Default::default(),
+            checkpoints: Default::default(),
             env: Arc::new(HashMap::new()),
             max_output_chars: 30_000,
             sandbox: Arc::new(RwLock::new(None)),
@@ -105,7 +111,13 @@ impl ToolContext {
         *self.sandbox.write().unwrap() = policy.map(Arc::new);
     }
 
+    /// The session's notes, as the Notes tool last left them.
+    pub fn notes_text(&self) -> String {
+        self.notes.get(self.transcript_path.as_deref())
+    }
+
     pub fn checkpoint(&self, path: &Path) {
+        self.checkpoints.before_write(path);
         if let Some(c) = &self.checkpointer {
             c.before_write(path);
         }

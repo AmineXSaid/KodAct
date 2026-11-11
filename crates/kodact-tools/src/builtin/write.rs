@@ -64,6 +64,7 @@ impl Tool for Write {
             "type": if existed { "update" } else { "create" },
             "filePath": path,
             "content": content,
+            "originalFile": old,
             "structuredPatch": old.as_deref().map(|o| super::edit::patch_hunks(o, content)).unwrap_or_default(),
         });
         let msg = if existed {

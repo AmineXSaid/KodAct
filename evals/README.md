@@ -12,6 +12,11 @@ A task can also send a message while the agent works, as a desktop host does:
 and sends `text` for the turn's next step once the agent has made N tool calls
 (as the next turn, if the turn ends first).
 
+`"crash": {"after_tool_calls": N, "resume": "Continue."}` kills kodact once
+the agent has made N tool calls, as a crash or a closed terminal does, then
+runs `kodact -p <resume> --continue` in the same workspace; both parts go to
+the run's transcript.
+
 ## Running it
 
 ```bash
@@ -39,6 +44,9 @@ and stderr.
 | verify-commit | verification | Fix a bug, run the tests, commit (the workspace is a git repo); committing changes no file, so the verification loop must not ask to verify again (`verify_reminders`) |
 | answer-file | verification | Count the distinct users with a successful login across two logs and write just the number to answer.txt; some users appear only on denied lines. Reading the answer back is its check, so the verification loop must not ask for the project's checks (`verify_reminders`) |
 | exact-output | verification | Write stats.py that prints one line per sensor in a given format, which another program reads; the check takes stdout as it is, so an extra line of diagnostics fails it |
+| syntax-after-edit | verification | Add an entry to a nested services.json and change one value, leaving the rest as it is; the check loads the file, so an edit that leaves a trailing comma or an unclosed bracket fails it. Such an edit is told with its own result (`edit_diagnostics`), which should cost fewer turns than finding out from `report.py` |
+| format-after-edit | verification | Add a function to a module of a project formatted with `ruff format`, whose check rejects unformatted code; the project turns `verification.format` on, so an edit that isn't formatted is formatted and its result says what moved |
+| change-signature | verification | Give a function a new required parameter; its two callers are in other modules, one through `from … import`, one through the module. Nothing fails until a caller runs, so an agent that edits the function and stops finishes falsely. With `verification.languageServer` on, the broken callers are told with the edit (`edit_diagnostics`) |
 | rename-symbol | long-horizon | Rename across modules, an aliased import and a module-qualified call |
 | split-module | long-horizon | Split a module into a package and keep the public API |
 | stop-at-target | long-horizon | Meet a stated target (pack the items into at most 33 bins), then write the result to bins.txt. The optimum (31) is reachable but not asked for: turns and minutes show whether the agent stops once the target is met, and the bins.txt step catches stopping before the task is done |
@@ -56,6 +64,12 @@ and stderr.
 | crlf-config | tool-design | Edit one CRLF line in a file with a duplicate key elsewhere |
 | csv-to-json | tool-design | Write new code to a precise spec checked on hidden input |
 | serve-after-exit | long-horizon | Serve site/ over HTTP on a free port for a checker that runs after the agent has exited (run with `--autonomous`). A server left as a KodAct background command is stopped when the session ends; the background reminder must lead to one started detached, so the check finds it answering |
+| resume-after-kill | recovery | Load three batches with a slow loader that is not idempotent; kodact is killed mid-task (`crash`) and the session continued. The check wants every batch exactly once, so the resumed turn must look at what was loaded instead of repeating or skipping the call that was under way |
+| parallel-plugins | long-horizon | Two plugins written by two sub-agents at once, each in its own worktree (`isolation: "worktree"`), both editing registry.py; both changes must end up in the working tree |
+| rewrite-block | tool-design | Replace a 55-line if/elif chain with a dict; the project turns `edit.lineRanges` on, so the chain can be named by its lines instead of retyped (compare cost and turns with `KODACT_EDIT_LINES=0`) |
+| notes-across-compaction | long-horizon | The verbose-stages build, where each failure shows an incident reference only while its stage fails; all four must be listed at the end, after the conversation was compacted (`--autocompact 100k`): the first has to be kept somewhere that outlasts it (the Notes tool) |
+| abandon-approach | long-horizon | Try a three-file idea, measure it, find it wanting and take every part of it out again before solving the task another way; anything left of the idea fails the check (the Checkpoint tool restores in one call) |
+| near-miss-paths | tool-design | The request names two files a little wrong (another directory, another case, a shorter name); turns show whether the error for a missing path leads straight to the right file, and the check fails if new files were made instead |
 | steer-more-work | long-horizon | A request sent mid-task ("also write the total") must be done without dropping the per-file work in hand |
 | reference-skill | compatibility | `/version-notes 1.4.0 changes.txt` runs a skill written for the reference CLI (`.claude/skills`, named and indexed arguments, `${CLAUDE_SKILL_DIR}`) |
 | tool-chain | compatibility | Follow a trail through four files, one tool call at a time, to the right release code; run with a Gemini 3 model (`--model gemini-3-flash-preview`, `KODACT_GEMINI_API_KEY`) it checks that thought signatures survive a multi-step tool loop |

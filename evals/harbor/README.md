@@ -96,7 +96,8 @@ evals/harbor/run.sh subset
   port in the firewall. Check with
   `docker run --rm curlimages/curl -s http://<that address>:8000/v1/models`.
 - Set `KODACT_CONTEXT_WINDOW` (or `modelLimits`) to what the server really
-  serves. KodAct otherwise assumes 200,000 tokens and compacts too late.
+  serves. KodAct otherwise assumes 1,000,000 tokens until the server refuses a
+  request and states its window, and compacts later than it should until then.
 - Cost shows as 0 or unknown: KodAct has no price for the model. That
   changes nothing in the run. Spending limits are opt-in: no budget is set
   unless you pass `--max-budget-usd`, and the Harbor agent doesn't. If you
@@ -210,7 +211,8 @@ evals/harbor/run-pi.sh subset
 Pi runs once per task as `pi -p --mode json --no-session --provider kodact-endpoint
 --model <model> "<task>"`. Its `models.json` declares one provider for
 `KODACT_OPENAI_BASE_URL`, API `openai-completions`, with `KODACT_CONTEXT_WINDOW`
-as the context window (200,000 when unset, what KodAct assumes; Pi's own
+as the context window (200,000 when unset; KodAct itself assumes 1,000,000 and
+learns a smaller one from the first refusal, which Pi doesn't; Pi's own
 default is 128,000) and `KODACT_MAX_OUTPUT_TOKENS` as the most tokens per reply
 (32,000 when unset, KodAct's; Pi's own 16,384 cut a reasoning model off mid-thought,
 before its first tool call). The key stays in an environment variable. Pi's defaults

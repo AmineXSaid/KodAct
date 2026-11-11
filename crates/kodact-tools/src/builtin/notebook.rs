@@ -116,10 +116,33 @@ impl Tool for NotebookEdit {
                 .or_else(|| id.strip_prefix("cell-").and_then(|n| n.parse::<usize>().ok()).filter(|&n| n < cells.len()))
         };
         let lines: Vec<Value> = source.split_inclusive('\n').map(|l| json!(l)).collect();
+        // The ids a call can name, for an id that isn't one of them.
+        let known: Vec<String> = cells
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                c.get("id").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("cell-{i}"))
+            })
+            .collect();
+        let not_found = || {
+            let shown: Vec<&str> = known.iter().take(30).map(String::as_str).collect();
+            let more = if known.len() > shown.len() {
+                format!(" (and {} more)", known.len() - shown.len())
+            } else {
+                String::new()
+            };
+            ToolOutput::error(format!(
+                "cell_id {:?} not found. The notebook has {} cell(s): {}{more}. Read the notebook to see them; \
+                 `cell-N` names the Nth cell from 0.",
+                cell_id.unwrap_or(""),
+                known.len(),
+                shown.join(", ")
+            ))
+        };
         match mode {
             "replace" => {
                 let Some(i) = cell_id.and_then(|id| find(cells, id)) else {
-                    return ToolOutput::error("cell_id not found");
+                    return not_found();
                 };
                 cells[i]["source"] = Value::Array(lines);
                 if let Some(t) = input.get("cell_type").and_then(Value::as_str) {
@@ -135,7 +158,7 @@ impl Tool for NotebookEdit {
                 let at = match cell_id {
                     Some(id) => match find(cells, id) {
                         Some(i) => i + 1,
-                        None => return ToolOutput::error("cell_id not found"),
+                        None => return not_found(),
                     },
                     None => 0,
                 };
@@ -148,7 +171,7 @@ impl Tool for NotebookEdit {
             }
             "delete" => {
                 let Some(i) = cell_id.and_then(|id| find(cells, id)) else {
-                    return ToolOutput::error("cell_id not found");
+                    return not_found();
                 };
                 cells.remove(i);
             }
@@ -160,6 +183,11 @@ impl Tool for NotebookEdit {
             return ToolOutput::error(format!("Could not write notebook: {e}"));
         }
         ctx.files.record_write(&path);
-        ToolOutput::text(format!("Notebook {} updated ({mode}).", path.display()))
+        let count = nb.get("cells").and_then(Value::as_array).map_or(0, Vec::len);
+        ToolOutput::text(format!("Notebook {} updated ({mode}); it now has {count} cell(s).", path.display()))
+            .with_structured(json!({
+                "notebookPath": path, "editMode": mode, "cellId": cell_id, "cellType": input.get("cell_type"),
+                "numCells": count,
+            }))
     }
 }

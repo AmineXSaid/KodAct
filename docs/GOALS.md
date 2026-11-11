@@ -59,14 +59,31 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - memory files and the task list re-attached after compaction;
   - the person's requests carried word for word through every compaction and
     a resume, within a tenth of the model's window, whatever the summary kept
-    (task `deliverable-after-compaction`).
+    (task `deliverable-after-compaction`);
+  - each model's own window: `modelLimits`, then what its endpoint lists, then
+    the built-in table. `KODACT_CONTEXT_WINDOW`, one value for every model, only
+    fills in for a model with none of these, so a value set for a small model
+    never shrinks a large one (`evals/context-window/`, in every mode);
+  - a window the endpoint states anywhere is learned: its model list,
+    LiteLLM's `/model/info`, or a refusal for length ("maximum context length
+    is N tokens"), after which the request goes again sized to fit, instead of
+    compacting on a guessed window.
 - **Measured by:** pass rate and cost on long tasks, and context tokens per
   turn (task `log-needle`).
 
 ### 2. Failure recovery
 
 - **Done** (contract C13):
-  - API retries with backoff, fallback models, and interrupt with rewind.
+  - a fallback model takes the turn when the first is limited in a way a
+    short wait doesn't lift (three rate limits waited out in a row, a long
+    `retry-after`, a spent quota), as it does on overload;
+  - a reply that is one passage over and over is stopped while it streams and
+    the model is told, instead of running to the output cap;
+  - API retries with backoff, fallback models, and interrupt with rewind. A
+    429 or an outage is waited out in every run. A spent quota is told from a
+    throttle and not retried, and a `retry-after` longer than a retry sleeps
+    is taken in full when it fits the run's time, or stated and the turn
+    ends: never shortened to a minute and tried again.
   - Edit's "not found" error gives the next step:
     - text that matches except for whitespace, quoted with line numbers;
     - Read's line-number prefixes copied into `old_string`;
@@ -74,7 +91,11 @@ Each pillar lists what KodAct does about it and what shows that it works.
     Ambiguous matches name their lines.
   - Stuck-loop detection: the same failing call three times, the same result
     three times, edits that undo each other, or five failures in a row each
-    trigger one reminder to change approach.
+    trigger a reminder to change approach, told again at 5 and at 8 when the
+    repeat goes on. After the first reminder, the same
+    failing call to a tool whose result depends only on the call and the
+    files (file tools, an unknown tool name) is answered without being run,
+    until something changes; shell, web and MCP calls are only reminded.
   - Truncated output:
     - a tool call cut off by `max_tokens` is answered with an error, not
       sent as a failed turn;
@@ -83,10 +104,14 @@ Each pillar lists what KodAct does about it and what shows that it works.
     - no request asks for more reply than the model's window has left after
       its prompt, so endpoints that count the reply against the window don't
       refuse it; on a large window the cap goes out unchanged.
-- **To build:** recovery after a crash (resume an interrupted turn from the
-  transcript).
+  - A turn the process died in is told on resume: the transcript records
+    where each turn starts and ends, so resuming a session whose last turn
+    never ended (a kill, a crash, a closed terminal) tells the model which
+    tool calls returned nothing and to look at the real state before
+    continuing, instead of trusting or repeating them (`system/turn_recovered`).
+    A turn that ended, an interrupt included, says nothing.
 - **Measured by:** recovery rate, and turns wasted after the first error
-  (tasks `build-recovery`, `makefile-tabs`).
+  (tasks `build-recovery`, `makefile-tabs`, `resume-after-kill`).
 
 ### 3. Verification
 
@@ -100,11 +125,41 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - the reminder asks the final message to state what was verified and what
     was not;
   - one reminder per set of changes, and an answer or data file read back
-    after its last change counts as checked (task `answer-file`).
-  - It is on by default; `KODACT_VERIFY=0` turns it off for A/B runs, and
+    after its last change counts as checked (task `answer-file`);
+  - a program a passing check built (`gcc -o app app.c`) and nothing ran
+    since is asked to run once before the turn ends.
+  - `"reminders": false` or `KODACT_REMINDERS=0` turns all of KodAct's
+    reminders off (this one, the loop guard, the act, attempt, next-step and
+    todo reminders, the budget and time wrap-up), for A/B runs against the
+    model alone.
+  - It is on by default; `KODACT_VERIFY=0` turns this one off, and
     `kodact-eval` records `verify_reminders` per run.
-- **To build:** LSP diagnostics and formatter feedback after edits (the
-  OpenCode pattern).
+  - the result states where the changes stand (`verification.status`:
+    `passed`, `failed`, `unchecked`, `read_back`, `no_changes`), for scripts
+    to gate on; `kodact-eval` records it per run, so a false finish shows as
+    announced (`unchecked`, `failed`) or as slipped past a check (`passed`);
+  - a file an edit leaves unparseable is said with the edit's result, by the
+    language's own parser when installed (`verification.syntaxCheck`;
+    `edit_diagnostics` per run, task `syntax-after-edit`).
+  - language-server diagnostics after edits (`verification.languageServer`,
+    off by default until measured): the errors a server reports for the new
+    text, in that file and others, within a share of the model's window (task
+    `change-signature`);
+    only the errors the edit added are told: the file's text before the edit
+    is the baseline (then what the server last said of it), so a project the
+    server can't fully resolve doesn't repeat its standing errors;
+  - formatting after edits (`verification.format`, off by default until
+    measured): the edited file is run through its formatter and the result
+    says what moved, so a project whose checks reject unformatted code
+    doesn't cost a turn to find out. Only a file that was already in the
+    formatter's style before the edit is touched, so a project that doesn't
+    use the formatter is never rewritten by it (task `format-after-edit`);
+  - `/goal`'s check is told the same record (`HARNESS:` line).
+  - a file a shell command rewrote (`sed -i`, a generator, `git checkout`)
+    gets the language server's check too, when the session had already had it
+    checked: told with the command's result. Formatting is not applied to
+    what a command wrote: its output is its own, and the project's checks
+    cover it.
 - **Measured by:** false-finish rate and pass rate (tasks `fix-median`,
   `slugify-trap`, `invoice-rounding`).
 
@@ -112,12 +167,29 @@ Each pillar lists what KodAct does about it and what shows that it works.
 
 - **Done:** precise errors, read-before-write, CRLF-safe Edit, parallel
   read-only batches, results returned in call order, and repair of invalid
-  tool-call JSON (open-weight models' most common invalid call).
+  tool-call JSON (open-weight models' most common invalid call), and a tool
+  call written as text (`<tool_call>…</tool_call>`, or a reply that is only
+  the call's JSON) run as the call it is.
+  With `edit.lineRanges` (off by default until measured), Edit can also name
+  the lines to replace (`start_line`, `end_line`, and `anchor`, the text of
+  the first line) instead of retyping them as `old_string`: a large
+  replacement costs a few tokens of input and can't fail on whitespace. The
+  anchor catches line numbers that moved since the model read them, before
+  anything is written (task `rewrite-block`).
+  Every built-in tool returns a structured result next to its text (LS and
+  NotebookEdit were the last without one). A call that fails or finds
+  nothing says the next step: a path that isn't there names the nearest
+  directory that is and the close names in it (another case, extension or
+  spelling); an empty Glob or Grep says what was searched, with which
+  filter, and the usual cause (a pattern without `**`, a case-sensitive
+  search, an unescaped regex character, an offset past the end); LS counts
+  its entries; NotebookEdit lists the cell ids it has (task
+  `near-miss-paths`).
 - **To build:**
-  - tool descriptions tuned against the eval suite;
-  - structured results everywhere;
-  - output that helps the model's next step: counts, truncation markers, and
-    what to try when a call fails.
+  - tool descriptions tuned against the eval suite. The means is there
+    (`scripts/eval-descriptions.sh` runs the suite with and without a set of
+    descriptions and prints the A/B table); the tuning itself needs runs on
+    a real model, and no description is changed without them.
 - **Measured by:** turns per task and invalid-call rate.
 
 ### 5. Long-horizon execution
@@ -144,28 +216,49 @@ Each pillar lists what KodAct does about it and what shows that it works.
     limit with an error result (`stop_reason: "max_time"`), a call in flight
     included. Benchmark tasks have hard time limits; a run cut off mid-change
     scores nothing;
+  - a `-p` run with its prompt given up front ends with its turn: about to
+    end with todo items open, it is sent back once (not in a session with a
+    person or a host, where stopping to ask is right);
   - resumable sessions, and unattended headless runs.
-- **To build:**
-  - a notes file;
-  - checkpoints the model can roll back to itself.
+  - isolated sub-agents: `isolation: "worktree"` on a Task call runs the
+    agent in its own git worktree (a copy of HEAD on a new branch under
+    `.kodact/worktrees/`), so agents changing files in parallel can't
+    overwrite each other or the session's tree. The result names the branch
+    and directory when the agent changed something; an untouched copy is
+    removed (task `parallel-plugins`).
+  - a notes file (the Notes tool): what the model writes there is given back
+    after every compaction, whole within a twentieth of the model's window
+    and otherwise its latest part with the way to read the rest, and is kept
+    next to the transcript (`<session>.notes.md`), so a resumed session and
+    the person have it (task `notes-across-compaction`);
+  - checkpoints the model rolls back to itself (the Checkpoint tool): `save`
+    before an approach that may fail, `restore` to put the files back as
+    they were and remove the ones created since, instead of undoing changes
+    one by one (task `abandon-approach`). In a git repository a checkpoint
+    is the whole working tree (every file git does not ignore), kept under a
+    ref of the session's own: it covers what shell commands changed, leaves
+    the index and the branches alone, and a resumed session still has it.
+    Outside a repository it covers the files changed with the edit tools,
+    for the run of the session.
 - **Measured by:** pass rate on multi-step tasks, and success after a resume.
 
 ## Priority order
 
 1. `kodact-eval`: the task suite, the runner and A/B reports. **Done.** There
-   are 13 validated tasks across the pillars, plus `validate`, `run` and
+   are 40 validated tasks across the pillars, plus `validate`, `run` and
    `compare`. No measured baseline exists yet: the first `kodact-eval run` with
    a real API key sets it. How to record it, what to commit and how to read
    the A/B report: docs/BASELINE.md, "Recording the first real baseline"
    (its commands are checked against `kodact-eval` by a test).
 2. Sub-agents (the Task tool, built-in Explore and Plan agents), to isolate
    context.
-3. The verification loop. **Done**, without LSP feedback.
+3. The verification loop. **Done**; language-server and formatter feedback are
+   opt-in.
 4. Recovery: Edit match suggestions, stuck-loop detection, `max_tokens`
    recovery. **Done.**
 5. Budgets on tool output, and no repeated reads. **Done.**
-6. A plan that survives compaction. **Done** (the task list; a notes file is
-   still to build).
+6. A plan that survives compaction. **Done** (the task list and the notes
+   file).
 7. Parity features in order of use:
    - **Done:** MCP (stdio, HTTP and SSE client, `kodact mcp`, `kodact mcp
      serve`), web tools, plan mode and AskUserQuestion, skills, output styles.

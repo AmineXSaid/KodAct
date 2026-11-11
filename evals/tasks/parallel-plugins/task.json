@@ -1,0 +1,7 @@
+{
+  "instruction": "Add two text plugins: `upper` (upper-cases the text) and `reverse` (reverses it). Each is a module in plugins/ with a `run(text)` function, listed in registry.py like `strip`, so that `python3 main.py upper hello` prints HELLO and `python3 main.py reverse hello` prints olleh. Have two sub-agents write them at the same time, one plugin each, each isolated in its own worktree, then bring both changes into this working tree: both edit registry.py.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "long-horizon",
+  "tags": ["python", "subagents", "worktree"],
+  "timeout_secs": 900
+}

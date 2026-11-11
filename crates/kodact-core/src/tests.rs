@@ -198,6 +198,30 @@ async fn c10_worktree_flag_runs_the_session_in_a_new_worktree() {
     assert!(s.engine.tool_ctx().project_dir.ends_with(".kodact/worktrees/session-12345678"));
 }
 
+/// Language servers are asked only when the setting says so, with the loop on; a configured
+/// server comes before the built-in ones.
+#[test]
+fn language_servers_are_opt_in() {
+    use kodact_config::{LoadedSettings, SettingSource};
+    let mut s = LoadedSettings::default();
+    let set = |s: &mut LoadedSettings, key: &str, v: serde_json::Value| {
+        s.apply(SettingSource::Flag, std::path::Path::new(""), &["verification", key], Some(v));
+    };
+    assert_eq!(crate::language_servers(&s, true), None, "off by default");
+    assert!(crate::edit_diagnostics(&s, true), "the parse check is on by default");
+    set(&mut s, "languageServer", serde_json::json!(true));
+    assert_eq!(crate::language_servers(&s, false), None, "not with the verification loop off");
+    let builtin = crate::language_servers(&s, true).unwrap();
+    assert_eq!(builtin, kodact_engine::LspConfig::default());
+    set(&mut s, "languageServers", serde_json::json!({".py": ["pylsp"], "bad": "not a list"}));
+    set(&mut s, "languageServerWaitMs", serde_json::json!(750));
+    let own = crate::language_servers(&s, true).unwrap();
+    assert_eq!(own.servers[0].extensions, vec!["py".to_string()]);
+    assert_eq!(own.servers[0].command, vec!["pylsp".to_string()]);
+    assert_eq!(own.servers.len(), builtin.servers.len() + 1, "an entry that isn't a command is left out");
+    assert_eq!(own.wait, std::time::Duration::from_millis(750));
+}
+
 #[test]
 fn unattended_runs_get_a_second_verification_reminder() {
     use kodact_config::{LoadedSettings, SettingSource};

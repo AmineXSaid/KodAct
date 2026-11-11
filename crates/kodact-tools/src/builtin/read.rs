@@ -80,8 +80,9 @@ impl Tool for Read {
             Ok(m) => m,
             Err(_) => {
                 return ToolOutput::error(format!(
-                    "File does not exist. Current working directory: {}",
-                    ctx.shell_cwd().display()
+                    "File does not exist. Current working directory: {}.{}",
+                    ctx.shell_cwd().display(),
+                    crate::missing_path_hint(&path)
                 ))
             }
         };

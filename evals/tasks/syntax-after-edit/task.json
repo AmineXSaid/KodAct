@@ -1,0 +1,7 @@
+{
+  "instruction": "In services.json, add a service named billing (port 8085, owner finance, depending on auth and db) after search, and move the db service to port 5433. Change nothing else. `python3 report.py` must still run.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["json", "config", "edit-diagnostics"],
+  "timeout_secs": 600
+}

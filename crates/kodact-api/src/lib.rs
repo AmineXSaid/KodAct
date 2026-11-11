@@ -88,6 +88,10 @@ impl ApiError {
         if self.is_outage() {
             return false;
         }
+        // Spent credit is a billing matter, not a key to sign in with again.
+        if self.is_quota() {
+            return false;
+        }
         match self {
             ApiError::MissingCredentials => true,
             ApiError::Http { status, kind, .. } => {
@@ -120,8 +124,53 @@ impl ApiError {
         }
     }
 
+    /// A limit that a short wait doesn't lift: spent credit, a spending cap, a billing problem.
+    /// Told from a throttle by what the endpoint says, in the words the providers and gateways
+    /// use; a 429 that says none of this is a throttle and is waited out.
+    pub fn is_quota(&self) -> bool {
+        const PHRASES: &[&str] = &[
+            "insufficient_quota",
+            "credit balance",
+            "insufficient credit",
+            "insufficient balance",
+            "insufficient funds",
+            "out of credits",
+            "billing hard limit",
+            "spend limit",
+            "spending limit",
+            "payment required",
+        ];
+        match self {
+            ApiError::Http { status: 402, .. } => true,
+            ApiError::Http { status: 403 | 429, kind, message, .. } => {
+                let m = message.to_ascii_lowercase();
+                matches!(kind.as_str(), "billing_error" | "insufficient_quota") || PHRASES.iter().any(|p| m.contains(p))
+            }
+            _ => false,
+        }
+    }
+
+    /// The wait the endpoint asks for, when it is longer than a retry sleeps ([`MAX_RETRY_WAIT`]).
+    /// Trying again sooner fails the same way, so the caller decides: wait it in full, or stop
+    /// and say how long.
+    pub fn long_wait(&self) -> Option<Duration> {
+        match self {
+            ApiError::Http { retry_after: Some(d), .. } if *d > MAX_RETRY_WAIT => Some(*d),
+            _ => None,
+        }
+    }
+
+    /// Whether a provider may sleep and send the same request again on its own: retryable, and
+    /// not asked to wait longer than a retry sleeps.
+    pub fn retries_quickly(&self) -> bool {
+        self.is_retryable() && self.long_wait().is_none()
+    }
+
     /// Whether retrying the same request may succeed.
     pub fn is_retryable(&self) -> bool {
+        if self.is_quota() {
+            return false;
+        }
         match self {
             ApiError::Http { status, .. } => matches!(status, 408 | 409 | 429 | 500..=599),
             ApiError::Network { .. } => true,
@@ -134,6 +183,9 @@ impl ApiError {
     pub fn is_unrecoverable(&self) -> bool {
         if self.is_outage() {
             return false;
+        }
+        if self.is_quota() {
+            return true;
         }
         match self {
             ApiError::MissingCredentials => true,
@@ -162,6 +214,11 @@ impl ApiError {
             _ => None,
         };
         Some(match self {
+            e if e.is_quota() => {
+                "The account's credit or spending limit is used up: waiting a moment won't lift it. Check the \
+                 plan and billing of the endpoint, or switch model or endpoint."
+                    .into()
+            }
             // Gemini refuses a bad key with a 400 (API_KEY_INVALID), named by its kind.
             e @ ApiError::Http { .. } if e.is_auth_failure() => match origin {
                 Some(o) => o.auth_hint(),
@@ -171,6 +228,10 @@ impl ApiError {
                 Some(o) => o.not_found_hint(),
                 None => "Check the model name (--model or KODACT_MODEL) and the endpoint URL.".into(),
             },
+            e if e.long_wait().is_some() => format!(
+                "The endpoint asks to wait {} before the next request: try again then, or switch model or endpoint.",
+                human_wait(e.long_wait().unwrap_or_default())
+            ),
             ApiError::Http { status: 413, .. } => {
                 "The request is too large: run /compact or start a new session.".into()
             }
@@ -212,6 +273,7 @@ impl ApiError {
             "input is too long",
             "reduce the length",
             "too large for the model",
+            "available context size", // llama.cpp
         ];
         match self {
             ApiError::Http { status: 400 | 413 | 422, kind, message, .. } => {
@@ -225,6 +287,61 @@ impl ApiError {
             _ => false,
         }
     }
+
+    /// What a refusal for length says about the model: its context window and the size of the
+    /// prompt it refused, when the server states them. vLLM and OpenAI: "maximum context length
+    /// is 100000 tokens ... your prompt contains at least 68001 input tokens" (or "your messages
+    /// resulted in N tokens"); llama.cpp: "request (N tokens) exceeds the available context size
+    /// (M tokens)"; the Messages API: "prompt is too long: N tokens > M maximum". Gateways such as
+    /// LiteLLM pass these words on. Any size is read; nothing is assumed about the server.
+    pub fn reported_limits(&self) -> ReportedLimits {
+        if !self.is_prompt_too_long() {
+            return ReportedLimits::default();
+        }
+        let m = match self {
+            ApiError::Http { message, .. } | ApiError::Stream { message, .. } => message.to_ascii_lowercase(),
+            _ => return ReportedLimits::default(),
+        };
+        let pick = |pats: &[(&str, &str)]| pats.iter().find_map(|(before, after)| number_between(&m, before, after));
+        let window = pick(&[
+            ("maximum context length is ", "token"),
+            ("maximum context length of ", "token"),
+            ("available context size (", "token"),
+            ("context window of ", "token"),
+            (" tokens > ", "maximum"),
+        ])
+        .filter(|w| (1_000..=1_000_000_000).contains(w));
+        let prompt = pick(&[
+            ("prompt contains at least ", "input token"),
+            ("your messages resulted in ", "token"),
+            ("request (", "token"),
+            ("prompt is too long: ", "token"),
+        ]);
+        ReportedLimits { window, prompt }
+    }
+}
+
+/// See [`ApiError::reported_limits`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReportedLimits {
+    pub window: Option<u64>,
+    pub prompt: Option<u64>,
+}
+
+/// The whole number right after `before` in `m`, when `after` follows it (spaces, commas and
+/// underscores inside the number are skipped).
+fn number_between(m: &str, before: &str, after: &str) -> Option<u64> {
+    let mut rest = m;
+    while let Some(i) = rest.find(before) {
+        let tail = &rest[i + before.len()..];
+        let len = tail.find(|c: char| !(c.is_ascii_digit() || c == ',' || c == '_')).unwrap_or(tail.len());
+        let digits: String = tail[..len].chars().filter(char::is_ascii_digit).collect();
+        if !digits.is_empty() && tail[len..].trim_start().starts_with(after) {
+            return digits.parse().ok();
+        }
+        rest = tail;
+    }
+    None
 }
 
 /// A source of model turns.
@@ -297,10 +414,24 @@ pub trait Provider: Send + Sync {
     }
 }
 
+/// The longest a retry sleeps before sending the same request again. A `retry-after` beyond it
+/// is not shortened to it (the request would be refused again): see [`ApiError::long_wait`].
+pub const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
+
+/// A wait in words: "45s", "12m", "2h 05m".
+pub fn human_wait(d: Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        0..=89 => format!("{}s", s.max(1)),
+        90..=5_399 => format!("{}m", s.div_ceil(60)),
+        _ => format!("{}h {:02}m", s / 3600, (s % 3600).div_ceil(60).min(59)),
+    }
+}
+
 /// Exponential backoff with an upper bound; honours `retry-after` when given.
 pub fn backoff_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
     if let Some(d) = retry_after {
-        return d.min(Duration::from_secs(60));
+        return d.min(MAX_RETRY_WAIT);
     }
     let base = 500u64.saturating_mul(1u64 << attempt.min(6));
     Duration::from_millis(base.min(32_000))
@@ -308,7 +439,7 @@ pub fn backoff_delay(attempt: u32, retry_after: Option<Duration>) -> Duration {
 
 #[cfg(test)]
 mod outage_tests {
-    use super::ApiError;
+    use super::{ApiError, ReportedLimits};
 
     fn http(status: u16, message: &str) -> ApiError {
         ApiError::Http {
@@ -319,6 +450,39 @@ mod outage_tests {
             url: String::new(),
             origin: None,
         }
+    }
+
+    /// The window and prompt size a refusal states, in each server's words, at any size.
+    #[test]
+    fn a_refusal_for_length_gives_the_window_and_the_prompt() {
+        // The run of 2026-11-10 (path-tracing): LiteLLM passing on vLLM's refusal, escaped.
+        let litellm = r#"{"detail":"litellm.ContextWindowExceededError: litellm.BadRequestError: ContextWindowExceededError: Hosted_vllmException - {\"error\":{\"message\":\"This model's maximum context length is 100000 tokens. However, you requested 32000 output tokens and your prompt contains at least 68001 input tokens, for a total of at least 100001 tokens. Please reduce the length of the input prompt or the number of requested output tokens. (parameter=input_tokens, value=68001)\"}}"}"#;
+        assert_eq!(
+            http(400, litellm).reported_limits(),
+            ReportedLimits { window: Some(100_000), prompt: Some(68_001) }
+        );
+        let openai = "This model's maximum context length is 128000 tokens. However, your messages resulted in 130512 tokens. Please reduce the length of the messages.";
+        assert_eq!(
+            http(400, openai).reported_limits(),
+            ReportedLimits { window: Some(128_000), prompt: Some(130_512) }
+        );
+        let llama = "the request exceeds the available context size, try increasing it: request (8193 tokens) exceeds the available context size (8192 tokens)";
+        assert_eq!(http(400, llama).reported_limits(), ReportedLimits { window: Some(8_192), prompt: Some(8_193) });
+        let messages = "prompt is too long: 1000001 tokens > 1000000 maximum";
+        assert_eq!(
+            http(400, messages).reported_limits(),
+            ReportedLimits { window: Some(1_000_000), prompt: Some(1_000_001) }
+        );
+        let huge = "This model's maximum context length is 10,000,000 tokens. However, your messages resulted in 10,000,500 tokens.";
+        assert_eq!(http(400, huge).reported_limits().window, Some(10_000_000));
+        // A refusal that names no size, and errors of another kind, say nothing.
+        assert_eq!(http(400, "input is too long for requested model").reported_limits(), ReportedLimits::default());
+        assert_eq!(http(500, openai).reported_limits(), ReportedLimits::default());
+        assert_eq!(
+            http(400, "maximum context length is 12 tokens").reported_limits().window,
+            None,
+            "not a real window"
+        );
     }
 
     #[test]
@@ -334,5 +498,52 @@ mod outage_tests {
             "not retried unless the engine knows the model answered"
         );
         assert!(!http(400, "bad request").is_model_missing());
+    }
+
+    #[test]
+    fn a_spent_quota_is_told_from_a_throttle() {
+        let throttle = http(429, "Rate limit reached for requests per minute");
+        assert!(throttle.is_retryable() && !throttle.is_quota() && !throttle.is_unrecoverable());
+        // Gemini words a per-minute throttle this way too: not enough to call it a quota.
+        assert!(http(429, "You exceeded your current quota, please retry in 12s").is_retryable());
+        for spent in [
+            http(429, "You exceeded your current quota. code: insufficient_quota"),
+            http(429, "Your credit balance is too low to access the API"),
+            http(402, "Payment Required"),
+            http(403, "Insufficient balance"),
+            http(429, "Monthly spend limit reached"),
+        ] {
+            assert!(spent.is_quota() && !spent.is_retryable() && spent.is_unrecoverable(), "{spent}");
+            assert!(spent.describe().contains("credit or spending limit"), "{}", spent.describe());
+        }
+        let kind = ApiError::Http {
+            status: 429,
+            kind: "insufficient_quota".into(),
+            message: "quota".into(),
+            retry_after: None,
+            url: String::new(),
+            origin: None,
+        };
+        assert!(kind.is_quota());
+    }
+
+    #[test]
+    fn a_long_wait_is_not_shortened_to_a_retry() {
+        let after = |secs| ApiError::Http {
+            status: 429,
+            kind: "rate_limit_error".into(),
+            message: "slow down".into(),
+            retry_after: Some(std::time::Duration::from_secs(secs)),
+            url: String::new(),
+            origin: None,
+        };
+        assert!(after(30).retries_quickly() && after(30).long_wait().is_none());
+        assert!(after(60).retries_quickly(), "the cap itself is still a retry");
+        let long = after(48 * 60);
+        assert!(long.is_retryable() && !long.retries_quickly());
+        assert_eq!(long.long_wait(), Some(std::time::Duration::from_secs(2880)));
+        assert!(long.describe().contains("asks to wait 48m"), "{}", long.describe());
+        assert_eq!(super::human_wait(std::time::Duration::from_secs(45)), "45s");
+        assert_eq!(super::human_wait(std::time::Duration::from_secs(7500)), "2h 05m");
     }
 }

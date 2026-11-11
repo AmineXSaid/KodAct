@@ -181,7 +181,10 @@ the files as they are then). Other slash commands and `!shell` lines aren't scan
     work done so far stays in place, and the result is an error with
     `stop_reason: "max_time"` (KodAct extension; a script gets a result instead
     of an outside kill);
-  - `--fallback-model M` switches models on overload.
+  - `--fallback-model M` switches models, for the turn, when the first can't serve
+    it: overloaded, not found, or limited in a way a short wait doesn't lift (a
+    rate limit waited out three times in a row, a `retry-after` over a minute,
+    a spent quota).
 - **Interrupting:** Ctrl-C stops the run; the result is written and the exit
   status is `130`.
 - **Worktree:** `-w/--worktree [name]` runs the session in
@@ -338,7 +341,24 @@ Measures the harness; see `evals/README.md`. `run` writes `report.json` and
  "total_cost_usd": 0.0421, "usage": {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
  "modelUsage": {"<model>": {"inputTokens": 0, "outputTokens": 0, "costUSD": 0.0}},
  "permission_denials": [{"tool_name": "Bash", "tool_use_id": "…", "tool_input": {}}],
- "errors": [], "structured_output": null, "uuid": "uuid", "exit_code": 0}
+ "errors": [], "structured_output": null,
+ "verification": {"status": "passed", "command": "cargo test"}, "uuid": "uuid", "exit_code": 0}
+```
+
+`verification` says where the turn's changes stand when it ends, so a script
+or a CI job can tell checked work from work nobody ran without reading the
+answer. It is absent with the verification loop off.
+
+| `status` | Meaning | Also carries |
+| --- | --- | --- |
+| `no_changes` | The turn changed no file | |
+| `passed` | A check ran after the last change and passed | `command` |
+| `read_back` | Only plain data files changed (an answer, a table), each read back after its last change | |
+| `failed` | The last check failed, and nothing changed after it | `command` |
+| `unchecked` | Changes no check has run on since | `files`, and `shell: true` when they came from shell commands |
+
+```bash
+kodact -p "fix the failing test" --output-format json | jq -e '.verification.status == "passed"'
 ```
 
 `exit_code` appears in `json` mode only. A turn whose last replies held only
@@ -377,18 +397,30 @@ them.
 **Models KodAct doesn't know** (a gateway's or a local server's): KodAct needs
 the context window to compact in time, and prices to show costs.
 - `modelLimits`: `{"<model id>": {"contextWindow": 131072, "maxOutputTokens": 8192}}`.
-  `KODACT_CONTEXT_WINDOW` sets the window for every model without one.
+  `KODACT_CONTEXT_WINDOW` sets the window for every model without one of its own.
 - An OpenAI-compatible endpoint's model list is read for the window when it
   reports one (`context_length`, `max_model_len`, `max_input_tokens`, ...;
   a whole number, also as text or a decimal). For a model KodAct doesn't know,
   every mode (the terminal UI, `-p` and the line prompt) waits up to 3 seconds
   for that list as it starts, so the first request uses the window; a slower
-  list still sets it for the requests after. Order: `modelLimits`, then
-  `KODACT_CONTEXT_WINDOW`, then the endpoint's list, then the built-in table,
-  then a 200,000-token guess. `evals/context-window/` tests this end to end.
+  list still sets it for the requests after. Order: `modelLimits`, then the
+  endpoint's list, then the built-in table, then `KODACT_CONTEXT_WINDOW`, then
+  a 1,000,000-token guess. The variable is one value for every model, so a window
+  that belongs to the model wins over it: set for a small model, it never
+  shrinks a large one whose endpoint reports its window. To change one model's
+  window, use `modelLimits`. A LiteLLM gateway that lists no window in its
+  model list is also asked at `/model/info` (`model_info.max_input_tokens`).
+  And when the endpoint refuses a request as too long and states its window
+  ("maximum context length is 100000 tokens"), KodAct uses that window from
+  then on, the same as a listed one, and sends the request again sized to fit;
+  it compacts only when the prompt itself doesn't fit. So a model's window is
+  learned whatever its size, with no setting. `evals/context-window/` tests
+  this end to end.
 - `modelPricing`: `{"<model id>": {"input": 0.3, "output": 1.2}}`, USD per
   million tokens.
-- Without these, KodAct assumes 200,000 tokens of context and 32,000 of output,
+- Without these, KodAct assumes 1,000,000 tokens of context (so a large model is
+  never held to a small guess; a smaller model's first refusal gives its real
+  window) and 32,000 of output,
   says so once at startup, shows the cost as `cost ?` (or `$1.20+` when only
   part of it is known) and marks `/usage`'s context figure as a guess.
 
@@ -414,7 +446,7 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_MODEL` | Default model |
 | `KODACT_TUI` | `inline` keeps the interactive UI in an inline viewport at the bottom of the terminal, writing output into its scrollback as it happens; by default the UI takes the whole window and prints the conversation into the scrollback when it closes |
 | `KODACT_MAX_OUTPUT_TOKENS` | Per-request output cap |
-| `KODACT_CONTEXT_WINDOW` | Context window, in tokens, for models KodAct doesn't know (see `modelLimits`) |
+| `KODACT_CONTEXT_WINDOW` | Context window, in tokens, for a model with none of its own: not in `modelLimits`, the endpoint's list or the built-in table |
 | `KODACT_MAX_THINKING_TOKENS` | Thinking budget |
 | `KODACT_MAX_RETRIES` | API retries (default 3) |
 | `KODACT_MAX_CONCURRENT_REQUESTS` | Model requests in flight at once for the whole session (default 4; also `maxConcurrentRequests`) |
@@ -424,6 +456,7 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_SANDBOX` | Same as `--sandbox` |
 | `KODACT_SHELL` | The shell commands run in: a full path, or a name on PATH (bash, sh, zsh, pwsh, powershell). Also read from the settings `env` block. See "Shells" below |
 | `KODACT_VERIFY` | `0` turns the verification loop off |
+| `KODACT_REMINDERS` | `0` turns KodAct's own reminders to the model off (on by default; see `reminders`) |
 | `KODACT_DISABLE_CRON` | `1` turns scheduled prompts off (`/loop`, `CronCreate`, ...) |
 | `MCP_TIMEOUT`, `MCP_TOOL_TIMEOUT` | MCP connect and call timeouts, in milliseconds (30 s, 10 min) |
 | `KODACT_NO_INPUT` | Same as `--no-input` |
@@ -513,6 +546,15 @@ plus `system/goal` events in stream-json, and exit status `1` if the goal
 ends unmet. `/goal` shows its status; `/goal clear` ends it. Contract C18
 has the details.
 
+The check is also told what KodAct itself recorded of the turn's changes (the
+`verification` state of the result): files changed with no check run since,
+or how the last check ended. An agent's "all tests pass" over unchecked files
+is contradicted by that record. A turn whose calls were all refused by the
+loop guard counts as a turn without a tool call. A goal ends on an error that
+waiting won't fix (a refused key, a spent quota) and pauses on one that may
+pass. In a `-p` run with a goal, the end-of-run reminder about open todos is
+not sent: the run goes on, and the goal's check decides.
+
 **Saving defaults:** `/model`, `/effort`, `/fast`, `/output-style`,
 `/autocompact` and `/sandbox` apply at once. In the REPL (and later the
 TUI) they also save the choice as the default: `model`, `effortLevel`,
@@ -576,6 +618,15 @@ say in its answer what it verified (contract C12 in `docs/ARCHITECTURE.md`).
 Each reminder costs one more model call; it's recorded as `system/verification`
 in stream-json and in the session.
 
+**After an edit**, a file that no longer parses is said with the edit's own
+result ("notes.py does not parse (python3): …"), not turns later when a check
+runs on it. It uses the language's own parser on that one file, when it is
+installed: Python, JavaScript (`node --check`), shell (`sh -n`, `bash -n`),
+Ruby, PHP, and JSON (files with comments are left alone). Nothing is added
+when the file parses or its language has no parser here. It says nothing of
+types or other files: the project's checks do, and a `PostToolUse` hook can
+run a type checker after edits. Recorded as `system/diagnostics`.
+
 **Check commands** come from `verification.commands`, or are detected from the
 project's manifests: `cargo build` and `cargo test`; the package.json
 `typecheck`, `lint`, `build` and `test` scripts, run with the lockfile's
@@ -585,9 +636,66 @@ listed in the system prompt's environment section.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
+| `reminders` | `true` | KodAct's own reminders to the model: the verification reminder, the loop guard, the act, attempt, next-step and todo reminders, the budget and time wrap-up, and the warning about background commands. Off, the model works on its own between tool results, and only what you and the CLI did is told to it (plan mode, a mode switch, attached files, a subtask's result). `false` (or `KODACT_REMINDERS=0`) turns them all off. |
 | `verification.enabled` | `true` | `false` turns the loop off (as does `KODACT_VERIFY=0`) |
 | `verification.commands` | detected | The project's check commands |
 | `verification.maxReminders` | `1` | Reminders per user turn |
+| `verification.syntaxCheck` | `true` | `false` stops the parse check after edits (off too with the loop off) |
+| `verification.languageServer` | `false` | `true` asks a language server for the errors after an edit (below) |
+| `verification.languageServers` | built-in | Extension to command, tried before the built-in ones: `{"py": ["pylsp"]}` |
+| `verification.languageServerWaitMs` | `3000` | How long an edit waits for the server's answer |
+| `verification.format` | `false` | `true` runs a file through its formatter after an edit and says what moved, when the file was already in that formatter's style before the edit (a new file: only with a formatter named below). Built-in, each used when installed: `rustfmt`, `ruff format` or `black`, `gofmt`, `prettier`, `clang-format` |
+| `verification.formatters` | built-in | Extension to a command that formats stdin to stdout, used instead of the built-in one: `{"py": ["black", "-q", "-"]}`. `{file}` in an argument is the file's path; an empty list turns an extension off |
+| `edit.lineRanges` | `false` | `true` (or `KODACT_EDIT_LINES=1`) lets Edit name the lines to replace (`start_line`, `end_line`, `anchor`) instead of retyping them as `old_string`. The anchor is the text of the first line: an edit whose line numbers moved since the file was read is refused with the lines as they are now |
+
+**Language-server diagnostics** (`verification.languageServer: true`): after
+an Edit, MultiEdit or Write of a file that parses, KodAct gives the file's new
+text to the language server for its language and adds the errors it reports
+to the edit's result: a wrong type, a missing import, a call that no longer
+matches, in that file and in other files the server reports on. Warnings are
+left out. The list takes at most a fiftieth of the model's window.
+- It is off by default: a language server is a second program reading the
+  whole project, and some need minutes and gigabytes to index one.
+- Servers looked for: `rust-analyzer`, `typescript-language-server`,
+  `pyright-langserver` (else `pylsp`), `gopls`, `clangd`. Only an installed
+  one is started, on the first edit of a file it serves, and stopped with the
+  session.
+- A server that is missing, or doesn't answer within the wait, adds nothing;
+  one that didn't answer is not asked again in the session. The edit itself
+  never fails because of it.
+- Only the main agent asks; sub-agents don't start servers.
+
+**The loop guard** (`system/loop_guard`) reminds the model when it repeats
+itself: the same failing call three times, the same result three times, edits
+that undo each other, five failures in a row. A repeat that goes on is told
+again at 5 and at 8, then no more. After the first reminder, the same failing call to a file tool (Read, Edit, MultiEdit, Write,
+NotebookEdit, Glob, Grep, LS, or a tool name that doesn't exist) is answered
+"Not run: …" with the last error, without running it, until a call that may
+change files has run. Shell commands, web and MCP tools are never refused:
+they can fail three times and work the fourth (a server still starting).
+
+**A reply that repeats itself** is stopped while it streams: when the last
+6,000 characters of the reasoning or the answer are one passage at least six
+times over, KodAct ends the request, keeps nothing of it, and tells the model
+to act on what it has (`system/act_reminder`, `kind: "repeating"`), within the
+same three-in-a-row budget as replies that were all reasoning. Tool-call
+arguments are not watched, and a long reply that doesn't repeat exactly is
+never cut. The stopped request's tokens are not in the cost: the endpoint
+never reported them.
+
+**A tool call written as text** is run as the call it is. Small and local
+models often answer `<tool_call>{"name": …, "arguments": {…}}</tool_call>`,
+or with only that JSON object, in place of a structured call. When the
+reply has no structured call, names a tool that exists and gives its
+arguments as an object, KodAct turns it into the call
+(`system/tool_call_from_text`). JSON shown inside prose stays text; not done
+with `--json-schema`, where the answer itself is JSON.
+
+**A `-p` run with open todos:** a run whose prompt is given up front ends with
+its turn and takes no further input, so a turn about to end with TodoWrite
+items open is sent back once to finish them or say what is left
+(`system/todo_reminder`). Not in the terminal UI or over stream-json input,
+where stopping to ask is right. `--autonomous` has its own, firmer reminders.
 
 ## Security
 
@@ -735,6 +843,16 @@ is not done.
 **Retries:** only failures before any streamed output are retried, at most
 `KODACT_MAX_RETRIES` times, with exponential backoff. They cover HTTP 408, 409,
 429 and 5xx (honouring `retry-after`) and connection failures.
+
+Two answers are not retried, because trying again sooner fails the same way:
+- **a spent quota**: a 402, or a 429 or 403 that says so (`insufficient_quota`,
+  a billing error, "credit balance", "spend limit"…). The error is shown at
+  once with what to do. A 429 that says none of this is a throttle and is
+  waited out;
+- **a `retry-after` longer than a minute**: KodAct says how long the endpoint
+  asks ("asks to wait 48m") and ends the turn. An unattended run takes the
+  wait in full when it fits: within `--max-time` with a minute left to wrap
+  up, or, with no limit, up to ten minutes.
 
 **Errors** state what failed, the cause, and the next step. For example:
 `could not connect to http://…/v1/messages: Connection refused. Check KODACT_BASE_URL, your network connection and proxy settings.`

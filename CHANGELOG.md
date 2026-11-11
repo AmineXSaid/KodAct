@@ -2,6 +2,100 @@
 
 ## 0.1.0 (unreleased)
 
+### Failed commands explained, and built programs run
+- **`command not found` (exit 127) names what is installed instead**, by job:
+  `xxd` missing → `od`; `python3` missing → `perl`; `jq` missing → none of
+  `jq`, `python3`, `node` either. The model uses one at once instead of
+  probing for tools one call at a time (minimal containers, fresh boxes).
+- **Exit 137 says the command was killed** (SIGKILL), which, unless you
+  stopped it, is almost always the system ending a process out of memory, so
+  the same command isn't run again as is.
+- **A program built and never run is run once before finishing**: when the
+  last passing check compiled a program (`gcc -o image image.c`, a plain
+  `gcc x.c` making `a.out`, `rustc`, `go build -o`) and nothing ran it since,
+  the verification check asks once to run it and look at its output.
+  Building and running in one command, or running the tests, needs nothing.
+
+### The "to build" list in GOALS.md
+- **Notes that outlast the context** (the Notes tool): given back after
+  every compaction and kept in `<session>.notes.md` next to the transcript.
+- **Checkpoints the model goes back to itself** (the Checkpoint tool):
+  `save` before an approach that may fail, `restore` to put the files back
+  as they were. In a git repository a checkpoint is the whole working tree,
+  shell changes included, kept under `refs/kodact/checkpoints/` without
+  touching the index or a branch, and it survives a resume.
+- **Formatting after edits**, opt-in (`verification.format: true`): the
+  edited file is run through its formatter and the result says what moved.
+  Only a file that was already in the formatter's style is touched.
+- **The language server tells only the errors an edit added**
+  (`verification.languageServer`): the file before the edit is the baseline.
+  A file a shell command rewrote is checked too, when the session had
+  already had it checked.
+- **Errors that say the next step:** a missing path names the nearest
+  directory and the close names in it; an empty Glob or Grep says what was
+  searched and the usual cause. LS and NotebookEdit return structured
+  results, as every other tool does.
+- `scripts/eval-descriptions.sh` measures a set of tool descriptions against
+  the built-in ones.
+
+### Three gaps closed from a source comparison with other harnesses
+- **A session killed mid-turn says so when resumed.** The transcript records
+  where each turn starts and ends. Resuming one whose last turn never ended
+  tells the model which tool calls returned nothing and to check the real
+  state before continuing.
+- **Sub-agents can work in their own worktree.** `isolation: "worktree"` on
+  a Task call gives the agent a copy of the last commit on a new branch, so
+  agents changing files in parallel can't overwrite each other. The result
+  names the branch when something changed.
+- **Edit by line range** (`edit.lineRanges`, off by default). Edit can name
+  the lines to replace, with the first line's text as an anchor, instead of
+  retyping them.
+
+### Checks on the agent's work, second round
+From `docs/VERIFICATION_COMPARISON_2.md`.
+- **Language-server diagnostics after edits**, opt-in
+  (`verification.languageServer: true`): the errors `rust-analyzer`,
+  `typescript-language-server`, `pyright-langserver` or `pylsp`, `gopls` or
+  `clangd` report for the edited file's new text are added to the edit's
+  result, other files' included. Off by default; a missing or slow server
+  adds nothing.
+- **A fallback model takes over on a limit that doesn't clear**: after three
+  rate limits waited out in a row, on a `retry-after` over a minute, and on a
+  spent quota, as it already did on overload.
+- **The loop guard reminds again** at 5 and at 8 when the same call goes on.
+- **A reply that repeats itself is stopped while it streams**, and the model
+  is told, instead of running to the output cap.
+- **A tool call written as text is run** (`<tool_call>…</tool_call>`, or a
+  reply that is only the call's JSON), as small and local models write them.
+- **`/goal` works with these checks:** its check is told what KodAct recorded
+  of the turn's changes (unchecked files, the last check's outcome); a turn
+  whose calls were all refused counts as a turn without a tool; a `-p` run
+  with a goal gets no end-of-run todo reminder.
+
+### Checks on the agent's work
+From `docs/VERIFICATION_COMPARISON.md`, a comparison with four other CLIs.
+- **A spent quota is not retried.** A 402, or a 429 or 403 that says the
+  credit or spending limit is used up, is shown at once with what to do,
+  instead of ten tries a minute apart. A plain 429 is still waited out.
+- **A long `retry-after` is not shortened.** When the endpoint asks for more
+  than a minute, KodAct says how long ("asks to wait 48m") and ends the turn.
+  Unattended runs take the wait in full when it fits `--max-time`, or up to
+  ten minutes with no limit.
+- **The result says whether the changes were checked:** `verification.status`
+  in the `json` and stream-json result is `passed`, `failed`, `unchecked`,
+  `read_back` or `no_changes`, with the check's command or the unchecked
+  files. A script can gate on it.
+- **A file an edit breaks is said at once.** When a file no longer parses
+  after an Edit, MultiEdit or Write, the edit's result says so, using the
+  language's own parser when installed (Python, JavaScript, shell, Ruby, PHP,
+  JSON). `verification.syntaxCheck: false` turns it off.
+- **The loop guard stops a repeat it warned about.** After its reminder, the
+  same failing call to a file tool is answered "Not run" with the last error
+  until something changes. Shell, web and MCP calls are never refused.
+- **`-p` runs don't end quietly with todos open.** A run that takes no further
+  input is sent back once to finish its open TodoWrite items or say what is
+  left.
+
 ### A new mark: from code to impact
 - KodAct's mark is a step and a chevron, "from code to impact", and the
   front pages draw it, in KodAct's lime. The taglines say "From code to

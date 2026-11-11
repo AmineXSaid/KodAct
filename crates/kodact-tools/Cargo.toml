@@ -15,6 +15,7 @@ categories.workspace = true
 kodact-types.workspace = true
 kodact-permissions.workspace = true
 kodact-platform.workspace = true
+kodact-git.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true

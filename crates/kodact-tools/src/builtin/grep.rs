@@ -103,7 +103,11 @@ impl Tool for Grep {
     async fn call(&self, input: Value, ctx: &ToolContext) -> ToolOutput {
         let root = search_root(&input, ctx);
         if !root.exists() {
-            return ToolOutput::error(format!("Path does not exist: {}", root.display()));
+            return ToolOutput::error(format!(
+                "Path does not exist: {}.{}",
+                root.display(),
+                crate::missing_path_hint(&root)
+            ));
         }
         let mode = match str_arg(&input, "output_mode") {
             "content" => Mode::Content,
@@ -133,6 +137,7 @@ impl Tool for Grep {
         let offset = arg_usize(&input, "offset").unwrap_or(0);
         let cancel = ctx.cancel.clone();
 
+        let searched = root.clone();
         let result = tokio::task::spawn_blocking(move || -> Result<(Vec<String>, usize, usize), String> {
             let mut wb = ignore::WalkBuilder::new(&root);
             if !ty.is_empty() {
@@ -243,8 +248,13 @@ impl Tool for Grep {
             lines.into_iter().skip(offset).take(if head_limit == 0 { usize::MAX } else { head_limit }).collect();
         let structured = json!({"mode": format!("{mode:?}").to_lowercase(), "numFiles": n_files, "numMatches": total_matches, "numLines": page.len()});
         if page.is_empty() {
-            return ToolOutput::text(if mode == Mode::Content { "No matches found" } else { "No files found" })
-                .with_structured(structured);
+            let what = if mode == Mode::Content { "No matches found" } else { "No files found" };
+            // Past the end of the results, not an empty search.
+            if total > 0 {
+                return ToolOutput::text(format!("{what} from offset {offset}: there are {total} in all."))
+                    .with_structured(structured);
+            }
+            return ToolOutput::text(format!("{what}{}", no_match_hint(&input, &searched))).with_structured(structured);
         }
         let mut text = match mode {
             Mode::Files => format!("Found {n_files} file{}\n{}", if n_files == 1 { "" } else { "s" }, page.join("\n")),
@@ -262,4 +272,31 @@ impl Tool for Grep {
         }
         ToolOutput::text(text).with_structured(structured)
     }
+}
+
+/// What an empty search covered, and what usually explains it (GOALS pillar 4).
+fn no_match_hint(input: &Value, root: &std::path::Path) -> String {
+    let pattern = str_arg(input, "pattern");
+    let mut out = format!(" for `{pattern}` in {}", root.display());
+    let filters: Vec<String> = [("glob", "glob"), ("type", "type")]
+        .into_iter()
+        .filter_map(|(k, label)| input.get(k).and_then(Value::as_str).map(|v| format!("{label} {v}")))
+        .collect();
+    if !filters.is_empty() {
+        out.push_str(&format!(" (only files matching {})", filters.join(", ")));
+    }
+    out.push('.');
+    let insensitive = input.get("-i").and_then(Value::as_bool).unwrap_or(false);
+    if !insensitive && pattern.chars().any(char::is_alphabetic) {
+        out.push_str(" The search is case-sensitive: `-i` ignores case.");
+    }
+    // An unescaped metacharacter in what reads as plain text (a call, a path, a version).
+    let literal_looking = pattern.contains(['(', ')', '[', '{', '+', '?', '|']) && !pattern.contains('\\');
+    if literal_looking {
+        out.push_str(" The pattern is a regular expression: to find ( ) [ ] { } + ? | . * as written, put a backslash before each.");
+    }
+    if !filters.is_empty() {
+        out.push_str(" Try without the file filter.");
+    }
+    out
 }

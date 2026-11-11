@@ -402,6 +402,7 @@ impl Driver {
             requests: Some(self.engine.carried_requests().to_vec()).filter(|r| !r.is_empty()),
             goal: self.goal.as_ref().map(Goal::record),
             schedule: self.scheduler.as_ref().map(|s| s.lock().unwrap().record()),
+            cut_off: false,
         }
     }
 
@@ -748,6 +749,7 @@ impl Driver {
             sink: Arc::new(SubtaskSink::new(&id, self.agent_rt.sink.clone(), calls.clone())),
             seed: Some(&self.engine.state),
             checkpoint_turn: Some(format!("{id}-{}", self.info.session_id)),
+            dir: None,
         })?;
         child.engine.transcript().append_meta(serde_json::json!({
             "forkOf": {"sessionId": self.info.session_id, "leafUuid": self.engine.transcript().last_uuid()},
@@ -928,7 +930,10 @@ impl Driver {
             // the one Ctrl-C and a host's `interrupt` cancel until the next turn starts.
             let cancel = self.engine.handle().turn_token();
             let transcript = goal::evaluator_transcript(&self.engine.state.messages);
-            let user = format!("Goal: {condition}\n\nTranscript:\n{transcript}");
+            // With what KodAct itself recorded of the last turn's changes: the transcript may
+            // have lost the check to its length, and an agent's "all tests pass" is a claim.
+            let harness = goal::harness_note(last.verification.as_ref());
+            let user = format!("Goal: {condition}\n\nTranscript:\n{transcript}{harness}");
             let model = commands::goal_model(self);
             let answer = commands::side_request_on(self, &model, goal::EVALUATOR_PROMPT, user, 800, &cancel).await;
             if cancel.is_cancelled() {
@@ -1080,7 +1085,16 @@ impl Driver {
             self.rebuild_system();
             self.info.init.model = model;
         }
-        self.engine.submit(content).await
+        // While a goal is being pursued the run goes on after this turn, whatever the mode: the
+        // one-shot reminder ("this run ends with your reply") would be false, and the goal's
+        // own check decides what happens next.
+        let one_shot = self.engine.cfg.one_shot;
+        if self.goal.as_ref().is_some_and(|g| g.is_active() && g.paused.is_none()) {
+            self.engine.cfg.one_shot = false;
+        }
+        let result = self.engine.submit(content).await;
+        self.engine.cfg.one_shot = one_shot;
+        result
     }
 
     pub fn rebuild_system(&mut self) {

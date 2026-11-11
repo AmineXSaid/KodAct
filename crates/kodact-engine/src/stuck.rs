@@ -24,6 +24,12 @@ const REPEATED_FAILURES: u32 = 3;
 const NO_PROGRESS: u32 = 3;
 /// Consecutive failing calls (any tool) before a reminder.
 const ERROR_STREAK: u32 = 5;
+/// A pattern that goes on is told again at these counts, then no more: a model that didn't act
+/// on the first reminder gets two more chances to, and a long run of the same call doesn't
+/// fill the conversation with reminders. Counts of identical calls, never time.
+const REMIND_AT: [u32; 3] = [REPEATED_FAILURES, 5, 8];
+/// Characters of the last error a refusal quotes: enough to recognize it, not a second copy.
+const REFUSAL_QUOTE: usize = 600;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Stuck {
@@ -87,10 +93,43 @@ impl Stuck {
     }
 }
 
+/// A call answered without being run: see [`LoopGuard::would_repeat`].
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Refused {
+    pub tool: String,
+    pub count: u32,
+    pub error: String,
+}
+
+impl Refused {
+    pub fn record(&self) -> Value {
+        json!({"kind": "refused", "tool": self.tool, "count": self.count})
+    }
+
+    /// The call's result.
+    pub fn text(&self) -> String {
+        format!(
+            "Not run: this exact {} call has failed {} times with the same error, and nothing has changed \
+             since. Running it again would give the same error:\n{}\nSend a different call: re-read the \
+             file or the error and correct the arguments, or take another approach.",
+            self.tool, self.count, self.error
+        )
+    }
+}
+
 fn hash<T: Hash>(t: &T) -> u64 {
     let mut h = DefaultHasher::new();
     t.hash(&mut h);
     h.finish()
+}
+
+/// What sets a later reminder of one pattern apart from its first: nothing at the first count
+/// and between the counts of [`REMIND_AT`] (so it fires once), the count itself at a later one.
+fn later(count: u32) -> String {
+    match REMIND_AT.iter().rev().find(|at| count >= **at) {
+        Some(at) if *at > REPEATED_FAILURES => format!(":{at}"),
+        _ => String::new(),
+    }
 }
 
 /// How often one call gave one output.
@@ -101,6 +140,8 @@ struct Seen {
     changes_after: u64,
     /// A change came between two of them.
     changed_between: bool,
+    /// The start of the error, for a refusal to quote.
+    error: String,
 }
 
 /// One user turn's view of the tool calls.
@@ -140,13 +181,14 @@ impl LoopGuard {
             seen.changed_between |= seen.count > 0 && self.changes > seen.changes_after;
             seen.count += 1;
             seen.changes_after = changes_after;
+            seen.error = output.chars().take(REFUSAL_QUOTE).collect();
             if seen.count >= REPEATED_FAILURES {
                 let stuck = Stuck::RepeatedFailure {
                     tool: tool.into(),
                     count: seen.count,
                     after_changes: seen.changed_between,
                 };
-                found = Some((format!("fail:{key}:{out}"), stuck));
+                found = Some((format!("fail:{key}:{out}{}", later(seen.count)), stuck));
             } else if self.streak >= ERROR_STREAK {
                 found = Some(("streak".into(), Stuck::ErrorStreak { count: self.streak }));
             }
@@ -162,7 +204,8 @@ impl LoopGuard {
                 seen.count += 1;
                 seen.changes_after = changes_after;
                 if seen.count >= NO_PROGRESS {
-                    found = Some((format!("same:{key}"), Stuck::NoProgress { tool: tool.into(), count: seen.count }));
+                    let id = format!("same:{key}{}", later(seen.count));
+                    found = Some((id, Stuck::NoProgress { tool: tool.into(), count: seen.count }));
                 }
             }
             for (file, old, new) in edits_of(tool, input) {
@@ -175,6 +218,37 @@ impl LoopGuard {
         self.changes = changes_after;
         let (id, stuck) = found?;
         self.fired.insert(id).then_some(stuck)
+    }
+
+    /// Before a call runs: would it only repeat a failure the model was already warned about?
+    /// Yes when this exact call failed [`REPEATED_FAILURES`] times with the same error, the
+    /// reminder for it went out, and no call that may change files ran since. Then running it
+    /// again costs a step and returns what the model already has, so the engine answers it
+    /// without running it ([`Refused`]).
+    ///
+    /// Only for calls whose result depends on nothing but the call and the files
+    /// (`depends_on_files_only`): a shell command, a fetch or an MCP call may fail the same way
+    /// three times and work the fourth (a server still starting, a network blip), so those are
+    /// never refused, only reminded.
+    pub fn would_repeat(&mut self, tool: &str, input: &Value, depends_on_files_only: bool) -> Option<Refused> {
+        if !depends_on_files_only {
+            return None;
+        }
+        let key = hash(&(tool, input.to_string()));
+        let changes = self.changes;
+        let fired = &self.fired;
+        let seen = self.failures.iter().find_map(|((k, out), seen)| {
+            (*k == key
+                && seen.count >= REPEATED_FAILURES
+                && seen.changes_after == changes
+                && fired.contains(&format!("fail:{k}:{out}")))
+            .then_some(seen)
+        })?;
+        let refused = Refused { tool: tool.into(), count: seen.count, error: seen.error.clone() };
+        // Refusals count toward the run of failures, so a model that keeps sending the call
+        // still gets the "step back" reminder.
+        self.streak += 1;
+        Some(refused)
     }
 
     /// Forget the results counted so far, after a microcompaction cleared old tool results from
@@ -318,6 +392,84 @@ mod tests {
         assert_eq!(s, Stuck::RepeatedFailure { tool: "Bash".into(), count: 3, after_changes: false });
         assert!(s.text().contains("failed 3 times with the same error") && s.text().contains("Repeating it"));
         assert_eq!(g.observe("Bash", &call, "err", true, true), None, "once per call and error");
+    }
+
+    /// After the reminder, the same failing call is not run again while nothing has changed; a
+    /// change, a different call, or a tool that depends on more than the files lifts it.
+    #[test]
+    fn a_warned_repeat_is_refused_until_something_changes() {
+        let mut g = LoopGuard::default();
+        let call = json!({"file_path": "a.py", "old_string": "x", "new_string": "y"});
+        let err = "String to replace not found in file.";
+        assert_eq!(g.would_repeat("Edit", &call, true), None, "never seen");
+        for _ in 0..2 {
+            assert!(g.observe("Edit", &call, err, true, false).is_none());
+            assert_eq!(g.would_repeat("Edit", &call, true), None, "not warned yet");
+        }
+        assert!(g.observe("Edit", &call, err, true, false).is_some(), "the reminder");
+        let r = g.would_repeat("Edit", &call, true).unwrap();
+        assert_eq!((r.count, r.tool.as_str()), (3, "Edit"));
+        assert!(r.text().contains("Not run") && r.text().contains(err), "{}", r.text());
+        assert_eq!(r.record(), json!({"kind": "refused", "tool": "Edit", "count": 3}));
+        // Still refused the next time; another call is not.
+        assert!(g.would_repeat("Edit", &call, true).is_some());
+        assert_eq!(
+            g.would_repeat("Edit", &json!({"file_path": "a.py", "old_string": "z", "new_string": "y"}), true),
+            None
+        );
+        // A shell command may work the fourth time (a server still starting): never refused.
+        let curl = json!({"command": "curl -sf localhost:8000"});
+        for _ in 0..3 {
+            g.observe("Bash", &curl, "exit code 7", true, true);
+        }
+        assert_eq!(g.would_repeat("Bash", &curl, false), None);
+        // Something changed since the last failure: the call may now succeed, so it runs.
+        g.observe("Write", &json!({"file_path": "a.py", "content": "x = 1"}), "ok", false, true);
+        assert_eq!(g.would_repeat("Edit", &call, true), None);
+    }
+
+    /// A model that keeps sending a refused call still gets the "step back" reminder.
+    #[test]
+    fn refusals_count_toward_the_failure_streak() {
+        let mut g = LoopGuard::default();
+        let call = json!({"file_path": "/nope"});
+        for _ in 0..3 {
+            g.observe("Read", &call, "File does not exist.", true, false);
+        }
+        assert!(g.would_repeat("Read", &call, true).is_some());
+        assert!(g.would_repeat("Read", &call, true).is_some());
+        let other = json!({"file_path": "/nope2"});
+        assert_eq!(
+            g.observe("Read", &other, "File does not exist.", true, false),
+            Some(Stuck::ErrorStreak { count: 6 })
+        );
+    }
+
+    /// A call that is never refused (a shell command) and goes on failing the same way is told
+    /// again at 5 and at 8, with the count, then no more.
+    #[test]
+    fn a_loop_that_goes_on_is_told_again_at_later_counts() {
+        let mut g = LoopGuard::default();
+        let call = json!({"command": "make"});
+        let told: Vec<u32> = (1..=12)
+            .filter_map(|_| match g.observe("Bash", &call, "make: *** No rule", true, false) {
+                Some(Stuck::RepeatedFailure { count, .. }) => Some(count),
+                Some(Stuck::ErrorStreak { .. }) | None => None,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(told, vec![3, 5, 8]);
+        // The same result again and again, likewise.
+        let mut g = LoopGuard::default();
+        let read = json!({"file_path": "a.txt"});
+        let told: Vec<u32> = (1..=12)
+            .filter_map(|_| match g.observe("Read", &read, "same", false, false) {
+                Some(Stuck::NoProgress { count, .. }) => Some(count),
+                None => None,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(told, vec![3, 5, 8]);
     }
 
     #[test]

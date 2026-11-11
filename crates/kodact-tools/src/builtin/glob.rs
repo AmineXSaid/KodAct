@@ -55,7 +55,11 @@ impl Tool for Glob {
     async fn call(&self, input: Value, ctx: &ToolContext) -> ToolOutput {
         let root = search_root(&input, ctx);
         if !root.is_dir() {
-            return ToolOutput::error(format!("Directory does not exist: {}", root.display()));
+            return ToolOutput::error(format!(
+                "Directory does not exist: {}.{}",
+                root.display(),
+                crate::missing_path_hint(&root)
+            ));
         }
         let pattern = str_arg(&input, "pattern").trim().to_string();
         let (base, pat) = if pattern.starts_with('/') {
@@ -70,6 +74,7 @@ impl Tool for Glob {
         let start = std::time::Instant::now();
         let cancel = ctx.cancel.clone();
         let walk_root = root.clone();
+        let searched = base.display().to_string();
         let found = tokio::task::spawn_blocking(move || {
             let mut out: Vec<(PathBuf, SystemTime)> = vec![];
             for entry in ignore::WalkBuilder::new(&walk_root)
@@ -105,7 +110,16 @@ impl Tool for Glob {
             "durationMs": start.elapsed().as_millis() as u64,
         });
         if files.is_empty() {
-            return ToolOutput::text("No files found").with_structured(structured);
+            // What the search covered, and the usual reason a pattern finds nothing.
+            let deeper = if pat.contains("**") || pat.contains('/') {
+                String::new()
+            } else {
+                format!(" A pattern without `**` matches only directly in that directory: try `**/{pat}`.")
+            };
+            return ToolOutput::text(format!(
+                "No files found for `{pattern}` under {searched} (files ignored by .gitignore are not searched).{deeper}"
+            ))
+            .with_structured(structured);
         }
         let mut text = files.join("\n");
         if truncated {

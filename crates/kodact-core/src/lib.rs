@@ -89,6 +89,9 @@ pub struct LaunchOptions {
     pub max_time: Option<std::time::Duration>,
     /// `--autonomous` (or the `autonomous` setting): an unattended run.
     pub autonomous: bool,
+    /// Print mode with its prompt given up front (`-p`, no input stream): the run ends with the
+    /// turn, and nobody can answer after it.
+    pub one_shot: bool,
     pub json_schema: Option<Value>,
     pub resume: Resume,
     pub fork_session: bool,
@@ -265,6 +268,75 @@ pub struct Session {
     pub warnings: Vec<String>,
     pub session_id: String,
     pub resumed: Option<LoadedSession>,
+}
+
+/// KodAct's own nudges to the model (verification, loop guard, act, attempt, next-step, todo,
+/// budget and time wrap-up, background commands): on unless `"reminders": false` in settings
+/// or `KODACT_REMINDERS=0`, which leave a run to the model and the CLI alone (for A/B runs).
+pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_REMINDERS") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/reminders").unwrap_or(true),
+    }
+}
+
+/// Whether Edit may name the lines to replace instead of retyping them: `edit.lineRanges`, or
+/// `KODACT_EDIT_LINES` (for A/B runs). Off by default until it is measured.
+pub(crate) fn line_edits(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_EDIT_LINES") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/edit/lineRanges").unwrap_or(false),
+    }
+}
+
+/// Whether an edit's result says when the file no longer parses: on with the verification loop
+/// (so `KODACT_VERIFY=0` and `verification.enabled` turn it off too), unless
+/// `verification.syntaxCheck` is false.
+pub(crate) fn edit_diagnostics(settings: &LoadedSettings, verifying: bool) -> bool {
+    verifying && settings.bool("/verification/syntaxCheck") != Some(false)
+}
+
+/// Formatting after edits: off unless `verification.format` is true (and the verification
+/// loop is on). `verification.formatters` maps file extensions to a command that formats
+/// stdin to stdout (`{"py": ["black", "-q", "-"]}`), used instead of the built-in ones.
+pub(crate) fn formatters(settings: &LoadedSettings, verifying: bool) -> Option<kodact_engine::format::FormatConfig> {
+    if !verifying {
+        return None;
+    }
+    kodact_engine::format::FormatConfig::from_settings(
+        settings.bool("/verification/format"),
+        settings.get("/verification/formatters"),
+    )
+}
+
+/// Language-server diagnostics after edits: off unless `verification.languageServer` is true
+/// (and the verification loop is on). `verification.languageServers` maps file extensions to a
+/// server's command (`{"py": ["pylsp"]}`), tried before the built-in table;
+/// `verification.languageServerWaitMs` is how long an edit waits for the answer.
+pub(crate) fn language_servers(settings: &LoadedSettings, verifying: bool) -> Option<kodact_engine::LspConfig> {
+    if !verifying || settings.bool("/verification/languageServer") != Some(true) {
+        return None;
+    }
+    let mut cfg = kodact_engine::LspConfig::default();
+    let configured = settings.get("/verification/languageServers").and_then(Value::as_object).cloned();
+    let mut own: Vec<kodact_engine::ServerSpec> = configured
+        .into_iter()
+        .flatten()
+        .filter_map(|(ext, command)| {
+            let command: Vec<String> =
+                command.as_array()?.iter().filter_map(|c| c.as_str().map(str::to_string)).collect();
+            (!command.is_empty()).then(|| kodact_engine::ServerSpec {
+                extensions: vec![ext.trim_start_matches('.').to_ascii_lowercase()],
+                command,
+            })
+        })
+        .collect();
+    own.append(&mut cfg.servers);
+    cfg.servers = own;
+    if let Some(ms) = settings.get("/verification/languageServerWaitMs").and_then(Value::as_u64) {
+        cfg.wait = std::time::Duration::from_millis(ms);
+    }
+    Some(cfg)
 }
 
 /// The verification loop's settings: `verification.{enabled, commands,
@@ -472,26 +544,30 @@ fn apply_model_limits(s: &LoadedSettings) -> Vec<String> {
 /// How [`unknown_model_notice`] starts, so `/doctor` can tell it apart.
 pub const UNKNOWN_MODEL_PREFIX: &str = "KodAct doesn't know the model ";
 
-/// Shown once when the session's model is in no table and nothing set its limits.
 /// How long a session waits, as it starts, for its endpoint to report an unknown
 /// model's context window.
 pub const LISTED_WINDOW_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl Session {
-    /// An unknown model: wait a moment ([`LISTED_WINDOW_WAIT`]) for the endpoint's model
-    /// list, which may report its window, so the first request and the startup notice use
-    /// it instead of the 200,000-token guess. The notice goes once the window is known.
+    /// A model with no window of its own: wait a moment ([`LISTED_WINDOW_WAIT`]) for the
+    /// endpoint's model list, which may report it, so the first request and the startup
+    /// notice use it instead of `KODACT_CONTEXT_WINDOW` or the 1,000,000-token guess. The
+    /// variable, one value for every model, then never stands in for a window the endpoint
+    /// gives, so a large model keeps its own. The notice goes once the window is known.
     pub async fn learn_window(&mut self) {
-        let Some(i) = self.warnings.iter().position(|w| w.starts_with(UNKNOWN_MODEL_PREFIX)) else { return };
-        let model = self.warnings[i][UNKNOWN_MODEL_PREFIX.len()..].split(':').next().unwrap_or("").to_string();
-        let provider = self.engine.provider();
-        let _ = tokio::time::timeout(LISTED_WINDOW_WAIT, provider.list_models()).await;
+        let model = self.engine.handle().model();
+        if kodact_api::models::window_unknown(&model) {
+            let provider = self.engine.provider();
+            let _ = tokio::time::timeout(LISTED_WINDOW_WAIT, provider.list_models()).await;
+        }
+        // Also when the listing came in before this call, from the request made at start.
         if kodact_api::models::limits_source(&model) == kodact_api::models::LimitsSource::Listed {
-            self.warnings.remove(i);
+            self.warnings.retain(|w| !w.starts_with(UNKNOWN_MODEL_PREFIX));
         }
     }
 }
 
+/// Shown once when the session's model is in no table and nothing set its limits.
 pub fn unknown_model_notice(model: &str, priced: bool) -> String {
     let info = kodact_api::models::model_info_or_default(model);
     let price = if priced { "" } else { ", and has no price for it" };
@@ -779,6 +855,8 @@ pub fn build_session(
     let mut tools = ToolRegistry::new();
     kodact_tools::builtin::register_core(&mut tools);
     kodact_tools::builtin::set_shell(&mut tools, &shell);
+    let line_edits = line_edits(&settings);
+    kodact_tools::builtin::set_line_edits(&mut tools, line_edits);
     let web_tools = web_tools(&provider, &settings, &session_model(&opts, &settings));
     for t in &web_tools {
         tools.register(t.clone());
@@ -910,9 +988,12 @@ pub fn build_session(
         None => settings.get("/autoCompactWindow").and_then(Value::as_u64),
     };
     warnings.extend(apply_model_limits(&settings));
-    if kodact_api::models::limits_source(&model) == kodact_api::models::LimitsSource::Guessed && opts.provider.is_none()
-    {
-        warnings.push(unknown_model_notice(&model, pricing.contains_key(&model)));
+    // No window of the model's own: KODACT_CONTEXT_WINDOW or the guess stands in, and the
+    // endpoint may still report the real one, which wins over both.
+    if kodact_api::models::window_unknown(&model) && opts.provider.is_none() {
+        if kodact_api::models::limits_source(&model) == kodact_api::models::LimitsSource::Guessed {
+            warnings.push(unknown_model_notice(&model, pricing.contains_key(&model)));
+        }
         // An OpenAI-compatible endpoint may report the window in its model list.
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let p = provider.clone();
@@ -971,6 +1052,7 @@ pub fn build_session(
         env: tool_ctx.env.clone(),
         sandbox: tool_ctx.sandbox.clone(),
         shell: shell.clone(),
+        line_edits,
         agent_slots: Arc::new(tokio::sync::Semaphore::new(
             env_nonempty("KODACT_MAX_PARALLEL_AGENTS")
                 .and_then(|v| v.trim().parse::<usize>().ok())
@@ -988,6 +1070,7 @@ pub fn build_session(
         hooks: hooks.clone(),
         sink: sink.clone(),
         base: EngineConfig {
+            reminders: reminders_enabled(&settings),
             max_output_tokens: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").and_then(|v| v.parse().ok()).unwrap_or(32_000),
             pricing: pricing.clone(),
             autocompact_window,
@@ -1006,6 +1089,7 @@ pub fn build_session(
     }
     let tool_names = tools.names();
     let cfg = EngineConfig {
+        reminders: reminders_enabled(&settings),
         model: model.clone(),
         fallback_models,
         max_output_tokens: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").and_then(|v| v.parse().ok()).unwrap_or(32_000),
@@ -1025,6 +1109,10 @@ pub fn build_session(
         autocompact_window,
         auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
         is_subagent: false,
+        edit_diagnostics: edit_diagnostics(&settings, verify.is_some()),
+        language_servers: language_servers(&settings, verify.is_some()),
+        formatters: formatters(&settings, verify.is_some()),
+        one_shot: opts.one_shot,
         verify,
         escalate_output: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").is_none(),
         fast: settings.bool("/fastMode").unwrap_or(false),

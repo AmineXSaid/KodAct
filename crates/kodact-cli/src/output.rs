@@ -54,6 +54,7 @@ pub fn result_message(r: &TurnResult, session_id: &str) -> ResultMessage {
         permission_denials: r.permission_denials.clone(),
         structured_output: r.structured_output.clone(),
         errors: r.errors.clone(),
+        verification: r.verification.as_ref().map(|v| v.record()),
         uuid: new_uuid(),
         immediate: None,
     }

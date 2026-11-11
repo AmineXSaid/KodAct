@@ -310,9 +310,14 @@ impl Tool for Bash {
                 ToolOutput::text(text).with_structured(structured)
             }
             code => {
+                let exit = code;
                 let code = code.map(|c| c.to_string()).unwrap_or_else(|| "signal".into());
                 let mut msg = format!("Exit code {code}\n{text}").trim_end().to_string();
                 if let Some(hint) = sandbox.as_ref().and_then(|(_, p)| p.explain_failure(&text)) {
+                    msg.push_str(&format!("\n\n{hint}"));
+                }
+                let found = |p: &str| kodact_platform::process::find_program(p).is_some();
+                if let Some(hint) = super::exit_hints::explain(exit, &text, found) {
                     msg.push_str(&format!("\n\n{hint}"));
                 }
                 ToolOutput::error(msg).with_structured(structured)
