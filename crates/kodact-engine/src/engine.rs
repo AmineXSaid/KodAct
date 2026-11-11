@@ -93,6 +93,15 @@ const MIN_REPLY: u32 = 4_096;
 /// compacted.
 const MAX_REPLY_SHRINKS: u32 = 3;
 
+/// The least a reply may think before the thinking time-box can stop it.
+const TIME_BOX_FLOOR: Duration = Duration::from_secs(120);
+/// The time-box's limit, in usual replies: a reply may think this many times as long as this
+/// run's replies usually take.
+const TIME_BOX_FACTOR: u32 = 3;
+/// Replies stopped by the time-box in a row, with no answer or action between them; past it, a
+/// reply runs to its end.
+const MAX_TIME_BOXES: u32 = 2;
+
 /// Compactions one turn makes because the conversation no longer fits. More than one: a long
 /// `-p` run is one turn, and it fills a small window again after each compaction. Each needs the
 /// conversation to have grown since the last, so one that didn't make room isn't repeated.
@@ -223,6 +232,9 @@ pub struct EngineConfig {
     pub autonomous: bool,
     /// The first wait before such a retry; each next one doubles, up to a minute.
     pub api_retry_wait: Duration,
+    /// The least a reply may think before the thinking time-box (`nudges.thinkingTimeBox`) can
+    /// stop it (2 minutes; tests set it lower).
+    pub time_box_floor: Duration,
     /// `--json-schema`: structured output for the final answer.
     pub json_schema: Option<Value>,
     pub pricing: HashMap<String, Pricing>,
@@ -322,6 +334,7 @@ impl Default for EngineConfig {
             time_limit: None,
             autonomous: false,
             api_retry_wait: API_RETRY_FIRST_WAIT,
+            time_box_floor: TIME_BOX_FLOOR,
             json_schema: None,
             pricing: HashMap::new(),
             initial_context: None,
@@ -780,6 +793,8 @@ pub struct Engine {
     effort_loop: Option<crate::effort_loop::EffortLoop>,
     /// Tokens the last reply spent thinking, for judging its step once its tools have run.
     last_thought: u64,
+    /// How long this session's complete replies took, latest last: the run's own pace.
+    reply_secs: Vec<f64>,
     /// After `/clear`: attach the memory context to the next prompt again.
     reattach_context: bool,
     /// Notes for the model, attached to the next prompt (`/add-dir`, ...).
@@ -829,6 +844,9 @@ enum StreamOutcome {
     Failed(ApiError),
     /// The reply was stopped while it streamed: it was one passage repeated ([`crate::repeat`]).
     Repeating(crate::repeat::Repeating),
+    /// The reply was stopped while it was still all thinking, past the time-box: the reasoning
+    /// it had streamed, and the limit.
+    TimeBoxed(String, Duration),
 }
 
 impl Engine {
@@ -902,6 +920,7 @@ impl Engine {
             reply_shrink: None,
             effort_loop: None,
             last_thought: 0,
+            reply_secs: Vec::new(),
             reattach_context: false,
             carried_requests: vec![],
             lsp: None,
@@ -1430,8 +1449,14 @@ impl Engine {
 
     /// Stream one model response, emitting events. Keeps a usable partial on interrupt.
     /// One model call of the turn. `watch`: stop a reply that repeats itself as it streams.
-    async fn stream_once(&self, req: MessagesRequest, cancel: &CancellationToken, watch: bool) -> StreamOutcome {
-        self.stream_inner(req, cancel, true, watch).await
+    async fn stream_once(
+        &self,
+        req: MessagesRequest,
+        cancel: &CancellationToken,
+        watch: bool,
+        think_until: Option<Instant>,
+    ) -> StreamOutcome {
+        self.stream_inner(req, cancel, true, watch, think_until).await
     }
 
     async fn stream_inner(
@@ -1440,7 +1465,9 @@ impl Engine {
         cancel: &CancellationToken,
         emit: bool,
         watch: bool,
+        think_until: Option<Instant>,
     ) -> StreamOutcome {
+        let started = Instant::now();
         let mut stream = match self.shared.provider.stream(req, cancel.clone()).await {
             Ok(s) => s,
             Err(ApiError::Cancelled) => return StreamOutcome::Interrupted(None),
@@ -1449,16 +1476,40 @@ impl Engine {
         let mut acc = MessageAccumulator::new();
         let mut stopped: HashSet<usize> = HashSet::new();
         let mut watcher = crate::repeat::Watcher::default();
+        // The thinking time-box: armed while the reply is still all thinking. Once it answers or
+        // starts a tool call it is never cut: stopping an action halfway does more harm than good.
+        let boxed = think_until.is_some();
+        let time_box = tokio::time::sleep_until(tokio::time::Instant::from_std(
+            think_until.unwrap_or_else(|| Instant::now() + Duration::from_secs(86_400)),
+        ));
+        tokio::pin!(time_box);
+        let mut acted = false;
         loop {
             let next = tokio::select! {
                 n = stream.next() => n,
                 _ = cancel.cancelled() => Some(Err(ApiError::Cancelled)),
+                _ = &mut time_box, if boxed && !acted => {
+                    // Dropping the stream ends the request: the server stops generating.
+                    let reasoning = acc.snapshot().map(|m| reasoning_of(&m.content)).unwrap_or_default();
+                    return StreamOutcome::TimeBoxed(reasoning, started.elapsed());
+                }
             };
             match next {
                 Some(Ok(ev)) => {
                     if let StreamEvent::ContentBlockStop { index } = &ev {
                         stopped.insert(*index);
                     }
+                    acted = acted
+                        || match &ev {
+                            StreamEvent::ContentBlockStart { content_block, .. } => {
+                                matches!(content_block, ContentBlock::Text { .. } | ContentBlock::ToolUse { .. })
+                            }
+                            StreamEvent::ContentBlockDelta { delta, .. } => matches!(
+                                delta,
+                                kodact_types::Delta::TextDelta { .. } | kodact_types::Delta::InputJsonDelta { .. }
+                            ),
+                            _ => false,
+                        };
                     if watch {
                         let repeating = match &ev {
                             StreamEvent::ContentBlockStart { .. } => {
@@ -1708,17 +1759,21 @@ impl Engine {
             }
             oc
         });
+        self.summary_effort(&mut req);
         // The summary gets a reply's whole output budget: a model that reasons spends its
         // reasoning from the same budget before writing the summary. At 20k, path-tracing-reverse
         // (9ef0955) reasoned to the limit and wrote nothing seven times in a row, and five of the
         // eight summaries that did come back that run used 18k to 20k.
         let sent = req.max_tokens;
         let t0 = Instant::now();
-        let outcome = self.stream_inner(req, cancel, false, false).await;
+        let outcome = self.stream_inner(req, cancel, false, false, None).await;
         turn.api_ms += t0.elapsed().as_millis() as u64;
         let msg = match outcome {
             StreamOutcome::Done(m) => m,
-            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) => return Err("interrupted".into()),
+            // Summaries are never time-boxed (`None` above): the last case can't happen here.
+            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) | StreamOutcome::TimeBoxed(..) => {
+                return Err("interrupted".into())
+            }
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
                 self.record_compact_failure(trigger, &reason, None);
@@ -1813,6 +1868,37 @@ impl Engine {
         );
         // Sending it again only helps when the prompt itself fits, with room for a reply.
         reported.prompt.is_none_or(|p| p.saturating_add(u64::from(MIN_REPLY)) <= window)
+    }
+
+    /// A summary asks for the lowest reasoning level. Summarizing is reading and writing down, not
+    /// solving; at full depth a reasoning model could spend the whole budget thinking and return
+    /// no summary (on a 100,000-token model, 2026-11-10: two summaries in a row of 32,000 tokens
+    /// of reasoning each, minutes apiece). Wherever a level is sent already, and always to an
+    /// OpenAI-compatible endpoint, which takes it as `reasoning_effort` (one that takes other
+    /// levels gets its closest; one that takes none, the request again without it). Elsewhere
+    /// the request is as before.
+    fn summary_effort(&self, req: &mut MessagesRequest) {
+        let has_level = req.output_config.as_ref().is_some_and(|c| c.get("effort").is_some());
+        if has_level || self.shared.provider.name() == "openai" {
+            let oc = req.output_config.get_or_insert_with(|| json!({}));
+            oc["effort"] = json!("low");
+        }
+    }
+
+    /// How long the next reply may think before the time-box stops it: a few times this run's
+    /// usual reply (the middle one, so one odd reply doesn't skew it), never under the floor;
+    /// with a time limit, no more than a quarter of the time left (and at least 30 seconds).
+    /// From the run's own pace, so a fast model and a slow one each get a fitting limit.
+    fn thinking_limit(&self) -> Duration {
+        let floor = self.cfg.time_box_floor;
+        let mut recent: Vec<f64> = self.reply_secs.iter().rev().take(20).copied().collect();
+        recent.sort_by(|a, b| a.total_cmp(b));
+        let usual = recent.get(recent.len() / 2).map(|s| Duration::from_secs_f64(*s));
+        let mut limit = usual.map_or(floor, |u| (u * TIME_BOX_FACTOR).max(floor));
+        if let Some(t) = &self.cfg.time_limit {
+            limit = limit.min((t.remaining() / 4).max(floor.min(Duration::from_secs(30))));
+        }
+        limit
     }
 
     /// Count a step for the adaptive level, and say when it changes.
@@ -2080,10 +2166,14 @@ impl Engine {
             }
             oc
         });
+        self.summary_effort(&mut req);
         // A reply's whole output budget, as for a full compaction.
-        let msg = match self.stream_inner(req, &cancel, false, false).await {
+        let msg = match self.stream_inner(req, &cancel, false, false, None).await {
             StreamOutcome::Done(m) => m,
-            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) => return Err("interrupted".into()),
+            // Summaries are never time-boxed (`None` above): the last case can't happen here.
+            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) | StreamOutcome::TimeBoxed(..) => {
+                return Err("interrupted".into())
+            }
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
                 self.record_compact_failure("partial", &reason, None);
@@ -2466,6 +2556,8 @@ impl Engine {
         // A refusal that gave the model's real window: sent again once, sized to it.
         let mut learned_window = false;
         let mut reply_shrinks = 0u32;
+        // Replies the thinking time-box stopped in a row.
+        let mut time_boxes = 0u32;
         let mut last_text: Option<String> = None;
         let mut continuations = 0;
         let mut reasoning_cutoffs = 0;
@@ -2519,7 +2611,15 @@ impl Engine {
             // Watched while this stretch still has reminders to act left: past them, a reply
             // runs to its end and the turn ends as it would have.
             let watch = self.cfg.reminders && reasoning_cutoffs < MAX_REASONING_CUTOFFS;
-            let outcome = self.stream_once(req, &cancel, watch).await;
+            let think_until = (self.cfg.reminders
+                && !self.cfg.is_subagent
+                && self.cfg.nudges.thinking_time_box
+                && time_boxes < MAX_TIME_BOXES)
+                .then(|| Instant::now() + self.thinking_limit());
+            let outcome = self.stream_once(req, &cancel, watch, think_until).await;
+            if matches!(outcome, StreamOutcome::Done(_)) {
+                self.reply_secs.push(t0.elapsed().as_secs_f64());
+            }
             turn.api_ms += t0.elapsed().as_millis() as u64;
             match &outcome {
                 StreamOutcome::Done(m) => tracing::debug!(
@@ -2534,6 +2634,9 @@ impl Engine {
                 StreamOutcome::Interrupted(_) => tracing::debug!("model response interrupted"),
                 StreamOutcome::Failed(e) => tracing::debug!(error = %e, "model request failed"),
                 StreamOutcome::Repeating(r) => tracing::debug!(copies = r.copies, "model response repeating; stopped"),
+                StreamOutcome::TimeBoxed(_, d) => {
+                    tracing::debug!(secs = d.as_secs(), "model response stopped by the time-box")
+                }
             }
             let mut msg = match outcome {
                 StreamOutcome::Done(m) => m,
@@ -2551,6 +2654,40 @@ impl Engine {
                         "The reply was repeating itself: stopped, and the model was told.",
                     );
                     self.push_user(Message::user_text(r.text()), true, None, true);
+                    continue;
+                }
+                // Still all thinking past the time-box: nothing of the reply is kept, its reasoning
+                // is handed back, and it counts as thinking that led nowhere for the adaptive level.
+                StreamOutcome::TimeBoxed(reasoning, took) => {
+                    turn.api_calls += 1;
+                    time_boxes += 1;
+                    let secs = took.as_secs();
+                    let what = format!(
+                        "Your reply was stopped after {secs} seconds of reasoning, before you answered or took any \
+                         action: this step's time is up."
+                    );
+                    let (text, kept) = if reasoning.trim().is_empty() {
+                        (
+                            format!(
+                                "<system-reminder>\n{what} Act on what you have now: take the next concrete step (run a \
+                                 command, make an edit, or give your answer), then continue from its result.\n</system-reminder>"
+                            ),
+                            0,
+                        )
+                    } else {
+                        // Not kept in the conversation, whatever the provider: always handed back.
+                        self.reasoning_notes(&what, &reasoning)
+                    };
+                    self.system_event(
+                        "nudge",
+                        json!({"kind": crate::progress::Nudge::ThinkingTimeBox.as_str(), "secs": secs, "reasoning_chars": kept}),
+                    );
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("A reply reasoned for {secs} s without acting: stopped, and its notes handed back."),
+                    );
+                    self.effort_step(crate::effort_loop::Step::AllThinking);
+                    self.push_user(Message::user_text(text), true, None, true);
                     continue;
                 }
                 StreamOutcome::Interrupted(partial) => {
@@ -2733,6 +2870,8 @@ impl Engine {
                 .sum();
             if tool_uses.is_empty() && !reply_has_text {
                 self.effort_step(crate::effort_loop::Step::AllThinking);
+            } else {
+                time_boxes = 0;
             }
             self.push_assistant(msg);
             self.publish_turn(started, &turn);
@@ -3414,10 +3553,16 @@ impl Engine {
     /// analysis of the decoder again in three cut-off replies in a row and wrote nothing. There,
     /// the reminder carries how the reasoning began and where it stopped.
     fn act_reminder(&self, plain: &str, what: &str, model: &str, reasoning: &str) -> (String, usize) {
-        let reasoning = reasoning.trim();
-        if reasoning.is_empty() || self.shared.provider.resends_reasoning(model) {
+        if reasoning.trim().is_empty() || self.shared.provider.resends_reasoning(model) {
             return (plain.to_string(), 0);
         }
+        self.reasoning_notes(what, reasoning)
+    }
+
+    /// `what` happened, with the reasoning handed back (how it began and where it stopped, when
+    /// it is long), and the ask to go on from it and act.
+    fn reasoning_notes(&self, what: &str, reasoning: &str) -> (String, usize) {
+        let reasoning = reasoning.trim();
         let n = reasoning.chars().count();
         let (shown, kept) = if n <= REASONING_HEAD + REASONING_TAIL {
             (format!("Here it is:\n\n<reasoning>\n{reasoning}\n</reasoning>"), n)

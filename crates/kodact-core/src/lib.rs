@@ -1126,6 +1126,7 @@ pub fn build_session(
         time_limit: opts.max_time.map(kodact_engine::TimeLimit::starting_now),
         autonomous,
         api_retry_wait: EngineConfig::default().api_retry_wait,
+        time_box_floor: EngineConfig::default().time_box_floor,
         json_schema: opts.json_schema.clone(),
         pricing,
         initial_context: (!initial.is_empty()).then(|| initial.join("\n\n")),

@@ -8,7 +8,10 @@
 //! - a reply that was all thinking (no answer, no action) lowers the level one step at once;
 //! - two steps of long thinking whose actions made no progress (no file the request asks for
 //!   changed, no check passed) lower it one step;
-//! - two steps in a row that made progress raise it one step again.
+//! - two steps in a row that made progress raise it one step again;
+//! - at `low`, thinking that still leads nowhere sends it back to the person's level: thinking
+//!   less didn't help either, so a hard problem isn't left at `low`. After such a bounce it
+//!   doesn't step down for a few steps, and after two it stays at the person's level.
 //!
 //! The level never goes above the one the person set (`--effort`, or `high` without one) and
 //! never below `low`: thinking is never switched off. The server enforces the level, so a model
@@ -21,6 +24,10 @@ pub(crate) const LADDER: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 const DOWN_AFTER: u32 = 2;
 /// Steps that made progress, in a row, before the level steps back up.
 const UP_AFTER: u32 = 2;
+/// Steps after a bounce during which the level doesn't step down again.
+const BOUNCE_COOLDOWN: u32 = 4;
+/// Bounces a turn makes; after them the level stays at the person's.
+const MAX_BOUNCES: u32 = 2;
 
 /// How a step went, for the loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +49,9 @@ pub(crate) struct EffortLoop {
     now: usize,
     stuck: u32,
     moving: u32,
+    /// Steps left before the level may step down again, after a bounce.
+    cooldown: u32,
+    bounces: u32,
 }
 
 /// A change of level: from, to, and why.
@@ -52,7 +62,7 @@ impl EffortLoop {
     /// level the loop doesn't know.
     pub fn new(start: &str) -> Option<EffortLoop> {
         let top = LADDER.iter().position(|l| *l == start)?;
-        Some(EffortLoop { top, now: top, stuck: 0, moving: 0 })
+        Some(EffortLoop { top, now: top, stuck: 0, moving: 0, cooldown: 0, bounces: 0 })
     }
 
     /// The level the next request asks for.
@@ -62,6 +72,8 @@ impl EffortLoop {
 
     /// Count a step; the change it makes to the level, if any.
     pub fn record(&mut self, step: Step) -> Option<Change> {
+        let cooling = self.cooldown > 0;
+        self.cooldown = self.cooldown.saturating_sub(1);
         match step {
             Step::AllThinking => {
                 self.stuck = DOWN_AFTER;
@@ -80,6 +92,9 @@ impl EffortLoop {
         let from = self.level();
         if self.stuck >= DOWN_AFTER {
             self.stuck = 0;
+            if cooling || self.bounces >= MAX_BOUNCES {
+                return None;
+            }
             if self.now > 0 {
                 self.now -= 1;
                 let why = if step == Step::AllThinking {
@@ -88,6 +103,14 @@ impl EffortLoop {
                     "two steps of long thinking made no progress"
                 };
                 return Some((from, self.level(), why));
+            }
+            // Already at the lowest level and still nowhere: thinking less isn't the answer.
+            if self.top > 0 {
+                self.now = self.top;
+                self.bounces += 1;
+                self.cooldown = BOUNCE_COOLDOWN;
+                self.moving = 0;
+                return Some((from, self.level(), "thinking less didn't help either"));
             }
         }
         if self.moving >= UP_AFTER && self.now < self.top {
@@ -114,8 +137,7 @@ mod tests {
             l.record(Step::LongNoProgress),
             Some(("medium", "low", "two steps of long thinking made no progress"))
         );
-        assert_eq!(l.record(Step::AllThinking), None, "never below low: thinking stays on");
-        assert_eq!(l.level(), "low");
+        assert_eq!(l.level(), "low", "never below low: thinking stays on");
         assert_eq!(l.record(Step::Progress), None);
         assert_eq!(l.record(Step::Progress), Some(("low", "medium", "two steps in a row made progress")));
         assert_eq!(l.record(Step::Progress), None);
@@ -124,6 +146,32 @@ mod tests {
             assert_eq!(l.record(Step::Progress), None, "never above the person's level");
         }
         assert_eq!(l.level(), "high");
+    }
+
+    #[test]
+    fn at_low_and_still_nowhere_it_bounces_back_to_the_persons_level() {
+        let mut l = EffortLoop::new("high").unwrap();
+        l.record(Step::AllThinking);
+        l.record(Step::AllThinking);
+        assert_eq!(l.level(), "low");
+        assert_eq!(l.record(Step::AllThinking), Some(("low", "high", "thinking less didn't help either")));
+        // No stepping down for a few steps after a bounce.
+        for _ in 0..BOUNCE_COOLDOWN {
+            assert_eq!(l.record(Step::AllThinking), None);
+        }
+        assert_eq!(l.level(), "high");
+        // A second round down and back up, then it stays at the person's level.
+        assert_eq!(l.record(Step::AllThinking), Some(("high", "medium", "a reply was all thinking")));
+        assert_eq!(l.record(Step::AllThinking), Some(("medium", "low", "a reply was all thinking")));
+        assert_eq!(l.record(Step::AllThinking), Some(("low", "high", "thinking less didn't help either")));
+        for _ in 0..(BOUNCE_COOLDOWN + 6) {
+            assert_eq!(l.record(Step::AllThinking), None, "after two bounces, the person's level stays");
+        }
+        // Set to low by the person: nothing to bounce back to.
+        let mut low = EffortLoop::new("low").unwrap();
+        for _ in 0..4 {
+            assert_eq!(low.record(Step::AllThinking), None);
+        }
     }
 
     #[test]

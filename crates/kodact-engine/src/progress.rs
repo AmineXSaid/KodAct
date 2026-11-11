@@ -79,11 +79,14 @@ pub struct NudgeConfig {
     /// produced: down after thinking that led nowhere, back up after progress, never above the
     /// person's level and never below `low` (`effort_loop`).
     pub adaptive_effort: bool,
+    /// A reply that is still all thinking past a limit from the run's own pace is stopped, its
+    /// notes handed back, and the model asked for one concrete step.
+    pub thinking_time_box: bool,
 }
 
 impl NudgeConfig {
     /// The names used in settings and `KODACT_NUDGES`.
-    pub const NAMES: [&'static str; 11] = [
+    pub const NAMES: [&'static str; 12] = [
         "progress",
         "progressEarly",
         "shellEdit",
@@ -95,6 +98,7 @@ impl NudgeConfig {
         "limitVerdicts",
         "staleDeliverables",
         "adaptiveEffort",
+        "thinkingTimeBox",
     ];
 
     /// From a list of names (`KODACT_NUDGES=progress,shellEdit`); `all` turns every one on,
@@ -128,6 +132,7 @@ impl NudgeConfig {
             "limitVerdicts" => &mut self.limit_verdicts,
             "staleDeliverables" => &mut self.stale_deliverables,
             "adaptiveEffort" => &mut self.adaptive_effort,
+            "thinkingTimeBox" => &mut self.thinking_time_box,
             _ => return false,
         };
         *field = on;
@@ -151,6 +156,7 @@ pub(crate) enum Nudge {
     StaleDeliverable,
     SizeLimit,
     AdaptiveEffort,
+    ThinkingTimeBox,
 }
 
 impl Nudge {
@@ -165,6 +171,7 @@ impl Nudge {
             Nudge::StaleDeliverable => "stale_deliverable",
             Nudge::SizeLimit => "size_limit",
             Nudge::AdaptiveEffort => "adaptive_effort",
+            Nudge::ThinkingTimeBox => "thinking_time_box",
         }
     }
 }

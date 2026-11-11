@@ -19,6 +19,7 @@
 #   pace         two-plan-scheduler    none                 vs pace
 #   limits       two-plan-scheduler    none                 vs limitVerdicts,staleDeliverables
 #   effort       two-plan-scheduler    none                 vs adaptiveEffort (give both an --effort)
+#   timebox      two-plan-scheduler    none                 vs thinkingTimeBox
 #   suite        every task            none                 vs all (do the nudges hurt other work?)
 #
 # Reports land in evals/results/<NAME>-<time>-<group>-{off,on}/ (ignored by git); the table
@@ -66,6 +67,7 @@ spec() {
     pace) echo "two-plan-scheduler|none|pace" ;;
     limits) echo "two-plan-scheduler|none|limitVerdicts,staleDeliverables" ;;
     effort) echo "two-plan-scheduler|none|adaptiveEffort" ;;
+    timebox) echo "two-plan-scheduler|none|thinkingTimeBox" ;;
     suite) echo "*|none|all" ;;
     *) echo "nudge-ab: unknown group $1 (try --help)" >&2; return 1 ;;
   esac

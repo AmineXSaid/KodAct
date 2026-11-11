@@ -3600,3 +3600,77 @@ async fn a_window_stated_as_max_model_len_is_learned() {
     assert_eq!(reqs[0].max_tokens, 32_000);
     assert!(reqs[1].max_tokens < 8_192, "sized to the window it states: {}", reqs[1].max_tokens);
 }
+
+/// The thinking time-box: a reply still all thinking past its limit is stopped, its reasoning
+/// handed back with the ask for one concrete step, and the turn goes on; a reply that has started
+/// to answer is never cut; off by default (the long reply then ends on its own, empty).
+#[tokio::test]
+async fn a_reply_that_only_thinks_past_its_limit_is_stopped_and_its_notes_kept() {
+    use kodact_types::StopReason;
+    let thinking = |t: &str| ContentBlock::Thinking { thinking: t.into(), signature: String::new() };
+    // Each event comes 200 ms after the last: the reasoning arrives at ~600 ms, the reply ends at
+    // ~1.2 s. A 700 ms limit stops it in between.
+    let slow_thinker = || {
+        MockTurn::blocks(vec![thinking("first decode the header, then")], StopReason::EndTurn)
+            .with_delay(Duration::from_millis(200))
+    };
+    let cfg = |list: &str| EngineConfig { time_box_floor: Duration::from_millis(700), ..nudged_cfg(list) };
+
+    let h = Harness::new(vec![slow_thinker(), MockTurn::text("done")]);
+    let mut e =
+        h.engine_with(cfg("thinkingTimeBox"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("solve it")).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 2);
+    let told = last_user_text(&reqs[1]);
+    assert!(told.contains("this step's time is up") && told.contains("concrete step"), "{told}");
+    let given: Vec<Value> =
+        nudges(&h.transcript_text()).into_iter().filter(|n| n["kind"] == "thinking_time_box").collect();
+    assert_eq!(given.len(), 1, "{given:?}");
+
+    // A reply that has started its answer runs to its end, however slow.
+    // Its text starts at ~200 ms; the reply ends at ~600 ms, past the 400 ms limit.
+    let h = Harness::new(vec![MockTurn::text("a slow but real answer").with_delay(Duration::from_millis(100))]);
+    let cfg_fast = EngineConfig { time_box_floor: Duration::from_millis(400), ..nudged_cfg("thinkingTimeBox") };
+    let mut e = h.engine_with(cfg_fast, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("answer")).await;
+    assert_eq!(r.result.as_deref(), Some("a slow but real answer"));
+    assert!(nudges(&h.transcript_text()).iter().all(|n| n["kind"] != "thinking_time_box"));
+
+    // Off by default: the reply thinks to its end, then the empty-reply reminder applies.
+    let h = Harness::new(vec![slow_thinker(), MockTurn::text("done")]);
+    let mut e = h.engine_with(cfg(""), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("solve it")).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    assert!(nudges(&h.transcript_text()).iter().all(|n| n["kind"] != "thinking_time_box"));
+    assert!(!last_user_text(&h.provider.requests()[1]).contains("this step's time is up"));
+}
+
+/// A summary asks for the lowest reasoning level, whatever the turn's level; the conversation's
+/// own requests keep theirs.
+#[tokio::test]
+async fn a_summary_asks_for_the_lowest_reasoning_level() {
+    let h = Harness::new(vec![
+        MockTurn::text("ok").with_usage(usage(100)),
+        MockTurn::HttpError {
+            status: 400,
+            kind: "invalid_request_error".into(),
+            message: "prompt is too long: 1000001 tokens > 1000000 maximum".into(),
+        },
+        MockTurn::text("<summary>compressed</summary>"),
+        MockTurn::text("answered after compaction"),
+    ]);
+    let cfg = EngineConfig { effort: Some("high".into()), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("one")).await;
+    let r = e.submit(prompt("two")).await;
+    assert_eq!(r.result.as_deref(), Some("answered after compaction"));
+    let levels: Vec<String> = h
+        .provider
+        .requests()
+        .iter()
+        .map(|q| q.output_config.as_ref().and_then(|c| c["effort"].as_str()).unwrap_or("-").to_string())
+        .collect();
+    assert_eq!(levels, ["high", "high", "low", "high"], "only the summary asks for low");
+}

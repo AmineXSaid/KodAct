@@ -272,6 +272,9 @@ what follows it.
   the task list, the last thing the model wrote), with
   `system/compact_fallback`. The person's requests come with it, as with every
   summary.
+- A summary asks for the lowest reasoning level (`low`) wherever a level is sent, and always
+  to an OpenAI-compatible endpoint: summarizing doesn't need depth, and at full depth a
+  reasoning model could spend the whole budget thinking and return no summary.
 - Auto-compaction does this for an empty summary. An API error leaves the
   conversation unchanged, and the next request tries again.
 - When a request fails because the conversation no longer fits, any failure
