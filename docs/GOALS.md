@@ -245,12 +245,13 @@ Each pillar lists what KodAct does about it and what shows that it works.
    (its commands are checked against `kodact-eval` by a test).
 2. Sub-agents (the Task tool, built-in Explore and Plan agents), to isolate
    context.
-3. The verification loop. **Done**, without LSP feedback.
+3. The verification loop. **Done**; language-server and formatter feedback are
+   opt-in.
 4. Recovery: Edit match suggestions, stuck-loop detection, `max_tokens`
    recovery. **Done.**
 5. Budgets on tool output, and no repeated reads. **Done.**
-6. A plan that survives compaction. **Done** (the task list; a notes file is
-   still to build).
+6. A plan that survives compaction. **Done** (the task list and the notes
+   file).
 7. Parity features in order of use:
    - **Done:** MCP (stdio, HTTP and SSE client, `kodact mcp`, `kodact mcp
      serve`), web tools, plan mode and AskUserQuestion, skills, output styles.
