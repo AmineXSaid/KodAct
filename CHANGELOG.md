@@ -2,6 +2,25 @@
 
 ## 0.1.0 (unreleased)
 
+### Reasoning level for OpenAI-compatible endpoints
+- **`--effort` reaches an OpenAI-compatible endpoint as `reasoning_effort`**,
+  for every model, one KodAct has no table entry for included. Before, only
+  Gemini models got it, and a model KodAct didn't know lost the effort
+  altogether, so a slow reasoning model behind a gateway couldn't be told to
+  think less on a time-limited task. `xhigh` and `max` are sent as `high`. An
+  endpoint that refuses the parameter gets the request again without it. No
+  effort set: nothing sent, as before.
+
+### A stated size limit, told at the write that breaks it (`nudges.constraints`)
+- A file the request limits in size ("must be <5000 bytes") that a write takes
+  over the limit is told with that write's result, with the size, the limit
+  and how far over. Before, only the end-of-turn report said so, which a run
+  cut by its time limit never reaches.
+- Size limits read better: `<5000 bytes` and `< 5000 bytes` count; "under",
+  "less than", "below" and `<` are strict (4,999 for `<5000`); and a limit
+  whose sentence names no file is the one new file's the request asks for, or
+  the one of the type the sentence names ("your c program": `gpt2.c`).
+
 ### Harbor behind a proxy that blocks Hugging Face
 - **`KODACT_HARBOR_HF_ENDPOINT`** (opt-in): the tests and the agent fetch from
   another Hub address (`HF_ENDPOINT`, with Xet off), with the CA bundle when

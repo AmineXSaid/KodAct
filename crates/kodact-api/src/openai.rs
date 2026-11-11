@@ -211,15 +211,30 @@ pub fn to_chat_request(req: &MessagesRequest) -> Value {
     if let Some(t) = req.temperature.filter(|_| !reasoning) {
         body["temperature"] = json!(t);
     }
-    // Gemini's thinking depth, from the effort (Google's endpoint and OmniRoute
-    // both read `reasoning_effort`).
-    if gemini {
-        let effort = req.output_config.as_ref().and_then(|c| c.get("effort")).and_then(Value::as_str);
-        if let Some(level) = effort.and_then(|e| gemini_rules::thinking_level(e, &req.model)) {
-            body["reasoning_effort"] = json!(level);
-        }
+    // The reasoning level, from the effort: Gemini's own levels (Google's endpoint and
+    // OmniRoute both read `reasoning_effort`), OpenAI's for every other model (OpenAI's
+    // reasoning models, and gateways such as LiteLLM and OpenRouter that pass it on).
+    let effort = req.output_config.as_ref().and_then(|c| c.get("effort")).and_then(Value::as_str);
+    let level = if gemini {
+        effort.and_then(|e| gemini_rules::thinking_level(e, &req.model))
+    } else {
+        effort.and_then(reasoning_effort)
+    };
+    if let Some(level) = level {
+        body["reasoning_effort"] = json!(level);
     }
     body
+}
+
+/// KodAct's effort as an OpenAI `reasoning_effort`: `low`, `medium` and `high` are the levels
+/// every endpoint that takes one knows, so `xhigh` and `max` are sent as `high`.
+fn reasoning_effort(effort: &str) -> Option<&'static str> {
+    Some(match effort {
+        "minimal" | "low" => "low",
+        "medium" => "medium",
+        "high" | "xhigh" | "max" => "high",
+        _ => return None,
+    })
 }
 
 /// OpenAI's reasoning models: the o-series, GPT-5 and Codex. A gateway
@@ -1755,10 +1770,38 @@ mod gemini_tests {
         );
         let t = turn("gemini-3-flash", tool_names(&req), &[&chunk]);
         assert_eq!(t.to_message().tool_uses().next().unwrap().1, long);
-        // Not Gemini: schemas and names as they are, no effort sent this way.
+        // Not Gemini: schemas and names as they are, the effort as OpenAI's level.
         let other = to_chat_request(&request("gpt-4o", vec![Message::user_text("hi")], req.tools.clone(), Some("max")));
         assert_eq!(other["tools"][0]["function"]["name"], long);
-        assert!(other.get("reasoning_effort").is_none());
+        assert_eq!(other["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn every_model_gets_the_reasoning_level_asked_for() {
+        let sent = |model: &str, effort: Option<&str>| {
+            to_chat_request(&request(model, vec![Message::user_text("hi")], vec![], effort))
+                .get("reasoning_effort")
+                .cloned()
+        };
+        for (effort, level) in
+            [("low", "low"), ("medium", "medium"), ("high", "high"), ("xhigh", "high"), ("max", "high")]
+        {
+            assert_eq!(sent("deep-thinking", Some(effort)), Some(json!(level)), "{effort}");
+        }
+        assert_eq!(sent("gpt-5", Some("low")), Some(json!("low")));
+        assert_eq!(sent("deep-thinking", None), None, "none asked: none sent");
+        // An endpoint that refuses it gets the request again without it.
+        let mut b = to_chat_request(&request("deep-thinking", vec![Message::user_text("hi")], vec![], Some("medium")));
+        let refused = ApiError::Http {
+            status: 400,
+            kind: "invalid_request_error".into(),
+            message: "Unrecognized request argument supplied: reasoning_effort".into(),
+            retry_after: None,
+            url: String::new(),
+            origin: None,
+        };
+        assert!(adapt_to_refusal(&mut b, &refused));
+        assert!(b.get("reasoning_effort").is_none());
     }
 
     #[test]

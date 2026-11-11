@@ -757,6 +757,8 @@ pub struct Engine {
     /// Stale-deliverable notes given this turn, and whether the end-of-turn one was.
     stale_told: u32,
     stale_end_told: bool,
+    /// Size-limit notes given this turn, per file (`nudges.constraints`).
+    size_told: HashMap<String, u32>,
     /// The session's language servers, started on first use ([`EngineConfig::language_servers`]).
     lsp: Option<Arc<crate::lsp::Manager>>,
     /// This turn's raised output cap, after a `max_tokens` stop.
@@ -878,6 +880,7 @@ impl Engine {
             unsaved: None,
             stale_told: 0,
             stale_end_told: false,
+            size_told: HashMap::new(),
             output_cap: None,
             reattach_context: false,
             carried_requests: vec![],
@@ -2370,6 +2373,7 @@ impl Engine {
         self.unsaved = None;
         self.stale_told = 0;
         self.stale_end_told = false;
+        self.size_told.clear();
         self.output_cap = None;
         if self.verifying() {
             self.verify.fingerprint = self.worktree_fingerprint().await;
@@ -2758,7 +2762,9 @@ impl Engine {
                     self.diagnose_edits(&tool_uses, &mut results, &model).await;
                 }
                 self.shell_edits_parse(&tool_uses, &mut results, &shell_before).await;
-                let named_changed = !self.watched.changed().is_empty();
+                let changed_named = self.watched.changed();
+                let named_changed = !changed_named.is_empty();
+                self.size_limits_told(&tool_uses, &mut results, &changed_named);
                 if named_changed {
                     self.unsaved = None;
                 }
@@ -3663,6 +3669,69 @@ impl Engine {
             }
         }
         self.limits = limits;
+    }
+
+    /// A file the request states a size limit for went over it in this step (`nudges.constraints`):
+    /// said with the result of the call that wrote it, while the model can still act on it, not
+    /// only before the turn ends (a run cut by its time limit never gets there). Three times a
+    /// turn per file at most.
+    fn size_limits_told(
+        &mut self,
+        calls: &[(String, String, Value)],
+        results: &mut [crate::exec::CallResult],
+        changed: &[String],
+    ) {
+        /// Notes per file a turn: one for each of the first few writes that leave it too large.
+        const MAX_PER_FILE: u32 = 3;
+        if !self.cfg.reminders || self.cfg.is_subagent || !self.cfg.nudges.constraints || changed.is_empty() {
+            return;
+        }
+        let project = self.shared.tool_ctx.project_dir.clone();
+        for (file, size, max, said) in self.named.over_limit(&project) {
+            if !changed.contains(&file) || self.size_told.get(&file).copied().unwrap_or(0) >= MAX_PER_FILE {
+                continue;
+            }
+            if !self.may_nudge(crate::progress::Nudge::SizeLimit) {
+                continue;
+            }
+            *self.size_told.entry(file.clone()).or_default() += 1;
+            self.system_event(
+                "nudge",
+                json!({"kind": crate::progress::Nudge::SizeLimit.as_str(), "file": file, "size": size, "limit": max}),
+            );
+            // The call that wrote it: a file tool on that path, else a shell command naming it,
+            // else the step's last call (a script it ran wrote the file).
+            let path = if std::path::Path::new(&file).is_absolute() {
+                std::path::PathBuf::from(&file)
+            } else {
+                project.join(&file)
+            };
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| file.clone());
+            let wrote = calls.iter().position(|(_, tool, input)| {
+                matches!(tool.as_str(), "Write" | "Edit" | "MultiEdit" | "NotebookEdit")
+                    && ["file_path", "notebook_path"].iter().filter_map(|k| input.get(*k).and_then(Value::as_str)).any(
+                        |p| {
+                            let p = std::path::Path::new(p);
+                            (if p.is_absolute() { p.to_path_buf() } else { project.join(p) }) == path
+                        },
+                    )
+            });
+            let named_by = || {
+                calls.iter().rposition(|(_, tool, input)| {
+                    tool == "Bash" && input.get("command").and_then(Value::as_str).is_some_and(|c| c.contains(&name))
+                })
+            };
+            let Some(at) = wrote.or_else(named_by).or(calls.len().checked_sub(1)) else { continue };
+            let text = format!(
+                "\n\n<system-reminder>\n`{file}` is now {size} bytes; the request says {said} ({max} bytes at most): \
+                 {} bytes over.\n</system-reminder>",
+                size - max
+            );
+            match &mut results[at].output.content {
+                kodact_types::ToolResultContent::Text(s) => s.push_str(&text),
+                kodact_types::ToolResultContent::Blocks(blocks) => blocks.push(ContentBlock::text(text.trim_start())),
+            }
+        }
     }
 
     /// A result met every limit for its row some steps ago and the files the request asks for

@@ -1,0 +1,7 @@
+{
+  "instruction": "Write roman.py so that `python3 roman.py 1994` prints `MCMXCIV` and `python3 roman.py MCMXCIV` prints `1994`, for every number from 1 to 3999. Any other argument prints `invalid` and exits with status 1. The script must be under 400 bytes.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["python", "size-limit", "constraints"],
+  "timeout_secs": 600
+}

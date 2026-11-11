@@ -55,7 +55,8 @@ pub struct NudgeConfig {
     /// suggestion to use Edit for changes that need care.
     pub shell_edit: bool,
     /// Before the turn ends: files the request names that don't exist, commands it names that
-    /// never ran, and a size limit it states for a file that the file exceeds.
+    /// never ran, and a size limit it states for a file that the file exceeds. The size limit
+    /// is also told at once, with the result of the step that took the file over it.
     pub constraints: bool,
     /// Commands the request names that are checks join the verification loop's list, so an
     /// unrun one is told to the model (never run by KodAct).
@@ -142,6 +143,7 @@ pub(crate) enum Nudge {
     PassingSnapshot,
     LimitVerdict,
     StaleDeliverable,
+    SizeLimit,
 }
 
 impl Nudge {
@@ -154,6 +156,7 @@ impl Nudge {
             Nudge::PassingSnapshot => "passing_snapshot",
             Nudge::LimitVerdict => "limit_verdict",
             Nudge::StaleDeliverable => "stale_deliverable",
+            Nudge::SizeLimit => "size_limit",
         }
     }
 }

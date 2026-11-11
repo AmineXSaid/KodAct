@@ -259,6 +259,15 @@ check that the URL and key work.
 - A key is never sent to the other kind of endpoint. With an OpenAI-compatible
   endpoint and only `KODACT_API_KEY` set, KodAct warns at startup, and a 401
   names `KODACT_OPENAI_API_KEY`.
+- The effort (`--effort`, `effortLevel`, `/effort`) reaches an OpenAI-compatible
+  endpoint as `reasoning_effort`, for any model, the ones KodAct has no entry
+  for included: `low`, `medium` and `high` as they are, `xhigh` and `max` as
+  `high` (the highest level every such endpoint takes). Gemini models get
+  their own levels. With no effort set, none is sent and the model reasons as
+  its endpoint decides. An endpoint that refuses `reasoning_effort` gets the
+  request again without it, and KodAct stops sending it to that model. A
+  gateway may also take it and ignore it: compare a reply's output tokens or
+  time with and without `--effort low` to see whether yours honors it.
 - The OpenAI-compatible endpoint may need no key (a local server): KodAct
   starts without one, silently for `localhost` and private addresses, with a
   warning otherwise. The Messages API always needs one.
@@ -662,7 +671,7 @@ command or restores a file.
 | `progress` | No progress for a fifth of the run's budget (`--max-turns`, `--max-time` or `--max-budget-usd`) and at least 5 model calls; without a budget, 15 calls. Progress is a file the request names changing on disk (by any tool, a script's output too) or a check passing. When the request names files that don't exist yet, those are what it asks for, and helper scripts written meanwhile are not progress; when every file it names exists, any file written counts; when it names none, a shell command that changed something does. Once per stretch | To make the change if it has what it needs, or answer with what it has; to ignore this if its next step is a change |
 | `progressEarly` | With a budget only: nothing made yet in the turn, a tenth of the budget gone and at least 5 calls | To make a first version now and improve it after, or go on looking if it must |
 | `shellEdit` | A shell command changed a file it names (`sed -i`, a redirect) and the file no longer parses. A clean shell edit gets nothing | The parse error with the command's result; once a turn, that the Edit tool suits careful changes |
-| `constraints` | Before the turn ends, once: the request names a file that doesn't exist, a command (in backticks) that didn't run, or a size limit a named file exceeds. A sentence that says not to do something names nothing; one asking to delete a file doesn't count it missing | What is missing, and to do it or say why not |
+| `constraints` | Before the turn ends, once: the request names a file that doesn't exist, a command (in backticks) that didn't run, or a size limit a named file exceeds. A sentence that says not to do something names nothing; one asking to delete a file doesn't count it missing. A size limit is also told at the step whose write takes the file over it (a Write or Edit on it, a shell command naming it, or a script it ran), up to 3 times a file in a turn; a run cut by its time limit never reaches the end of the turn. A limit stated without a file ("your program must be <5000 bytes") is the one new file's the request asks for, or the one of the type the sentence names | What is missing, and to do it or say why not. At the write: `` `gpt2.c` is now 6005 bytes; the request says <5000 bytes (4999 bytes at most): 1006 bytes over `` |
 | `namedChecks` | A command the request names that is a check (`python3 run_checks.py`) joins the verification loop's list of checks | The verification reminder names it when it hasn't run since the last change. KodAct never runs it |
 | `passingSnapshots` | A check passed after changes: the files are saved with the Checkpoint tool (`passing-1`, ...). If the files then fail the last check, before the turn ends | Where the passing version is and how to restore it. A run cut by its limit reports it in its result. KodAct never restores it |
 | `pace` | With `--max-time`, the wrap-up warning (a fifth of the time left) also comes when only 5 steps are left at the turn's pace so far | The steps left at that pace (`about 60 s a step, about 5 more steps`), and the files the request asks for that don't exist yet: to write its best version to them first |

@@ -3409,3 +3409,45 @@ async fn a_result_meeting_every_limit_left_unwritten_is_told() {
     let (given, _) = run("printf 'cost=190 wait=4\\n'", false).await;
     assert!(given.is_empty(), "a limit not met: {given:?}");
 }
+
+/// Constraint memory, at write time: a write that takes a file over the size the request states
+/// for it is told with that write's result (a Write, or a shell command that names the file),
+/// not only before the turn ends; a write within the limit says nothing; off by default.
+#[tokio::test]
+async fn a_write_over_the_stated_size_is_told_with_its_result() {
+    let script = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        let f = h.cwd().join("tiny.py");
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "x".repeat(200)})));
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "head -c 300 /dev/zero | tr '\\0' x > tiny.py"})));
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "printf 'print(1)\\n' > tiny.py"})));
+        h.provider.push(MockTurn::text("done"));
+    };
+    const ASK: &str = "Write tiny.py that prints 1. Your Python script must be under 100 bytes.";
+    let h = Harness::new(vec![]);
+    script(&h);
+    let mut e =
+        h.engine_with(nudged_cfg("constraints"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt(ASK)).await;
+    let results = tool_results(&e);
+    assert!(
+        results[0].1.contains(
+            "`tiny.py` is now 200 bytes; the request says under 100 bytes (99 bytes at most): 101 bytes over"
+        ),
+        "{}",
+        results[0].1
+    );
+    assert!(results[1].1.contains("`tiny.py` is now 300 bytes"), "the shell command that named it: {}", results[1].1);
+    assert!(!results[2].1.contains("bytes over"), "within the limit: {}", results[2].1);
+    let given: Vec<Value> = nudges(&h.transcript_text()).into_iter().filter(|n| n["kind"] == "size_limit").collect();
+    assert_eq!(given.len(), 2, "{given:?}");
+    assert_eq!((given[0]["size"].as_u64(), given[0]["limit"].as_u64()), (Some(200), Some(99)));
+
+    // Off by default: the same writes, no word about their size.
+    let h = Harness::new(vec![]);
+    script(&h);
+    let mut e = h.engine();
+    e.submit(prompt(ASK)).await;
+    assert!(tool_results(&e).iter().all(|r| !r.1.contains("bytes over")));
+    assert!(nudges(&h.transcript_text()).is_empty());
+}

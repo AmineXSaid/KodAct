@@ -85,6 +85,14 @@ pub(crate) fn assemble(model: &str, rt: &Runtime, p: RequestParts<'_>) -> Messag
     let info = kodact_api::models::model_info_or_default(model);
     let (thinking, mut output_config, max_tokens) =
         thinking_params(&info, rt.max_thinking_tokens, rt.effort.as_deref(), p.max_output_tokens);
+    // An OpenAI-compatible endpoint takes a reasoning level for any model (`reasoning_effort`,
+    // see kodact-api's openai.rs), so the effort asked for is kept for a model KodAct has no
+    // table entry for. An endpoint that refuses it gets the request again without it.
+    if output_config.is_none() && p.provider_name == "openai" {
+        if let Some(e) = rt.effort.as_deref().filter(|e| crate::request::EFFORT_LEVELS.contains(e)) {
+            output_config = Some(json!({"effort": e}));
+        }
+    }
     if let Some(schema) = p.json_schema {
         let oc = output_config.get_or_insert_with(|| json!({}));
         oc["format"] = json!({"type": "json_schema", "schema": schema});
@@ -257,6 +265,35 @@ mod tests {
         assert!(last.contains("What you said when you started them: Launching two auditors."), "{last}");
         assert!(last.contains("bash_1 [running] npm test") && last.ends_with("how far are you?"), "{last}");
         assert!(!req.messages.iter().any(|m| m.tool_uses().next().is_some()), "the unanswered call itself stays out");
+    }
+
+    #[test]
+    fn an_openai_compatible_endpoint_gets_the_effort_for_any_model() {
+        let request = |provider: &str, effort: Option<&str>| {
+            let rt = Runtime {
+                model: "deep-thinking".into(),
+                max_thinking_tokens: None,
+                effort: effort.map(Into::into),
+                fast: false,
+            };
+            let parts = RequestParts {
+                messages: &[Message::user_text("hi")],
+                microcompacted: &HashSet::new(),
+                system: &[],
+                tools: vec![],
+                max_output_tokens: 32_000,
+                json_schema: None,
+                metadata_user_id: None,
+                provider_name: provider,
+            };
+            assemble("deep-thinking", &rt, parts).output_config
+        };
+        // A model KodAct doesn't know, behind an OpenAI-compatible endpoint: the effort asked for.
+        assert_eq!(request("openai", Some("medium")), Some(json!({"effort": "medium"})));
+        // Nothing asked: nothing sent, as before. Behind the Messages API: as before too.
+        assert_eq!(request("openai", None), None);
+        assert_eq!(request("messages", Some("medium")), None);
+        assert_eq!(request("openai", Some("bogus")), None);
     }
 
     #[test]

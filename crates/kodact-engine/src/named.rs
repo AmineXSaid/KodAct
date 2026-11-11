@@ -6,9 +6,14 @@
 //!   abbreviations (`e.g.`) are not files.
 //! - A **command** is a span in backticks whose first word is a program this machine has
 //!   (on `PATH`) or a script in the project (`./build.sh`, `python3 run_tests.py`).
-//! - A **size limit** is a size with its unit (`40 KB`, `2048 bytes`) after "at most", "under",
-//!   "no more than", "less than", "smaller than", "below", "max", "maximum", "limit" or
-//!   `<`/`<=`/`≤`, in the same sentence as exactly one named file.
+//! - A **size limit** is a size with its unit (`40 KB`, `2048 bytes`, `<5000 bytes`) after "at
+//!   most", "under", "no more than", "less than", "smaller than", "below", "max", "maximum",
+//!   "limit" or `<`/`<=`/`≤`. "Under", "less than", "smaller than", "below" and `<` are strict
+//!   (`<5000 bytes`: 4,999 at most), as a test's `size < 5000` is. The limit is the file's that
+//!   its sentence names, when it names exactly one. A sentence that names no file ("your
+//!   program must be <5000 bytes") sets the limit of the one file the request asks for that
+//!   doesn't exist yet, or, of several, of the one whose type the sentence names ("c program":
+//!   `gpt2.c`; "the Python script": `run.py`).
 //!
 //! A sentence that says not to do something ("don't run `make deploy`", "never touch
 //! secrets.env") names nothing: what it names is not asked for.
@@ -31,12 +36,26 @@ const REMOVALS: [&str; 5] = ["delete", "remove", "rm ", "get rid of", "clean up"
 /// Words that turn a sentence into a prohibition.
 const NEGATIONS: [&str; 6] = ["don't", "do not", "never", "must not", "should not", "shouldn't"];
 /// Words before a size that make it a limit.
-const LIMIT_WORDS: [&str; 11] =
-    ["at most", "under", "no more than", "less than", "smaller than", "below", "maximum", "max", "limit", "<=", "≤"];
+const LIMIT_WORDS: [&str; 12] = [
+    "at most",
+    "under",
+    "no more than",
+    "less than",
+    "smaller than",
+    "below",
+    "maximum",
+    "max",
+    "limit",
+    "<=",
+    "≤",
+    "<",
+];
 
 impl Named {
     pub fn from_request(text: &str, project: &Path) -> Named {
         let mut n = Named::default();
+        // Limits stated without a file: (the file types their sentence names, bytes, words).
+        let mut unattached: Vec<(Vec<&'static str>, u64, String)> = vec![];
         for sentence in sentences(text) {
             let lower = sentence.to_lowercase();
             if NEGATIONS.iter().any(|w| lower.contains(w)) {
@@ -61,8 +80,10 @@ impl Named {
                     }
                 }
             }
-            if let ([file], Some((bytes, said))) = (files_here.as_slice(), size_limit(&sentence)) {
-                n.limits.push((file.clone(), bytes, said));
+            match (files_here.as_slice(), size_limit(&sentence)) {
+                ([file], Some((bytes, said))) => n.limits.push((file.clone(), bytes, said)),
+                ([], Some((bytes, said))) => unattached.push((type_words(&lower), bytes, said)),
+                _ => {}
             }
             let removing = REMOVALS.iter().any(|w| lower.contains(w));
             for f in files_here {
@@ -71,6 +92,21 @@ impl Named {
                 } else {
                     push(&mut n.files, f);
                 }
+            }
+        }
+        // A limit without a file: the one new file the request asks for, or the one of its
+        // type. Files there already are what the request reads, not what it asks to be made.
+        let new: Vec<&String> =
+            n.files.iter().filter(|f| !n.removed.contains(f) && !resolve(f, project).exists()).collect();
+        for (types, bytes, said) in unattached {
+            let of_type: Vec<&&String> = new.iter().filter(|f| types.iter().any(|t| *t == extension(f))).collect();
+            let file = match (new.as_slice(), of_type.as_slice()) {
+                ([one], _) => Some((*one).clone()),
+                (_, [one]) => Some((**one).clone()),
+                _ => None,
+            };
+            if let Some(f) = file.filter(|f| !n.limits.iter().any(|(g, ..)| g == f)) {
+                n.limits.push((f, bytes, said));
             }
         }
         n
@@ -324,12 +360,17 @@ fn on_path(program: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// A size limit stated in a sentence: (bytes, the words that state it).
+/// A size limit stated in a sentence: (the most bytes it allows, the words that state it).
 fn size_limit(sentence: &str) -> Option<(u64, String)> {
     let lower = sentence.to_lowercase();
     let words: Vec<&str> = lower.split_whitespace().collect();
     for (i, w) in words.iter().enumerate() {
         let w = w.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | ';' | ':'));
+        // A sign stuck to the size: `<5000`, `<=4kb`, `≤2048`.
+        let (sign, w) = match ["<=", "≤", "<"].iter().find_map(|s| w.strip_prefix(s).map(|r| (*s, r))) {
+            Some((s, rest)) => (Some(s), rest),
+            None => (None, w),
+        };
         // `40kb`, `40 kb`, `2048 bytes`.
         let digits: String = w.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
         if digits.is_empty() {
@@ -346,17 +387,78 @@ fn size_limit(sentence: &str) -> Option<(u64, String)> {
             "mib" => 1_048_576.0,
             _ => continue,
         };
-        // The limit word must come just before the size: within its last three words.
-        let from = i.saturating_sub(3);
-        let before = words[from..i].join(" ");
-        let Some(at) = LIMIT_WORDS.iter().filter_map(|l| before.rfind(l)).max() else { continue };
-        let n: f64 = digits.parse().ok()?;
         let end = if rest.is_empty() { i + 1 } else { i };
-        let said = format!("{} {}", &before[at..], words[i..=end.min(words.len() - 1)].join(" "));
+        let size_words = words[i..=end.min(words.len() - 1)].join(" ");
+        // The limit word: stuck to the size, or within the three words before it (the last
+        // one there, and of two that end at the same place, the longer: `<=` over `<`).
+        let (word, said) = match sign {
+            Some(s) => (s, size_words),
+            None => {
+                let from = i.saturating_sub(3);
+                let before = words[from..i].join(" ");
+                let Some((at, word)) = LIMIT_WORDS
+                    .iter()
+                    .filter_map(|l| before.rfind(l).map(|at| (at, *l)))
+                    .max_by_key(|(at, l)| (at + l.len(), l.len()))
+                else {
+                    continue;
+                };
+                (word, format!("{} {size_words}", &before[at..]))
+            }
+        };
+        let n: f64 = digits.parse().ok()?;
+        let bytes = (n * mult).round() as u64;
+        let strict = matches!(word, "<" | "under" | "less than" | "smaller than" | "below");
         let said = said.trim().trim_end_matches(['.', ',', ';']).to_string();
-        return Some(((n * mult).round() as u64, said));
+        return Some((if strict { bytes.saturating_sub(1) } else { bytes }, said));
     }
     None
+}
+
+/// The file types a sentence names, as extensions: a language or format by name ("c program",
+/// "the Python script", "a JSON file"), or the extension itself ("the .csv", "a png").
+fn type_words(lower: &str) -> Vec<&'static str> {
+    const TYPES: [(&str, &[&str]); 24] = [
+        ("c", &["c", "h"]),
+        ("c++", &["cpp", "cc", "cxx", "hpp"]),
+        ("cpp", &["cpp", "cc", "cxx", "hpp"]),
+        ("python", &["py"]),
+        ("py", &["py"]),
+        ("javascript", &["js", "mjs", "cjs"]),
+        ("js", &["js", "mjs", "cjs"]),
+        ("typescript", &["ts"]),
+        ("rust", &["rs"]),
+        ("go", &["go"]),
+        ("java", &["java"]),
+        ("ruby", &["rb"]),
+        ("shell", &["sh"]),
+        ("bash", &["sh"]),
+        ("json", &["json"]),
+        ("yaml", &["yaml", "yml"]),
+        ("toml", &["toml"]),
+        ("csv", &["csv"]),
+        ("html", &["html", "htm"]),
+        ("css", &["css"]),
+        ("markdown", &["md"]),
+        ("sql", &["sql"]),
+        ("xml", &["xml"]),
+        ("text", &["txt"]),
+    ];
+    let mut out = vec![];
+    for w in lower.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '+')) {
+        let w = w.trim_start_matches('.');
+        for (name, exts) in TYPES {
+            if w == name {
+                out.extend_from_slice(exts);
+            }
+        }
+    }
+    out
+}
+
+/// A file's extension, lower case (`gpt2.c` → `c`), or "".
+fn extension(f: &str) -> String {
+    f.rsplit('/').next().unwrap_or(f).rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -400,12 +502,41 @@ mod tests {
     fn a_size_limit_belongs_to_the_one_file_in_its_sentence() {
         let n = named("Compress the log into out.bin, at most 40 KB. Keep notes.md short.");
         assert_eq!(n.limits, [("out.bin".to_string(), 40_000, "at most 40 kb".to_string())]);
+        // "Under" is strict, as a test's `size < 2048` is: 2047 at most.
         let n = named("Write image.png under 2048 bytes.");
-        assert_eq!(n.limits[0].1, 2048);
+        assert_eq!(n.limits[0].1, 2047);
         // Two files in the sentence: whose limit it is isn't clear, so none.
         assert!(named("Make a.txt and b.txt at most 1 KB.").limits.is_empty());
         // A size that isn't a limit.
         assert!(named("The file data.csv is 40 KB.").limits.is_empty());
+    }
+
+    #[test]
+    fn a_limit_without_a_file_belongs_to_the_new_file_it_is_about() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("weights.bin"), "").unwrap();
+        let read = |t: &str| Named::from_request(t, d.path()).limits;
+        // `<` stuck to the size, strict; the sentence names no file, the request one new one.
+        assert_eq!(
+            read("Write solve.c that reads weights.bin. Your program must be <5000 bytes."),
+            [("solve.c".to_string(), 4999, "<5000 bytes".to_string())]
+        );
+        // Two new files: the one of the type the sentence names.
+        let two =
+            "Call your program /app/gpt.c; I will run /app/a.out weights.bin. Your c program must be <5000 bytes.";
+        assert_eq!(read(two), [("/app/gpt.c".to_string(), 4999, "<5000 bytes".to_string())]);
+        assert_eq!(
+            read("Write run.py and notes.md. Keep the Python script under 2 KB.")[0],
+            ("run.py".to_string(), 1999, "under 2 kb".to_string())
+        );
+        // Neither one new file nor one of the type: whose limit it is isn't clear, so none.
+        assert!(read("Write a.py and b.py. Each script must be at most 1 KB.").is_empty());
+        // A file there already is read, not made: no limit for it from a sentence that names none.
+        assert!(read("Use weights.bin. The output must be at most 10 bytes.").is_empty());
+        // Inclusive words stay inclusive; `<=` wins over `<` at the same place.
+        assert_eq!(read("Write out.txt. It must be <= 100 bytes.")[0].1, 100);
+        assert_eq!(read("Write out.txt. It must be < 100 bytes.")[0].1, 99);
+        assert_eq!(read("Write out.txt, at most 100 bytes.")[0].1, 100);
     }
 
     #[test]
