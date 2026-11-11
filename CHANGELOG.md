@@ -2,6 +2,12 @@
 
 ## 0.1.0 (unreleased)
 
+### A network drop doesn't end a script
+- **`kodact -p` retries an endpoint it hasn't reached yet**, 3 times over
+  about half a minute: a failed name lookup or a VPN reconnecting no longer
+  ends a scripted or eval run at its first call. At the prompt it is still
+  said at once, since there it is most often a URL to fix.
+
 ### Measurements held against the request's limits (opt-in)
 - **`nudges.limitVerdicts`**: when the request states numeric limits (a table
   of thresholds per file, `error_rate <= 0.01`, `at most 6 slot sizes across

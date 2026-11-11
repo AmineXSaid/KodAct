@@ -28,6 +28,9 @@ pub enum MockTurn {
     Throttled { message: String, retry_after: Duration },
     /// Stream a `message_start` and then an `error` event.
     StreamError { kind: String, message: String },
+    /// Fail the request as an unreachable endpoint does (a failed name lookup, a refused
+    /// connection).
+    NetworkError { message: String },
 }
 
 impl MockTurn {
@@ -276,6 +279,7 @@ impl Provider for MockProvider {
                     origin: None,
                 })
             }
+            MockTurn::NetworkError { message } => return Err(ApiError::network(message)),
             MockTurn::StreamError { kind, message } => {
                 let start = events_for(&MockTurn::text("").into_message().0).remove(0);
                 let items = vec![Ok(start), Ok(StreamEvent::Error { error: ApiErrorBody { kind, message } })];

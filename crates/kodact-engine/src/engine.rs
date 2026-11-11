@@ -185,6 +185,8 @@ const API_RETRY_ATTEMPTS: u32 = 10;
 /// With `--max-time`, the most tries, and the time kept after a wait for the model to wrap up.
 const API_RETRY_MAX_ATTEMPTS: u32 = 30;
 const API_RETRY_RESERVE: Duration = Duration::from_secs(60);
+/// Retries of a `-p` run whose endpoint never answered and can't be reached.
+const FIRST_CONTACT_RETRIES: u32 = 3;
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -1275,8 +1277,18 @@ impl Engine {
             || matches!(e, ApiError::Parse(m) if m.starts_with("stream ended"));
         // Every run, attended or not: an outage or a 429 is waited out (Esc stops the wait). An
         // endpoint that can't be reached before it ever answered is a setting to fix, not an
-        // outage to wait for, in a session with a person at the prompt: said at once.
-        if !passes || (!self.cfg.autonomous && !answered() && matches!(e, ApiError::Network { .. })) {
+        // outage to wait for, in a session with a person at the prompt: said at once. A script
+        // (`-p`, `--autonomous`) has nobody to fix it at once and is often one of many runs, so
+        // a network that drops for a moment (a name lookup that fails, a VPN reconnecting) is
+        // waited out there; a wrong URL still ends the run after the retries.
+        let unattended = self.cfg.autonomous || self.cfg.one_shot;
+        let unreached = !answered() && matches!(e, ApiError::Network { .. });
+        if !passes || (!unattended && unreached) {
+            return None;
+        }
+        // A `-p` run that never reached the endpoint: a few short tries (about half a minute),
+        // enough for a network that drops for a moment, not minutes on a mistyped URL.
+        if unreached && !self.cfg.autonomous && retries >= FIRST_CONTACT_RETRIES {
             return None;
         }
         // KODACT_MAX_RETRIES, the person's own cap on retries, holds here too (0: none).

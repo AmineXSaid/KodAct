@@ -866,6 +866,12 @@ is not done.
 `KODACT_MAX_RETRIES` times, with exponential backoff. They cover HTTP 408, 409,
 429 and 5xx (honouring `retry-after`) and connection failures.
 
+An endpoint that can't be reached before it has answered once is most often a
+wrong URL: at the prompt it is said at once. A `-p` run tries 3 more times
+(about half a minute), so a network that drops for a moment (a failed name
+lookup, a VPN reconnecting) doesn't end a script or an eval run; an
+`--autonomous` run retries as for any connection failure.
+
 Two answers are not retried, because trying again sooner fails the same way:
 - **a spent quota**: a 402, or a 429 or 403 that says so (`insufficient_quota`,
   a billing error, "credit balance", "spend limit"…). The error is shown at

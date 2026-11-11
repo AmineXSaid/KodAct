@@ -2085,6 +2085,34 @@ async fn attended_runs_wait_out_a_rate_limit_too() {
     assert_eq!(h.provider.requests().len(), 2);
 }
 
+/// A network that drops before the first answer: a script (`-p`) waits it out and does the
+/// work; a session with a person at the prompt says so at once, since it is most often a
+/// wrong URL to fix.
+#[tokio::test]
+async fn a_script_waits_out_a_network_drop_before_the_first_answer() {
+    let down = || MockTurn::NetworkError { message: "could not connect: failed to lookup address information".into() };
+    let h = Harness::new(vec![down(), down(), MockTurn::text("done")]);
+    let cfg = EngineConfig { one_shot: true, api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!((r.result.as_deref(), r.subtype), (Some("done"), ResultSubtype::Success));
+    assert_eq!(h.provider.requests().len(), 3);
+    // Still unreachable after a few tries: most likely a wrong URL, said within half a minute.
+    let h = Harness::new(vec![down(), down(), down(), down(), down(), MockTurn::text("never")]);
+    let cfg = EngineConfig { one_shot: true, api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!(r.subtype, ResultSubtype::ErrorDuringExecution);
+    assert_eq!(h.provider.requests().len(), 4, "the first try and 3 retries");
+
+    let h = Harness::new(vec![down(), MockTurn::text("never")]);
+    let cfg = EngineConfig { api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!(r.subtype, ResultSubtype::ErrorDuringExecution);
+    assert_eq!(h.provider.requests().len(), 1, "said at once");
+}
+
 /// With a fallback model set, a model that stays limited hands the turn over: after a few
 /// rate limits waited out in a row, at once on a wait longer than a retry sleeps, and on a
 /// spent quota. A rate limit that clears stays on the first model.
