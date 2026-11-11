@@ -3531,3 +3531,72 @@ async fn one_turn_compacts_again_each_time_the_conversation_overflows() {
     assert_eq!(r.subtype, ResultSubtype::ErrorDuringExecution);
     assert_eq!(h.provider.requests().len(), 4, "not compacted a second time");
 }
+
+/// Adaptive effort: a reply that was all thinking lowers the next request's level, two steps of
+/// progress raise it back, never above the level set; off by default, and with `reminders: false`.
+#[tokio::test]
+async fn the_reasoning_level_follows_what_the_thinking_produced() {
+    use kodact_types::StopReason;
+    let thinking = |t: &str| ContentBlock::Thinking { thinking: t.into(), signature: String::new() };
+    let script = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        let out = h.cwd().join("out.txt");
+        h.provider.push(MockTurn::blocks(vec![thinking("a long plan, never acted on")], StopReason::MaxTokens));
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": out, "content": "first"})));
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": out, "content": "second"})));
+        h.provider.push(MockTurn::text("done"));
+    };
+    let levels = |h: &Harness| -> Vec<String> {
+        h.provider
+            .requests()
+            .iter()
+            .map(|r| r.output_config.as_ref().and_then(|c| c["effort"].as_str()).unwrap_or("-").to_string())
+            .collect()
+    };
+    const ASK: &str = "Write out.txt with the answer.";
+    let cfg = |list: &str| EngineConfig { effort: Some("high".into()), ..nudged_cfg(list) };
+
+    let h = Harness::new(vec![]);
+    script(&h);
+    let mut e =
+        h.engine_with(cfg("adaptiveEffort"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt(ASK)).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    assert_eq!(levels(&h), ["high", "medium", "medium", "high"], "down after all thinking, up after two of progress");
+    let given: Vec<Value> =
+        nudges(&h.transcript_text()).into_iter().filter(|n| n["kind"] == "adaptive_effort").collect();
+    assert_eq!(given.len(), 2, "{given:?}");
+    assert_eq!((given[0]["from"].as_str(), given[0]["to"].as_str()), (Some("high"), Some("medium")));
+    assert_eq!(given[1]["why"], "two steps in a row made progress");
+
+    // Off by default, and off with reminders off: the level set, every time.
+    for cfg in [cfg(""), EngineConfig { reminders: false, ..cfg("adaptiveEffort") }] {
+        let h = Harness::new(vec![]);
+        script(&h);
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt(ASK)).await;
+        assert!(levels(&h).iter().all(|l| l == "high"), "{:?}", levels(&h));
+        assert!(nudges(&h.transcript_text()).iter().all(|n| n["kind"] != "adaptive_effort"));
+    }
+}
+
+/// vLLM's other words for the window: a model whose window is smaller than the reply KodAct asks
+/// for refuses with "max_tokens=32000 cannot be greater than max_model_len=8192". The window is
+/// learned from it and the request goes again, sized to fit.
+#[tokio::test]
+async fn a_window_stated_as_max_model_len_is_learned() {
+    let refusal = "max_tokens=32000 cannot be greater than max_model_len=8192. Please request fewer output tokens. \
+        (parameter=max_tokens, value=32000)";
+    let h = Harness::new(vec![
+        MockTurn::HttpError { status: 400, kind: "BadRequestError".into(), message: refusal.into() },
+        MockTurn::text("answered"),
+    ]);
+    let cfg = EngineConfig { model: "learn-window-max-model-len".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("hello")).await;
+    assert_eq!(r.result.as_deref(), Some("answered"));
+    assert_eq!(kodact_api::models::model_info_or_default("learn-window-max-model-len").context_window, 8_192);
+    let reqs = h.provider.requests();
+    assert_eq!(reqs[0].max_tokens, 32_000);
+    assert!(reqs[1].max_tokens < 8_192, "sized to the window it states: {}", reqs[1].max_tokens);
+}

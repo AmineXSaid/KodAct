@@ -2,6 +2,23 @@
 
 ## 0.1.0 (unreleased)
 
+### The reasoning level, as the endpoint takes it, and adapting step by step
+- **A refused level becomes the closest one the endpoint takes.** Servers say
+  which levels they take when they refuse one ("must be low, high, xhigh, max,
+  or an integer within [1, 100] in chat_template_kwargs"): KodAct sends the
+  closest, and remembers it for the model. `--effort medium` on such a server
+  used to be dropped, leaving the model at its default; it now goes as the
+  middle of its scale. Never `none` on your behalf: thinking stays on.
+- **`nudges.adaptiveEffort`** (opt-in): the level follows the thinking. A reply
+  that was all thinking, or two steps of long thinking that made no
+  progress, lower it a step; two steps of progress raise it back. Never above
+  your level, never below `low`. The server enforces it, so a model can't
+  think past it whatever it decides. Off until measured.
+- **The window from vLLM's other words**: `max_model_len=524288` (a reply
+  asked for that is larger than the whole window) and "maximum model length
+  of 524288" (a prompt that is) are learned like "maximum context length is
+  N", and the request goes again sized to fit.
+
 ### Small-window reasoning models behind vLLM: runs that ended, and time lost
 Seen on a 100,000-token reasoning model behind LiteLLM and vLLM, in runs that
 ended on an error or ran out of time:

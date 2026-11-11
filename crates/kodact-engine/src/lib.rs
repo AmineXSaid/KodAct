@@ -7,6 +7,7 @@
 //! [`EventSink`]; permission prompts go to a [`PermissionPrompter`].
 
 mod diagnose;
+mod effort_loop;
 mod engine;
 mod events;
 mod exec;

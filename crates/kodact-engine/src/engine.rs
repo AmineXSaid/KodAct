@@ -776,6 +776,10 @@ pub struct Engine {
     /// The most reply a request asks for after a refusal for length whose prompt fit the window
     /// (`shrink_reply`); cleared when the turn starts and when a compaction makes room.
     reply_shrink: Option<u32>,
+    /// The reasoning level of this turn's requests, when it adapts (`nudges.adaptiveEffort`).
+    effort_loop: Option<crate::effort_loop::EffortLoop>,
+    /// Tokens the last reply spent thinking, for judging its step once its tools have run.
+    last_thought: u64,
     /// After `/clear`: attach the memory context to the next prompt again.
     reattach_context: bool,
     /// Notes for the model, attached to the next prompt (`/add-dir`, ...).
@@ -896,6 +900,8 @@ impl Engine {
             size_told: HashMap::new(),
             output_cap: None,
             reply_shrink: None,
+            effort_loop: None,
+            last_thought: 0,
             reattach_context: false,
             carried_requests: vec![],
             lsp: None,
@@ -1360,7 +1366,10 @@ impl Engine {
     }
 
     fn build_request(&self, model: &str) -> MessagesRequest {
-        let rt = self.handle.runtime.read().unwrap().clone();
+        let mut rt = self.handle.runtime.read().unwrap().clone();
+        if let Some(l) = &self.effort_loop {
+            rt.effort = Some(l.level().to_string());
+        }
         crate::snapshot::assemble(
             model,
             &rt,
@@ -1804,6 +1813,18 @@ impl Engine {
         );
         // Sending it again only helps when the prompt itself fits, with room for a reply.
         reported.prompt.is_none_or(|p| p.saturating_add(u64::from(MIN_REPLY)) <= window)
+    }
+
+    /// Count a step for the adaptive level, and say when it changes.
+    fn effort_step(&mut self, step: crate::effort_loop::Step) {
+        let Some(l) = self.effort_loop.as_mut() else { return };
+        if let Some((from, to, why)) = l.record(step) {
+            self.system_event(
+                "nudge",
+                json!({"kind": crate::progress::Nudge::AdaptiveEffort.as_str(), "from": from, "to": to, "why": why}),
+            );
+            self.notice(NoticeLevel::Info, format!("Reasoning effort {from} → {to}: {why}."));
+        }
     }
 
     /// A refusal for length whose prompt fits the model's window, with room for a reply: the reply
@@ -2423,6 +2444,13 @@ impl Engine {
         self.size_told.clear();
         self.output_cap = None;
         self.reply_shrink = None;
+        // Each turn starts at the person's level (`high` without one) and adapts from there.
+        self.effort_loop = None;
+        self.last_thought = 0;
+        if self.cfg.reminders && !self.cfg.is_subagent && self.cfg.nudges.adaptive_effort {
+            let start = self.handle.runtime.read().unwrap().effort.clone().unwrap_or_else(|| "high".into());
+            self.effort_loop = crate::effort_loop::EffortLoop::new(&start);
+        }
         if self.verifying() {
             self.verify.fingerprint = self.worktree_fingerprint().await;
         }
@@ -2694,6 +2722,18 @@ impl Engine {
             // A reply that was all reasoning: what an act reminder hands back where it isn't kept.
             let reasoning =
                 if tool_uses.is_empty() && !reply_has_text { reasoning_of(&msg.content) } else { String::new() };
+            // How much this reply thought, for the adaptive level (about four characters a token).
+            self.last_thought = msg
+                .content
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Thinking { thinking, .. } => thinking.len() as u64 / 4,
+                    _ => 0,
+                })
+                .sum();
+            if tool_uses.is_empty() && !reply_has_text {
+                self.effort_step(crate::effort_loop::Step::AllThinking);
+            }
             self.push_assistant(msg);
             self.publish_turn(started, &turn);
 
@@ -2843,6 +2883,15 @@ impl Engine {
                 }
                 self.judge_limits(&tool_uses, &mut results, turn.api_calls, named_changed);
                 let made_progress = self.made_progress(&tool_uses, &results, writes_before, named_changed);
+                // Long thinking: a quarter of the reply budget, at least 2,000 tokens.
+                let long = self.last_thought >= u64::from(sent / 4).max(2_000);
+                self.effort_step(if made_progress {
+                    crate::effort_loop::Step::Progress
+                } else if long {
+                    crate::effort_loop::Step::LongNoProgress
+                } else {
+                    crate::effort_loop::Step::Other
+                });
                 if made_progress {
                     self.progress_for_back_off();
                 }

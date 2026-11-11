@@ -75,11 +75,15 @@ pub struct NudgeConfig {
     /// A measurement met every limit stated for its file, and the file the request asks for
     /// wasn't written since: the model is told the best result is not saved yet.
     pub stale_deliverables: bool,
+    /// The reasoning level each request asks for follows what the previous steps' thinking
+    /// produced: down after thinking that led nowhere, back up after progress, never above the
+    /// person's level and never below `low` (`effort_loop`).
+    pub adaptive_effort: bool,
 }
 
 impl NudgeConfig {
     /// The names used in settings and `KODACT_NUDGES`.
-    pub const NAMES: [&'static str; 10] = [
+    pub const NAMES: [&'static str; 11] = [
         "progress",
         "progressEarly",
         "shellEdit",
@@ -90,6 +94,7 @@ impl NudgeConfig {
         "pace",
         "limitVerdicts",
         "staleDeliverables",
+        "adaptiveEffort",
     ];
 
     /// From a list of names (`KODACT_NUDGES=progress,shellEdit`); `all` turns every one on,
@@ -122,6 +127,7 @@ impl NudgeConfig {
             "pace" => &mut self.pace,
             "limitVerdicts" => &mut self.limit_verdicts,
             "staleDeliverables" => &mut self.stale_deliverables,
+            "adaptiveEffort" => &mut self.adaptive_effort,
             _ => return false,
         };
         *field = on;
@@ -144,6 +150,7 @@ pub(crate) enum Nudge {
     LimitVerdict,
     StaleDeliverable,
     SizeLimit,
+    AdaptiveEffort,
 }
 
 impl Nudge {
@@ -157,6 +164,7 @@ impl Nudge {
             Nudge::LimitVerdict => "limit_verdict",
             Nudge::StaleDeliverable => "stale_deliverable",
             Nudge::SizeLimit => "size_limit",
+            Nudge::AdaptiveEffort => "adaptive_effort",
         }
     }
 }

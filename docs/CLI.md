@@ -264,8 +264,14 @@ check that the URL and key work.
   for included: `low`, `medium` and `high` as they are, `xhigh` and `max` as
   `high` (the highest level every such endpoint takes). Gemini models get
   their own levels. With no effort set, none is sent and the model reasons as
-  its endpoint decides. An endpoint that refuses `reasoning_effort` gets the
-  request again without it, and KodAct stops sending it to that model. A
+  its endpoint decides. An endpoint that refuses the level and says which it
+  takes ("must be low, high, xhigh, max, or an integer within [1, 100] in
+  chat_template_kwargs") gets the closest one instead, remembered for the
+  model: a level it takes as it is; else, on a number scale, the matching
+  point (`medium` is the middle); else the closest level below, or the lowest
+  above. A level that switches thinking off (`none`) is never picked for you.
+  One that refuses it without saying gets the request again without it, and
+  KodAct stops sending it to that model. A
   gateway may also take it and ignore it: compare a reply's output tokens or
   time with and without `--effort low` to see whether yours honors it.
 - The OpenAI-compatible endpoint may need no key (a local server): KodAct
@@ -420,7 +426,8 @@ the context window to compact in time, and prices to show costs.
   window, use `modelLimits`. A LiteLLM gateway that lists no window in its
   model list is also asked at `/model/info` (`model_info.max_input_tokens`).
   And when the endpoint refuses a request as too long and states its window
-  ("maximum context length is 100000 tokens"), KodAct uses that window from
+  ("maximum context length is 100000 tokens", or vLLM's `max_model_len=524288`
+  and "maximum model length of 524288"), KodAct uses that window from
   then on, the same as a listed one, and sends the request again sized to fit;
   it compacts only when the prompt itself doesn't fit. A later refusal whose
   prompt still fits (the server counted more than KodAct's estimate, or, like
@@ -661,7 +668,7 @@ listed in the system prompt's environment section.
 | `verification.languageServerWaitMs` | `3000` | How long an edit waits for the server's answer |
 | `verification.format` | `false` | `true` runs a file through its formatter after an edit and says what moved, when the file was already in that formatter's style before the edit (a new file: only with a formatter named below). Built-in, each used when installed: `rustfmt`, `ruff format` or `black`, `gofmt`, `prettier`, `clang-format` |
 | `verification.formatters` | built-in | Extension to a command that formats stdin to stdout, used instead of the built-in one: `{"py": ["black", "-q", "-"]}`. `{file}` in an argument is the file's path; an empty list turns an extension off |
-| `nudges.progress`, `.progressEarly`, `.shellEdit`, `.constraints`, `.namedChecks`, `.passingSnapshots`, `.backOff`, `.pace`, `.limitVerdicts`, `.staleDeliverables` | `false` | The progress nudges (below), each on its own |
+| `nudges.progress`, `.progressEarly`, `.shellEdit`, `.constraints`, `.namedChecks`, `.passingSnapshots`, `.backOff`, `.pace`, `.limitVerdicts`, `.staleDeliverables`, `.adaptiveEffort` | `false` | The progress nudges (below), each on its own |
 | `edit.lineRanges` | `false` | `true` (or `KODACT_EDIT_LINES=1`) lets Edit name the lines to replace (`start_line`, `end_line`, `anchor`) instead of retyping them as `old_string`. The anchor is the text of the first line: an edit whose line numbers moved since the file was read is refused with the lines as they are now |
 
 **Progress nudges** (`nudges.<name>: true`, or `KODACT_NUDGES`). Each follows
@@ -682,6 +689,7 @@ command or restores a file.
 | `pace` | With `--max-time`, the wrap-up warning (a fifth of the time left) also comes when only 5 steps are left at the turn's pace so far | The steps left at that pace (`about 60 s a step, about 5 more steps`), and the files the request asks for that don't exist yet: to write its best version to them first |
 | `limitVerdicts` | The request states numeric limits (a table whose cells or introducing sentence say "at most", "≤", "at least"…, or a sentence such as `latency_ms ≤ 250` or `at most 6 distinct sizes across both files`) and a shell command prints `key=value` numbers whose keys name them. A table row (a file, a bucket) applies to a line when its own words are in the command, the heading above the line, or the line | With the command's result: each line met or not, by how much (`cost 120 > 100`). For a limit across all files together, that per-file counts don't show the combined number |
 | `staleDeliverables` | A command printed a line meeting every limit stated for it, 3 steps have passed, and none of the files the request names changed since. A command that names one of those files measured the file itself and counts for nothing. Twice a turn at most, and once when the model would finish | The line and the files: to write the result now if it is the best so far, or ignore this if the file already holds it |
+| `adaptiveEffort` | Every step. The level each request asks for follows the thinking: a reply that was all thinking lowers it one step at once; two steps of long thinking (a quarter of the reply budget, at least 2,000 tokens) whose actions made no progress lower it one step; two steps in a row with progress raise it one step. Never above the level set (`--effort`, `high` without one), never below `low` | Nothing: the server holds the model to the level. The person sees "Reasoning effort high → medium: …" |
 | `backOff` | Applies to all of the above | A nudge followed by progress twice is not given again in the run (`system/nudge_silenced`) |
 
 **Language-server diagnostics** (`verification.languageServer: true`): after
