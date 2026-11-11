@@ -2,6 +2,14 @@
 
 ## 0.1.0 (unreleased)
 
+### Harbor behind a proxy that blocks Hugging Face
+- **`KODACT_HARBOR_HF_ENDPOINT`** (opt-in): the tests and the agent fetch from
+  another Hub address (`HF_ENDPOINT`, with Xet off), with the CA bundle when
+  `KODACT_HARBOR_CA_BUNDLE` is set. On a network whose proxy blocks
+  huggingface.co, `reshard-c4-data` is then checked instead of failing before
+  its first test. Jobs get `-hfmirror`. A mirror is a third party: public test
+  data only, never a default.
+
 ### Writing a file the session made itself
 - **Write and Edit no longer refuse a file created during the session**
   because it wasn't read first: a file made by a shell command

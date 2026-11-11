@@ -14,6 +14,8 @@
 #   KODACT_HARBOR_AUTONOMOUS  0 runs kodact without --autonomous (job name gets -noauto)
 #   KODACT_HARBOR_TIME_LIMIT  seconds for --max-time (default: the task's own limit)
 #   KODACT_HARBOR_CA_BUNDLE   extra CAs to trust in containers (job name gets -hostca)
+#   KODACT_HARBOR_HF_ENDPOINT another Hugging Face Hub address for the agent and the tests, where
+#                         a proxy blocks huggingface.co (job name gets -hfmirror)
 #   KODACT_STATIC_BIN      use this binary as is (job name gets -custombin); by default
 #                         target-static/release/kodact is rebuilt when the source changed
 #   KODACT_NUDGES          the progress nudges on in every task (job name gets -n-<list>, so an
@@ -60,6 +62,7 @@ ca=""
 [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_UV_CACHE:-}" ] && ca="${ca}-uvcache"
 [ -n "${KODACT_HARBOR_PIP_CACHE:-}" ] && ca="${ca}-pipcache"
+[ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ] && ca="${ca}-hfmirror"
 [ -n "${KODACT_NUDGES:-}" ] && ca="${ca}-n-$(printf '%s' "$KODACT_NUDGES" | tr -c 'A-Za-z0-9' '.')"
 case "${KODACT_HARBOR_AUTONOMOUS:-1}" in 0|false|no|off) ca="${ca}-noauto" ;; esac
 model="${KODACT_HARBOR_MODEL:-deep-thinking}"

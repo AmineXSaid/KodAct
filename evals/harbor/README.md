@@ -67,6 +67,7 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | `KODACT_HARBOR_AUTONOMOUS` | `1` | `kodact --autonomous`; `0` turns it off (job name gets `-noauto`) |
 | `KODACT_HARBOR_TIME_LIMIT` | the task's own limit | Seconds for `kodact --max-time` |
 | `KODACT_HARBOR_CA_BUNDLE` | | Extra CAs to trust inside containers (see below) |
+| `KODACT_HARBOR_HF_ENDPOINT` | | Another Hugging Face Hub address for the agent and the tests, where a proxy blocks huggingface.co (job name gets `-hfmirror`; see below) |
 | `KODACT_HARBOR_HOSTS` | the endpoint's host | Names to resolve here and pin in each container's `/etc/hosts` (`none` turns it off) |
 | `KODACT_HARBOR_HOST_IP` | found automatically | This machine's address, used in place of a `localhost` endpoint |
 
@@ -323,6 +324,51 @@ left out of the valid-trial count, as is one whose tests run out of time
 than the task's 15-minute verifier limit; give the tests more time, not the
 agent, with `--verifier-timeout-multiplier 3` after the mode. For real scores, run from a network without
 TLS inspection.
+
+### The proxy blocks huggingface.co: use a mirror
+
+Some tests download public data from the Hugging Face Hub: `reshard-c4-data`
+loads the C4 dataset with `datasets.load_dataset("allenai/c4", ...)`. A company
+proxy that blocks huggingface.co makes that test fail in every run, before it
+checks anything:
+
+```
+ValueError: Couldn't find cache for allenai/c4 for config 'default-...'
+```
+
+(`datasets` couldn't reach the Hub, looked for a local copy, found none.) Check
+which it is, from this machine and from a container:
+
+```bash
+curl -sI https://huggingface.co/api/datasets/allenai/c4 | grep -iE '^HTTP|^server'
+docker run --rm curlimages/curl -sI https://huggingface.co/api/datasets/allenai/c4 | grep -iE '^HTTP|^server'
+```
+
+A `403` with `Server: Zscaler/...` (or your proxy's name) is the proxy's block
+page. Then check that a mirror answers, through the same proxy and with the
+same CA bundle:
+
+```bash
+curl -sI --cacert "$KODACT_HARBOR_CA_BUNDLE" https://hf-mirror.com/api/datasets/allenai/c4 | head -1   # HTTP/2 200
+```
+
+If it does, point the tests and the agent at it:
+
+```bash
+export KODACT_HARBOR_HF_ENDPOINT=https://hf-mirror.com
+evals/harbor/run.sh full -i 'reshard-c4-data'
+```
+
+The tests get `HF_ENDPOINT` (`harbor run --ve`, see `verifier-ca.sh`), which
+`huggingface_hub` and `datasets` read, and `HF_HUB_DISABLE_XET=1`, so large
+files come through that address too, not from Hugging Face's storage hosts.
+The agent's container gets the same, so the agent can fetch what the tests
+will. With `KODACT_HARBOR_CA_BUNDLE` set, `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`
+and `CURL_CA_BUNDLE` point at the bundle in both. Jobs get `-hfmirror`.
+
+hf-mirror.com is run by a third party, not by Hugging Face: it sees every
+request made through it. Use it for public test data only, never for private
+models or tokens, and never as a default. Unset the variable to go back.
 
 ### Slow network: cache what the agent installs too
 
