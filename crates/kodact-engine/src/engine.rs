@@ -245,6 +245,9 @@ pub struct EngineConfig {
     pub escalate_output: bool,
     /// Start in fast mode (`fastMode` setting).
     pub fast: bool,
+    /// Progress nudges (`nudges` in settings, `KODACT_NUDGES`): each off until measured, and
+    /// all off with `reminders`. Never in sub-agents.
+    pub nudges: crate::progress::NudgeConfig,
 }
 
 /// The output cap after a `max_tokens` stop (capped by the model).
@@ -321,6 +324,7 @@ impl Default for EngineConfig {
             one_shot: false,
             escalate_output: true,
             fast: false,
+            nudges: Default::default(),
         }
     }
 }
@@ -724,6 +728,23 @@ pub struct Engine {
     time_up: Arc<std::sync::atomic::AtomicBool>,
     verify: crate::verify::Tracker,
     guard: crate::stuck::LoopGuard,
+    /// This turn's progress, for the pacing nudges.
+    progress: crate::progress::Progress,
+    /// What this turn's request names: its files and commands.
+    named: crate::named::Named,
+    /// Nudges silenced for the rest of the run (`nudges.backOff`).
+    back_off: crate::progress::BackOff,
+    /// The shell-edit suggestion was given this turn.
+    shell_edit_told: bool,
+    /// Shell commands run this turn, for the constraint report.
+    ran_commands: Vec<String>,
+    /// The constraint report was given this turn.
+    constraints_told: bool,
+    /// The latest version that passed a check, saved with the Checkpoint tool
+    /// (`nudges.passingSnapshots`): its checkpoint label, the check, and the file writes then.
+    passing: Option<(String, String, usize)>,
+    /// The model was told this turn where the passing version is.
+    passing_told: bool,
     /// The session's language servers, started on first use ([`EngineConfig::language_servers`]).
     lsp: Option<Arc<crate::lsp::Manager>>,
     /// This turn's raised output cap, after a `max_tokens` stop.
@@ -832,6 +853,14 @@ impl Engine {
             session_context,
             verify: Default::default(),
             guard: Default::default(),
+            progress: Default::default(),
+            named: Default::default(),
+            back_off: Default::default(),
+            shell_edit_told: false,
+            ran_commands: vec![],
+            constraints_told: false,
+            passing: None,
+            passing_told: false,
             output_cap: None,
             reattach_context: false,
             carried_requests: vec![],
@@ -2298,6 +2327,12 @@ impl Engine {
         }
         self.verify = Default::default();
         self.guard = Default::default();
+        self.progress = crate::progress::Progress::new(self.state.total_cost_usd);
+        self.named = crate::named::Named::from_request(&prompt_text, &self.shared.tool_ctx.project_dir);
+        self.shell_edit_told = false;
+        self.ran_commands.clear();
+        self.constraints_told = false;
+        self.passing_told = false;
         self.output_cap = None;
         if self.verifying() {
             self.verify.fingerprint = self.worktree_fingerprint().await;
@@ -2636,6 +2671,10 @@ impl Engine {
                 // Calls that ran: a call answered without running is not work done (a goal's
                 // "turns without using a tool" count them as none).
                 turn.tool_calls += to_run.len() as u32;
+                let writes_before = self.shared.history.writes_len();
+                // Shell commands that may write: the files they name, as they are now.
+                let shell_before: Vec<Option<crate::shell_edit::Before>> =
+                    tool_uses.iter().map(|(_, name, input)| self.shell_edit_before(name, input)).collect();
                 let mut ran = crate::exec::run_tools(&self.shared, &to_run, &cancel, self.mode_str()).await.into_iter();
                 let writes_now = self.shared.history.writes_len();
                 let mut results: Vec<crate::exec::CallResult> = tool_uses
@@ -2681,6 +2720,18 @@ impl Engine {
                 if self.cfg.edit_diagnostics || self.cfg.language_servers.is_some() || self.cfg.formatters.is_some() {
                     self.diagnose_edits(&tool_uses, &mut results, &model).await;
                 }
+                self.shell_edits_parse(&tool_uses, &mut results, &shell_before).await;
+                let made_progress = self.made_progress(&tool_uses, &results, writes_before);
+                if made_progress {
+                    self.progress_for_back_off();
+                }
+                for ((_, name, input), r) in tool_uses.iter().zip(&results) {
+                    if name == "Bash" && r.denial.is_none() {
+                        if let Some(c) = input.get("command").and_then(Value::as_str) {
+                            self.ran_commands.push(c.to_string());
+                        }
+                    }
+                }
                 let mut interrupted = cancel.is_cancelled();
                 for r in results {
                     if let Some(d) = r.denial {
@@ -2718,6 +2769,13 @@ impl Engine {
                 if let (Some(s), false, true) = (stuck.first(), interrupted, self.cfg.reminders) {
                     self.system_event("loop_guard", s.record());
                     self.push_user(Message::user_text(s.text()), true, None, true);
+                }
+                // Pacing by progress: a long stretch with nothing made. The loop guard speaks
+                // first; one reminder per step is enough.
+                if !interrupted {
+                    if let Some(text) = self.progress_nudge(made_progress, stuck.is_empty()) {
+                        self.push_user(Message::user_text(text), true, None, true);
+                    }
                 }
                 if self.cfg.reminders && !budget_warned && !interrupted {
                     if let Some(text) = self.budget_warning(turn.api_calls) {
@@ -2819,6 +2877,47 @@ impl Engine {
                     todo_reminders += 1;
                     self.system_event("todo_reminder", json!({"open": open, "one_shot": true}));
                     self.push_user(Message::user_text(one_shot_todo_reminder(&open)), true, None, true);
+                    continue;
+                }
+            }
+
+            // What the request names and isn't there (`nudges.constraints`): said once a turn.
+            if self.cfg.reminders
+                && self.cfg.nudges.constraints
+                && !self.cfg.is_subagent
+                && !self.constraints_told
+                && stop_reason != Some(StopReason::Refusal)
+            {
+                self.constraints_told = true;
+                let report = crate::named::report(&self.named, &self.shared.tool_ctx.project_dir, &self.ran_commands);
+                if let Some((text, record)) = report.filter(|_| self.may_nudge(crate::progress::Nudge::Constraints)) {
+                    self.system_event("nudge", record);
+                    self.push_user(Message::user_text(text), true, None, true);
+                    continue;
+                }
+            }
+
+            // A version that passed is saved and the files now fail: said once a turn. Restoring
+            // it is the model's choice (or the person's), never KodAct's.
+            if self.cfg.reminders && !self.passing_told && stop_reason != Some(StopReason::Refusal) {
+                if let Some(note) =
+                    self.passing_note().filter(|_| self.may_nudge(crate::progress::Nudge::PassingSnapshot))
+                {
+                    self.passing_told = true;
+                    let (label, ..) = self.passing.clone().unwrap_or_default();
+                    self.system_event(
+                        "nudge",
+                        json!({"kind": crate::progress::Nudge::PassingSnapshot.as_str(), "label": label}),
+                    );
+                    self.push_user(
+                        Message::user_text(format!(
+                            "<system-reminder>\n{note} If you can't fix the failure, put that version back rather \
+                             than finish on a failing one, or say why the failing one is right.\n</system-reminder>"
+                        )),
+                        true,
+                        None,
+                        true,
+                    );
                     continue;
                 }
             }
@@ -3257,8 +3356,25 @@ impl Engine {
     }
 
     /// Note checks and possible shell writes among the calls just run.
+    /// The project's check commands for this turn: the configured or detected ones, and with
+    /// `nudges.namedChecks`, the checks the person's request names (first: they asked for them).
+    fn check_commands(&self) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        if self.cfg.reminders && self.cfg.nudges.named_checks {
+            let root = &self.shared.tool_ctx.project_dir;
+            out.extend(self.named.commands.iter().filter(|c| crate::verify::named_check(c, root)).cloned());
+        }
+        for c in self.cfg.verify.iter().flat_map(|v| v.commands.iter()) {
+            if !out.contains(c) {
+                out.push(c.clone());
+            }
+        }
+        out
+    }
+
     async fn track_verification(&mut self, calls: &[(String, String, Value)], results: &[crate::exec::CallResult]) {
-        let Some(vc) = self.cfg.verify.clone() else { return };
+        let Some(mut vc) = self.cfg.verify.clone() else { return };
+        vc.commands = self.check_commands();
         let mut refresh = false;
         for ((_, name, input), r) in calls.iter().zip(results) {
             // A file read back: plain data read after its last change has been checked.
@@ -3299,6 +3415,9 @@ impl Engine {
                 self.verify.built = None;
             }
             if crate::verify::is_check(command, &vc.commands, &changed) {
+                if !r.output.is_error {
+                    self.save_passing(command).await;
+                }
                 self.verify.write_mark = r.writes_after;
                 self.verify.shell_may_have_changed = false;
                 self.verify.last_check = Some((command.to_string(), r.output.is_error));
@@ -3358,9 +3477,188 @@ impl Engine {
         })
     }
 
+    /// Did this step make progress: a file written (by an edit tool, or by a sub-agent's), a
+    /// check that passed, or, when the request names no file, a shell command that changed
+    /// something? A failed or refused call made nothing.
+    fn made_progress(
+        &self,
+        calls: &[(String, String, Value)],
+        results: &[crate::exec::CallResult],
+        writes_before: usize,
+    ) -> bool {
+        if self.shared.history.writes_len() > writes_before {
+            return true;
+        }
+        let configured = self.check_commands();
+        let changed = self.shared.history.writes_since(0);
+        calls.iter().zip(results).any(|((_, name, input), r)| {
+            if r.denial.is_some() || r.output.is_error {
+                return false;
+            }
+            match name.as_str() {
+                "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => true,
+                "Bash" => {
+                    let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
+                    crate::verify::is_check(command, &configured, &changed)
+                        || (!self.named.names_files()
+                            && !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true))
+                }
+                _ => false,
+            }
+        })
+    }
+
+    /// Before a shell command that may write runs: the files it names (`nudges.shellEdit`).
+    fn shell_edit_before(&self, name: &str, input: &Value) -> Option<crate::shell_edit::Before> {
+        if name != "Bash" || !self.cfg.reminders || self.cfg.is_subagent || !self.cfg.nudges.shell_edit {
+            return None;
+        }
+        if self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true)
+            || input.get("run_in_background").and_then(Value::as_bool) == Some(true)
+        {
+            return None;
+        }
+        let command = input.get("command").and_then(Value::as_str)?;
+        Some(crate::shell_edit::Before::note(command, &self.shared.tool_ctx.project_dir)).filter(|b| !b.is_empty())
+    }
+
+    /// After shell commands that changed files: a changed file that no longer parses is told
+    /// with the command's result, and the first time in a turn, that Edit suits careful changes.
+    async fn shell_edits_parse(
+        &mut self,
+        calls: &[(String, String, Value)],
+        results: &mut [crate::exec::CallResult],
+        before: &[Option<crate::shell_edit::Before>],
+    ) {
+        let root = self.shared.tool_ctx.project_dir.clone();
+        for ((_, r), b) in calls.iter().zip(results.iter_mut()).zip(before) {
+            let Some(b) = b else { continue };
+            if r.denial.is_some() {
+                continue;
+            }
+            for path in b.changed() {
+                let Some(d) = crate::diagnose::check(&path).await else { continue };
+                let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
+                let mut text = d.text(&shown);
+                if !self.shell_edit_told && self.may_nudge(crate::progress::Nudge::ShellEdit) {
+                    self.shell_edit_told = true;
+                    self.system_event(
+                        "nudge",
+                        json!({"kind": crate::progress::Nudge::ShellEdit.as_str(), "file": shown, "parser": d.parser}),
+                    );
+                    text.push_str(&crate::shell_edit::suggestion(&shown));
+                }
+                match &mut r.output.content {
+                    kodact_types::ToolResultContent::Text(s) => s.push_str(&text),
+                    kodact_types::ToolResultContent::Blocks(blocks) => {
+                        blocks.push(ContentBlock::text(text.trim_start()))
+                    }
+                }
+            }
+        }
+    }
+
+    /// After a check passed with changes since the last saved passing version: save this one
+    /// with the Checkpoint tool (`nudges.passingSnapshots`). Saving only: KodAct never
+    /// restores it by itself.
+    async fn save_passing(&mut self, command: &str) {
+        if !self.cfg.reminders || self.cfg.is_subagent || !self.cfg.nudges.passing_snapshots {
+            return;
+        }
+        let writes = self.shared.history.writes_len();
+        if writes == 0 || self.passing.as_ref().is_some_and(|(_, _, at)| *at == writes) {
+            return;
+        }
+        let Some(tool) = self.shared.tools.get("Checkpoint") else { return };
+        let ctx = &self.shared.tool_ctx;
+        let Some(label) = (1..=99)
+            .map(|n| format!("passing-{n}"))
+            .find(|l| tool.validate(&json!({"action": "save", "label": l}), ctx).is_ok())
+        else {
+            return;
+        };
+        let out = tool.call(json!({"action": "save", "label": label}), ctx).await;
+        if out.is_error {
+            return;
+        }
+        self.system_event("passing_snapshot", json!({"label": label, "command": command}));
+        self.passing = Some((label, command.to_string(), writes));
+    }
+
+    /// Where the passing version is, when the files have changed since and the last check
+    /// failed: for the model before it finishes, and for the result of a run cut by its limit.
+    fn passing_note(&self) -> Option<String> {
+        let (label, passed, at) = self.passing.as_ref()?;
+        let (failed, true) = self.verify.last_check.as_ref()? else { return None };
+        (self.shared.history.writes_len() > *at).then(|| {
+            format!(
+                "The version that passed `{passed}` is saved as checkpoint `{label}`; the files now fail `{failed}`. \
+                 `Checkpoint` with action `restore` and label `{label}` brings that version back."
+            )
+        })
+    }
+
+    /// May this nudge be given now? With `nudges.backOff`, not once it has twice been followed
+    /// by progress in this run. Giving it is noted, for the count.
+    fn may_nudge(&mut self, kind: crate::progress::Nudge) -> bool {
+        if !self.cfg.nudges.back_off {
+            return true;
+        }
+        if !self.back_off.allows(kind) {
+            return false;
+        }
+        self.back_off.nudged(kind);
+        true
+    }
+
+    /// Progress was made this step: count it for back-off, and log the nudges it silences.
+    fn progress_for_back_off(&mut self) {
+        if !self.cfg.nudges.back_off {
+            return;
+        }
+        for kind in self.back_off.progress() {
+            self.system_event("nudge_silenced", json!({"kind": kind.as_str()}));
+        }
+    }
+
+    /// The run's budgets, for the pacing nudges.
+    fn run_budget(&self) -> crate::progress::Budget {
+        crate::progress::Budget {
+            max_calls: self.cfg.max_turns,
+            time: self.cfg.time_limit.map(|t| t.total),
+            usd: self.cfg.max_budget_usd,
+        }
+    }
+
+    /// Count this step for the pacing nudges, and give one when it is due (`may_nudge`: no
+    /// other reminder was given this step).
+    fn progress_nudge(&mut self, made: bool, may_nudge: bool) -> Option<String> {
+        let n = &self.cfg.nudges;
+        if !self.cfg.reminders || self.cfg.is_subagent || !(n.progress || n.progress_early) {
+            return None;
+        }
+        let cost = self.state.total_cost_usd;
+        if made {
+            self.progress.made(cost);
+            return None;
+        }
+        self.progress.step();
+        if !may_nudge {
+            return None;
+        }
+        let budget = self.run_budget();
+        let (kind, stretch) = self.progress.due(&budget, cost, n.progress_early, n.progress)?;
+        if !self.may_nudge(kind) {
+            return None;
+        }
+        self.system_event("nudge", crate::progress::record(kind, stretch));
+        Some(crate::progress::text(kind, stretch, budget.exists()))
+    }
+
     /// The reminder to send before the turn may end, if one is due.
     async fn verification_reminder(&mut self) -> Option<String> {
-        let vc = self.cfg.verify.clone()?;
+        let mut vc = self.cfg.verify.clone()?;
+        vc.commands = self.check_commands();
         if self.cfg.is_subagent || self.verify.reminders >= vc.max_reminders {
             return None;
         }
@@ -3388,6 +3686,8 @@ impl Engine {
         }
         let reminder = match self.verification_state().await? {
             crate::verify::Verified::Unchecked { files, shell } => crate::verify::Reminder::Unchecked { files, shell },
+            // The passing-version note already said the files fail this check, and what to do.
+            crate::verify::Verified::Failed { .. } if self.passing_told => return None,
             crate::verify::Verified::Failed { command } if writes > 0 => {
                 crate::verify::Reminder::LastCheckFailed { command }
             }
@@ -3424,6 +3724,14 @@ impl Engine {
         } else {
             (subtype, stop_reason)
         };
+        // A run cut short (a limit, an error) with a passing version saved and failing files:
+        // the result says where that version is. It is reported, never put back silently.
+        if subtype != ResultSubtype::Success {
+            if let Some(note) = self.passing_note() {
+                self.notice(NoticeLevel::Warning, note.clone());
+                turn.errors.push(note);
+            }
+        }
         let structured_output = if self.cfg.json_schema.is_some() && subtype == ResultSubtype::Success {
             result.as_deref().and_then(|r| serde_json::from_str::<Value>(r.trim()).ok())
         } else {

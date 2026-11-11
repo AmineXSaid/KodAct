@@ -280,6 +280,30 @@ pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// Which progress nudges are on: `KODACT_NUDGES` (a list such as `progress,shellEdit`, or `all`,
+/// for A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
+/// measured it; `reminders: false` still turns them all off.
+pub(crate) fn nudges(settings: &LoadedSettings, warnings: &mut Vec<String>) -> kodact_engine::NudgeConfig {
+    if let Some(list) = env_nonempty("KODACT_NUDGES") {
+        let (c, unknown) = kodact_engine::NudgeConfig::from_list(&list);
+        if !unknown.is_empty() {
+            warnings.push(format!(
+                "KODACT_NUDGES: unknown {} (known: {}, all, none)",
+                unknown.join(", "),
+                kodact_engine::NudgeConfig::NAMES.join(", ")
+            ));
+        }
+        return c;
+    }
+    let mut c = kodact_engine::NudgeConfig::default();
+    for name in kodact_engine::NudgeConfig::NAMES {
+        if let Some(on) = settings.bool(&format!("/nudges/{name}")) {
+            c.set(name, on);
+        }
+    }
+    c
+}
+
 /// Whether Edit may name the lines to replace instead of retyping them: `edit.lineRanges`, or
 /// `KODACT_EDIT_LINES` (for A/B runs). Off by default until it is measured.
 pub(crate) fn line_edits(settings: &LoadedSettings) -> bool {
@@ -1116,6 +1140,7 @@ pub fn build_session(
         verify,
         escalate_output: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").is_none(),
         fast: settings.bool("/fastMode").unwrap_or(false),
+        nudges: nudges(&settings, &mut warnings),
     };
     let parts = EngineParts {
         provider: provider.clone(),

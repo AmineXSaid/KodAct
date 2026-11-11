@@ -457,6 +457,7 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_SHELL` | The shell commands run in: a full path, or a name on PATH (bash, sh, zsh, pwsh, powershell). Also read from the settings `env` block. See "Shells" below |
 | `KODACT_VERIFY` | `0` turns the verification loop off |
 | `KODACT_REMINDERS` | `0` turns KodAct's own reminders to the model off (on by default; see `reminders`) |
+| `KODACT_NUDGES` | Progress nudges for this run, instead of the `nudges` settings: a list such as `progress,shellEdit`, or `all`, or `none` (see "Progress nudges") |
 | `KODACT_DISABLE_CRON` | `1` turns scheduled prompts off (`/loop`, `CronCreate`, ...) |
 | `MCP_TIMEOUT`, `MCP_TOOL_TIMEOUT` | MCP connect and call timeouts, in milliseconds (30 s, 10 min) |
 | `KODACT_NO_INPUT` | Same as `--no-input` |
@@ -646,7 +647,25 @@ listed in the system prompt's environment section.
 | `verification.languageServerWaitMs` | `3000` | How long an edit waits for the server's answer |
 | `verification.format` | `false` | `true` runs a file through its formatter after an edit and says what moved, when the file was already in that formatter's style before the edit (a new file: only with a formatter named below). Built-in, each used when installed: `rustfmt`, `ruff format` or `black`, `gofmt`, `prettier`, `clang-format` |
 | `verification.formatters` | built-in | Extension to a command that formats stdin to stdout, used instead of the built-in one: `{"py": ["black", "-q", "-"]}`. `{file}` in an argument is the file's path; an empty list turns an extension off |
+| `nudges.progress`, `.progressEarly`, `.shellEdit`, `.constraints`, `.namedChecks`, `.passingSnapshots`, `.backOff` | `false` | The progress nudges (below), each on its own |
 | `edit.lineRanges` | `false` | `true` (or `KODACT_EDIT_LINES=1`) lets Edit name the lines to replace (`start_line`, `end_line`, `anchor`) instead of retyping them as `old_string`. The anchor is the text of the first line: an edit whose line numbers moved since the file was read is refused with the lines as they are now |
+
+**Progress nudges** (`nudges.<name>: true`, or `KODACT_NUDGES`). Each follows
+what the model does, never what the task is or which model runs it, and each is
+**off until an eval task has measured it** (`evals/README.md`). `reminders:
+false` turns them all off. Each one given is a `system/nudge` event, which
+`kodact-eval` counts per run. They only ever tell the model; none runs a
+command or restores a file.
+
+| Nudge | When | What the model is told |
+| --- | --- | --- |
+| `progress` | No file written and no check passed for a fifth of the run's budget (`--max-turns`, `--max-time` or `--max-budget-usd`) and at least 5 model calls; without a budget, 15 calls. When the request names no file, a shell command that changed something counts as progress too. Once per stretch | To make the change if it has what it needs, or answer with what it has; to ignore this if its next step is a change |
+| `progressEarly` | With a budget only: nothing made yet in the turn, a tenth of the budget gone and at least 5 calls | To make a first version now and improve it after, or go on looking if it must |
+| `shellEdit` | A shell command changed a file it names (`sed -i`, a redirect) and the file no longer parses. A clean shell edit gets nothing | The parse error with the command's result; once a turn, that the Edit tool suits careful changes |
+| `constraints` | Before the turn ends, once: the request names a file that doesn't exist, a command (in backticks) that didn't run, or a size limit a named file exceeds. A sentence that says not to do something names nothing; one asking to delete a file doesn't count it missing | What is missing, and to do it or say why not |
+| `namedChecks` | A command the request names that is a check (`python3 run_checks.py`) joins the verification loop's list of checks | The verification reminder names it when it hasn't run since the last change. KodAct never runs it |
+| `passingSnapshots` | A check passed after changes: the files are saved with the Checkpoint tool (`passing-1`, ...). If the files then fail the last check, before the turn ends | Where the passing version is and how to restore it. A run cut by its limit reports it in its result. KodAct never restores it |
+| `backOff` | Applies to all of the above | A nudge followed by progress twice is not given again in the run (`system/nudge_silenced`) |
 
 **Language-server diagnostics** (`verification.languageServer: true`): after
 an Edit, MultiEdit or Write of a file that parses, KodAct gives the file's new

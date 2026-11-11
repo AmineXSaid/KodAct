@@ -12,9 +12,12 @@ mod events;
 mod exec;
 pub mod format;
 pub mod lsp;
+mod named;
+pub mod progress;
 pub mod prompts;
 mod repeat;
 pub mod request;
+mod shell_edit;
 mod snapshot;
 mod stuck;
 mod textcall;
@@ -29,6 +32,7 @@ pub use events::{
     PermissionPrompter, SerializedPrompter, VecSink,
 };
 pub use lsp::{LspConfig, ServerSpec};
+pub use progress::NudgeConfig;
 pub use prompts::{build_system, EnvInfo, SystemPromptOptions};
 pub use snapshot::{side_question_request, EngineSnapshot, TurnProgress};
 pub use verify::{detect_checks, Verified, VerifyConfig};

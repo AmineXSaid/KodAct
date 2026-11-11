@@ -103,6 +103,18 @@ From `docs/VERIFICATION_COMPARISON.md`, a comparison with four other CLIs.
   `design/brand` are redrawn (the name in Outfit), and kodact.exe carries
   the new icon.
 
+### Progress nudges, off until measured
+Seven nudges that follow what the model does (never the task or the model's
+name), each its own setting under `nudges` (or `KODACT_NUDGES`), all off by
+default and all off with `reminders: false` (CLI.md, "Progress nudges"):
+pacing by progress and its earlier form for budgeted runs, a parse check after
+shell edits that break a file, a report of files and commands the request names
+that aren't there, the request's own checks named by the verification loop,
+passing versions saved with Checkpoint and reported (never restored), and
+back-off for a nudge followed by progress twice. Each nudge is a `system/nudge`
+event; `kodact-eval` reports nudges, tokens and tool calls before the first
+write per run. Five eval tasks measure them.
+
 ### Fixed: the pre-production pass on the terminal
 Found by driving the real binary in a pseudo-terminal and reading the screen
 (`scripts/terminal-matrix/run.py`; the report is

@@ -73,6 +73,11 @@ and stderr.
 | steer-more-work | long-horizon | A request sent mid-task ("also write the total") must be done without dropping the per-file work in hand |
 | reference-skill | compatibility | `/version-notes 1.4.0 changes.txt` runs a skill written for the reference CLI (`.claude/skills`, named and indexed arguments, `${CLAUDE_SKILL_DIR}`) |
 | tool-chain | compatibility | Follow a trail through four files, one tool call at a time, to the right release code; run with a Gemini 3 model (`--model gemini-3-flash-preview`, `KODACT_GEMINI_API_KEY`) it checks that thought signatures survive a multi-step tool loop |
+| map-the-routes | long-horizon | List every route a package of 45 handler modules registers, some built from constants or in loops, so one `grep` isn't enough, with `--max-turns 60`. Run with `KODACT_NUDGES=progress,progressEarly` against none: nudges given, tool calls before the first write, tokens and pass rate show whether the pacing nudges (#1, #2) help a budgeted run get a first version down |
+| rename-keyword | tool-design | Rename one keyword parameter across 25 modules, where a shell rename (`sed -i`, `perl -pi`) is the natural tool and a careless one renames too much. With `KODACT_NUDGES=shellEdit` the shell-edit nudge (#3) must stay quiet on clean shell edits (`shell_edit` nudges 0 unless a file stopped parsing) |
+| named-deliverables | verification | Fix a parser so a named check passes, then write the failing input to repro.txt and add a CHANGES.md line: the two secondary deliverables are what runs drop. With `KODACT_NUDGES=constraints,namedChecks`: the constraint report (#4) and named checks (#5) |
+| optimize-under-time | long-horizon | Make a test pass, then make the function 100x faster, under `--max-time 240`; the test must pass at the end. With `KODACT_NUDGES=passingSnapshots` (#6) a passing version is saved, and a failing one at the end is reported with where the passing one is, never swapped back |
+| three-reports | long-horizon | Three reports, each needing a long read of a package before it is written: the pacing nudge comes back each stretch. With `KODACT_NUDGES=progress,progressEarly,backOff` against `progress,progressEarly`: back-off (#7) silences a nudge followed by progress twice; nudges and tokens should go down |
 
 Add tasks for every harness change, and name the pillar they exercise.
 

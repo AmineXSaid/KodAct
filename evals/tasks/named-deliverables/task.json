@@ -1,0 +1,12 @@
+{
+  "instruction": "`python3 run_checks.py` fails. Fix parser.py so it passes. Then write the input that failed, exactly as the parser received it, to repro.txt, and add a one-line entry for the fix at the end of CHANGES.md.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": [
+    "python",
+    "bugfix",
+    "deliverables",
+    "constraints"
+  ],
+  "timeout_secs": 600
+}
