@@ -417,15 +417,15 @@ mod tests {
     #[test]
     fn fingerprint_outside_git_follows_the_files_written() {
         let d = tempfile::tempdir().unwrap();
-        let f = d.path().join("my_warrior.red");
-        std::fs::write(&f, ";redcode-94\nimp mov 0, 1\n").unwrap();
+        let f = d.path().join("my_player.agent");
+        std::fs::write(&f, "move 0 1\n").unwrap();
         let extra = [f.clone()];
         let before = worktree_fingerprint(d.path(), &extra).unwrap();
         assert_eq!(worktree_fingerprint(d.path(), &extra), Some(before));
         std::fs::write(d.path().join("notes.txt"), "x").unwrap();
         assert_eq!(worktree_fingerprint(d.path(), &extra), Some(before), "other files aren't followed outside git");
-        // `cat > my_warrior.red <<EOF` after the last check: same size, different content.
-        std::fs::write(&f, ";redcode-94\nimp mov 0, 2\n").unwrap();
+        // `cat > my_player.agent <<EOF` after the last check: same size, different content.
+        std::fs::write(&f, "move 0 2\n").unwrap();
         assert_ne!(worktree_fingerprint(d.path(), &extra), Some(before), "a shell rewrite of a written file counts");
     }
 }

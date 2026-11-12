@@ -18,7 +18,7 @@
 //!   its sentence names, when it names exactly one. A sentence that names no file ("your
 //!   program must be <5000 bytes") sets the limit of the one file the request asks for that
 //!   doesn't exist yet, or, of several, of the one whose type the sentence names ("c program":
-//!   `gpt2.c`; "the Python script": `run.py`).
+//!   `model.c`; "the Python script": `run.py`).
 //!
 //! A sentence that says not to do something ("don't run `make deploy`", "never touch
 //! secrets.env") names nothing: what it names is not asked for.
@@ -497,7 +497,7 @@ fn type_words(lower: &str) -> Vec<&'static str> {
     out
 }
 
-/// A file's extension, lower case (`gpt2.c` → `c`), or "".
+/// A file's extension, lower case (`model.c` → `c`), or "".
 fn extension(f: &str) -> String {
     f.rsplit('/').next().unwrap_or(f).rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default()
 }
@@ -598,8 +598,8 @@ mod tests {
         );
         // Two new files: the one of the type the sentence names.
         let two =
-            "Call your program /app/gpt.c; I will run /app/a.out weights.bin. Your c program must be <5000 bytes.";
-        assert_eq!(read(two), [("/app/gpt.c".to_string(), 4999, "<5000 bytes".to_string())]);
+            "Call your program /work/model.c; I will run /work/a.out weights.bin. Your c program must be <5000 bytes.";
+        assert_eq!(read(two), [("/work/model.c".to_string(), 4999, "<5000 bytes".to_string())]);
         assert_eq!(
             read("Write run.py and notes.md. Keep the Python script under 2 KB.")[0],
             ("run.py".to_string(), 1999, "under 2 kb".to_string())

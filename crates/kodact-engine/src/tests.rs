@@ -617,7 +617,7 @@ async fn context_is_estimated_when_the_server_reports_no_usage() {
     assert!(e.projected_context_tokens() > 0, "estimated from the conversation, the system prompt and tools");
 }
 
-/// regex-chess (9ef0955), over chat completions: a 24k-token request, then a reply that reasoned
+/// A run (9ef0955), over chat completions: a 24k-token request, then a reply that reasoned
 /// 32k tokens and wrote nothing. That reasoning isn't sent back, yet it was counted (56k, over the
 /// 55k threshold of a 100k window), so the conversation was summarized at a quarter of the window,
 /// for a summary call of about 20k tokens. Only what the next request carries counts; where the
@@ -716,7 +716,7 @@ async fn a_summary_request_does_not_change_the_measured_context() {
     assert_eq!(e.state.total_usage.output_tokens, 10 + 19_000 + 20, "the summary still counts toward the cost");
 }
 
-/// path-tracing-reverse (9ef0955): capped at 20k tokens, the summary reasoned to the limit and
+/// A run (9ef0955): capped at 20k tokens, the summary reasoned to the limit and
 /// wrote nothing seven times in a row, and five of the eight that came back that run used 18k to
 /// 20k. A model that reasons pays for it from the same budget, so a summary gets a reply's.
 #[tokio::test]
@@ -804,7 +804,7 @@ async fn an_empty_summary_is_recorded_and_retried_when_the_conversation_no_longe
         kind: "invalid_request_error".into(),
         message: "prompt is too long: 1000001 tokens > 1000000 maximum".into(),
     };
-    // password-recovery (4e06b66): a summary came back empty, reasoning only; the next attempt
+    // A run (4e06b66): a summary came back empty, reasoning only; the next attempt
     // worked. When the conversation no longer fits, the first failure would end the run.
     let h = Harness::new(vec![
         MockTurn::text("ok").with_usage(usage(100)),
@@ -833,7 +833,7 @@ async fn an_empty_summary_is_recorded_and_retried_when_the_conversation_no_longe
         MockTurn::text("answered after the fallback"),
     ]);
     let mut e = h.engine();
-    e.submit(prompt("recover the password from /app/varsea")).await;
+    e.submit(prompt("recover the password from /work/vault")).await;
     let r = e.submit(prompt("two")).await;
     assert_eq!(r.result.as_deref(), Some("answered after the fallback"));
     let t = h.transcript_text();
@@ -842,13 +842,13 @@ async fn an_empty_summary_is_recorded_and_retried_when_the_conversation_no_longe
     let after = h.provider.requests().last().unwrap().clone();
     let note = after.messages[0].text();
     assert!(
-        note.contains("could not be summarized") && note.contains("recover the password from /app/varsea"),
+        note.contains("could not be summarized") && note.contains("recover the password from /work/vault"),
         "{note}"
     );
     assert!(note.contains("Continue the work"), "the model is told to go on");
 }
 
-/// path-tracing-reverse (9ef0955): an automatic summary that came back empty was sent again, the
+/// A run (9ef0955): an automatic summary that came back empty was sent again, the
 /// same, before each of the next six requests (140k tokens, about half the run's 30 minutes). Now
 /// it gets one corrected try, then KodAct's own note, and the conversation is compacted either way.
 #[tokio::test]
@@ -1030,7 +1030,7 @@ async fn verify_accepts_a_check_after_the_last_change() {
 }
 
 /// An answer file is checked by reading it back: chess-best-move, gcode-to-text and
-/// password-recovery (090446d) each wrote their answer to a .txt, read it back, and were still
+/// A run (090446d) each wrote their answer to a .txt, read it back, and were still
 /// told to run the project's checks. Code still needs a run: reading it back isn't a check.
 #[tokio::test]
 async fn an_answer_file_read_back_is_checked_but_code_is_not() {
@@ -1095,7 +1095,7 @@ async fn a_reminder_comes_once_per_set_of_changes() {
     assert_eq!(h.transcript_text().matches(r#""subtype":"verification""#).count(), 3);
 }
 
-/// gpt2-codegolf: a program written and compiled, then the turn ended without it ever running.
+/// A program written and compiled, then the turn ended without it ever running.
 /// A build that passes is asked to run once; running it (or not building one) asks nothing.
 #[tokio::test]
 async fn a_program_built_but_never_run_is_asked_to_run_once() {
@@ -1196,24 +1196,24 @@ async fn verify_ignores_a_commit_after_a_passing_check() {
 #[tokio::test]
 async fn verify_sees_a_shell_rewrite_after_the_last_check_outside_git() {
     // A file written this turn, checked, then changed by a shell command and never run again,
-    // outside a git repository (like /app in Terminal-Bench). None of the 47 distinct collected
-    // runs ends this way, so this reminder has no false positive there: in corewars 22f2cd7 the
-    // `cat > my_warrior.red <<EOF` rewrite was run against pmars in the same command, which is
+    // outside a git repository. None of the 47 distinct collected runs ends this way, so this
+    // reminder has no false positive there: in 22f2cd7 the
+    // `cat > my_player.agent <<EOF` rewrite was run against simulate in the same command, which is
     // a check.
     let h = Harness::new(vec![]);
     let cwd = h.cwd();
     std::fs::create_dir_all(&cwd).unwrap();
-    let warrior = cwd.join("my_warrior.red");
-    h.provider.push(MockTurn::tool("Write", json!({"file_path": warrior, "content": ";redcode-94\nmov 0, 1\n"})));
+    let entry = cwd.join("my_player.agent");
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": entry, "content": "move 0 1\n"})));
     h.provider.push(MockTurn::tool("Bash", json!({"command": "true"})));
     h.provider.push(MockTurn::tool("Bash", json!({"command": "ls"})));
     h.provider.push(MockTurn::text("tested"));
     let mut e = verifying_engine(&h, &["true"]);
-    assert_eq!(e.submit(prompt("write a warrior")).await.num_turns, 4, "tested, then only looked");
+    assert_eq!(e.submit(prompt("write a player")).await.num_turns, 4, "tested, then only looked");
 
-    h.provider.push(MockTurn::tool("Write", json!({"file_path": warrior, "content": ";redcode-94\nmov 0, 1\n"})));
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": entry, "content": "move 0 1\n"})));
     h.provider.push(MockTurn::tool("Bash", json!({"command": "true"})));
-    h.provider.push(MockTurn::tool("Bash", json!({"command": "printf ';redcode-94\\nspl 0, 1\\n' > my_warrior.red"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "printf 'move 0 3\\n' > my_player.agent"})));
     h.provider.push(MockTurn::text("rewrote it"));
     h.provider.push(MockTurn::text("ok"));
     let r = e.submit(prompt("improve it")).await;
@@ -1221,35 +1221,35 @@ async fn verify_sees_a_shell_rewrite_after_the_last_check_outside_git() {
     let n = h.provider.requests().len();
     assert!(last_user_text(&h.provider.requests()[n - 1]).contains("through shell commands"));
 
-    // corewars 22f2cd7, as it happened: the rewrite and the battles in one command. That's a check.
+    // 22f2cd7, as it happened: the rewrite and the games in one command. That's a check.
     std::fs::write(cwd.join("run.py"), "import sys\nprint(sys.argv[1], sys.argv[2], 'Results: 0 100 0')\n").unwrap();
-    h.provider.push(MockTurn::tool("Write", json!({"file_path": warrior, "content": ";redcode-94\nmov 0, 1\n"})));
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": entry, "content": "move 0 1\n"})));
     h.provider.push(MockTurn::tool(
         "Bash",
-        json!({"command": "cat > my_warrior.red <<'EOF'\n;redcode-94\n;name Chasm\nstart spl 1, imp1\nEOF\n\
-                for o in stone paper; do python3 run.py my_warrior.red $o; done"}),
+        json!({"command": "cat > my_player.agent <<'EOF'\nmove 1 4\nEOF\n\
+                for o in stone paper; do python3 run.py my_player.agent $o; done"}),
     ));
     h.provider.push(MockTurn::text("rewrote and ran it"));
-    let r = e.submit(prompt("try an imp swarm")).await;
+    let r = e.submit(prompt("try another strategy")).await;
     assert_eq!(r.num_turns, 3, "no reminder: the rewrite was run");
 }
 
 #[tokio::test]
 async fn loop_guard_forgets_results_the_model_lost_to_compaction() {
-    // winning-avg-corewars (231fd6b): right after a compaction the model re-read the opponents'
+    // A run (231fd6b): right after a compaction the model re-read the opponents'
     // files it had read before, and the guard called that a loop. It can't use a result it no
     // longer sees, so a compaction starts the count again.
     let h = Harness::new(vec![]);
     std::fs::create_dir_all(h.cwd()).unwrap();
-    std::fs::write(h.cwd().join("stone.red"), ";redcode\nadd #4, 3\n").unwrap();
+    std::fs::write(h.cwd().join("stone.agent"), "add 4 3\n").unwrap();
     let big = h.cwd().join("big.txt");
     std::fs::write(&big, "line of text\n".repeat(1500)).unwrap();
-    let cat = json!({"command": "cat stone.red"});
+    let cat = json!({"command": "cat stone.agent"});
     let mut e = h.engine_with(small_window(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     h.provider.push(MockTurn::tool("Bash", cat.clone()).with_usage(usage(2_000)));
     h.provider.push(MockTurn::tool("Bash", cat.clone()).with_usage(usage(2_000)));
     h.provider.push(MockTurn::tool("Read", json!({"file_path": big})).with_usage(usage(9_000)));
-    h.provider.push(MockTurn::text("<analysis>a</analysis><summary>Read stone.red and big.txt.</summary>"));
+    h.provider.push(MockTurn::text("<analysis>a</analysis><summary>Read stone.agent and big.txt.</summary>"));
     h.provider.push(MockTurn::tool("Bash", cat.clone()));
     h.provider.push(MockTurn::text("done"));
     let r = e.submit(prompt("study the opponents")).await;
@@ -1261,7 +1261,7 @@ async fn loop_guard_forgets_results_the_model_lost_to_compaction() {
     // The same three reads with nothing lost in between still are.
     let h = Harness::new(vec![]);
     std::fs::create_dir_all(h.cwd()).unwrap();
-    std::fs::write(h.cwd().join("stone.red"), ";redcode\nadd #4, 3\n").unwrap();
+    std::fs::write(h.cwd().join("stone.agent"), "add 4 3\n").unwrap();
     for _ in 0..3 {
         h.provider.push(MockTurn::tool("Bash", cat.clone()));
     }
@@ -1574,7 +1574,7 @@ async fn max_tokens_continues_text_and_answers_cut_off_calls() {
 async fn a_reply_cut_off_while_reasoning_is_asked_to_act() {
     use kodact_types::StopReason;
     let thinking = |t: &str| ContentBlock::Thinking { thinking: t.into(), signature: String::new() };
-    // Seen on Terminal-Bench write-compressor: every reply spent the whole output limit reasoning.
+    // Seen in an unattended run: every reply spent the whole output limit reasoning.
     // "Continue exactly" only started another pass; the model is asked to act on what it has.
     let h = Harness::new(vec![
         MockTurn::blocks(vec![thinking("a long plan, not finished")], StopReason::MaxTokens),
@@ -1601,7 +1601,7 @@ async fn a_reply_cut_off_while_reasoning_is_asked_to_act() {
     assert!(last_user_text(&h.provider.requests()[1]).contains("Continue exactly"));
     assert!(!h.transcript_text().contains("act_reminder"));
 
-    // Counted per stretch, not per run (seen on winning-avg-corewars: 3 per run were gone by reply
+    // Counted per stretch, not per run (seen in a run: 3 per run were gone by reply
     // 35 of 66). Each reminder followed by a tool call resets the count, so a long run gets more.
     let act = |h: &Harness| h.transcript_text().matches(r#""subtype":"act_reminder""#).count();
     let mut turns = vec![];
@@ -1617,7 +1617,7 @@ async fn a_reply_cut_off_while_reasoning_is_asked_to_act() {
     assert_eq!(act(&h), 4, "a tool call starts a new stretch");
 
     // Three in a row without a tool call: the model isn't making progress, the fourth ends the turn.
-    // With no answer, as an error: write-compressor (9ef0955) ended so, nothing written, and was
+    // With no answer, as an error: a run (9ef0955) ended so, nothing written, and was
     // reported as a success.
     let h = Harness::new((0..4).map(|_| MockTurn::blocks(vec![thinking("plan")], StopReason::MaxTokens)).collect());
     let mut e = h.engine();
@@ -1628,7 +1628,7 @@ async fn a_reply_cut_off_while_reasoning_is_asked_to_act() {
     assert!(r.errors[0].contains("stopped without an answer"), "{:?}", r.errors);
 }
 
-/// write-compressor (9ef0955), over chat completions: three replies in a row were cut off while
+/// A run (9ef0955), over chat completions: three replies in a row were cut off while
 /// reasoning, and each began the same analysis of the decoder again, since that reasoning isn't
 /// sent back: "do not restart the analysis" was about an analysis the model no longer had. The
 /// reminder now carries how the reasoning began and where it stopped. Where reasoning is sent
@@ -1680,16 +1680,16 @@ async fn a_reply_that_was_all_reasoning_gets_it_back_where_it_is_not_kept() {
 async fn an_empty_reply_is_asked_to_act_instead_of_ending_the_turn() {
     use kodact_types::StopReason;
     let thinking = |t: &str| ContentBlock::Thinking { thinking: t.into(), signature: String::new() };
-    // gpt2-codegolf (06eba3b, ce92502): after a few tool calls the model ended a reply with only
+    // Seen twice (06eba3b, ce92502): after a few tool calls the model ended a reply with only
     // reasoning, no text and no tool call, and that ended the unattended run with nothing done.
     let h = Harness::new(vec![
         MockTurn::tool("Bash", json!({"command": "ls"})),
         MockTurn::blocks(vec![thinking("python3 is missing, so install it first")], StopReason::EndTurn),
-        MockTurn::text("Installed python3 and wrote gpt2.c."),
+        MockTurn::text("Installed python3 and wrote model.c."),
     ]);
     let mut e = h.engine();
-    let r = e.submit(prompt("write gpt2.c")).await;
-    assert_eq!(r.result.as_deref(), Some("Installed python3 and wrote gpt2.c."));
+    let r = e.submit(prompt("write model.c")).await;
+    assert_eq!(r.result.as_deref(), Some("Installed python3 and wrote model.c."));
     let asked = last_user_text(&h.provider.requests()[2]);
     assert!(asked.contains("without an answer or an action") && !asked.contains("output token limit"), "{asked}");
     assert!(h.transcript_text().contains(r#""kind":"empty_reply""#));
@@ -1809,7 +1809,7 @@ async fn the_plan_survives_compaction_and_resume() {
     assert!(restored.iter().any(|t| t["content"] == "Add tests"), "{restored:?}");
 }
 
-/// video-processing (090446d): a summary that kept only the last step lost the task, and the
+/// A run (090446d): a summary that kept only the last step lost the task, and the
 /// model rebuilt a different one ("The context is thin. I need to reconstruct what this task
 /// is."). The person's requests now go with every summary word for word, through later
 /// compactions and a resume, whatever the summary kept.
@@ -1963,7 +1963,7 @@ async fn the_model_is_told_when_turns_run_low() {
     let warned: Vec<usize> = (0..reqs.len()).filter(|&i| last_user_text(&reqs[i]).contains("Wrap up")).collect();
     assert_eq!(warned, vec![3], "once, when 3 calls are left");
     assert!(last_user_text(&reqs[3]).contains("3 model calls left"));
-    // Seen on winning-avg-corewars: a worse version overwrote a better one and was still in place
+    // Seen in a run: a worse version overwrote a better one and was still in place
     // when time ran out. Restoring the better one comes first.
     assert!(last_user_text(&reqs[3]).contains("put the better one back first"));
 }
@@ -2230,7 +2230,7 @@ fn http(status: u16, kind: &str, message: &str) -> MockTurn {
 
 #[tokio::test]
 async fn an_endpoint_outage_mid_run_is_waited_out() {
-    // Seen on Terminal-Bench (job 9489f93, 2026-11-05): the endpoint answered "Model not
+    // Seen in a benchmark job (9489f93, 2026-11-05): the endpoint answered "Model not
     // found" twice for a minute in the middle of runs 37 turns in, then went down for
     // scheduled maintenance. Each ended its run at once and lost the work.
     let maintenance = "This service is temporarily unavailable while we perform scheduled maintenance";
@@ -2393,21 +2393,21 @@ async fn unattended_runs_finish_announced_steps_and_open_todos() {
     let h = Harness::new(vec![
         MockTurn::tool(
             "TodoWrite",
-            json!({"todos": [todo("write gpt2.c", "pending"), todo("read the files", "completed")]}),
+            json!({"todos": [todo("write model.c", "pending"), todo("read the files", "completed")]}),
         ),
         MockTurn::text("Done."),
         MockTurn::tool(
             "TodoWrite",
-            json!({"todos": [todo("write gpt2.c", "completed"), todo("read the files", "completed")]}),
+            json!({"todos": [todo("write model.c", "completed"), todo("read the files", "completed")]}),
         ),
-        MockTurn::text("Done: gpt2.c written."),
+        MockTurn::text("Done: model.c written."),
     ]);
     let mut e = h.engine_with(unattended(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-    assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("Done: gpt2.c written."));
+    assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("Done: model.c written."));
     let reqs = h.provider.requests();
     assert_eq!(reqs.len(), 4);
     let reminder = last_user_text(&reqs[2]);
-    assert!(reminder.contains("[pending] write gpt2.c") && !reminder.contains("read the files"), "{reminder}");
+    assert!(reminder.contains("[pending] write model.c") && !reminder.contains("read the files"), "{reminder}");
 
     // With a person at the prompt, the reply ends the turn as before.
     let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "ls"})), MockTurn::text("Let me check more.")]);
@@ -2565,7 +2565,7 @@ async fn the_turn_waits_for_commands_that_outlived_their_timeout() {
     assert!(t.contains(r#""subtype":"background_wait""#) && t.contains(r#""subtype":"background_exit""#));
 }
 
-/// pypi-server (9ef0955): the model started the package server with `run_in_background`, checked
+/// A run (9ef0955): the model started the package server with `run_in_background`, checked
 /// it from a fresh venv and finished. The session ended right after, which stopped the server, and
 /// the grader found nothing on the port. An unattended turn that ends with background commands
 /// still running is now told, once, that they will be stopped.
