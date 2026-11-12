@@ -24,6 +24,10 @@
   unchecked changes, no attempt yet) go together in one message, one model
   call, instead of one call each. The unsaved-result note also loses the
   stray runs of spaces in its text.
+- **Waiting isn't stalling**: time spent waiting on a tool (a build, a
+  download, a test run, a background command) is left out of a pacing
+  stretch's share of `--max-time`, so a long command the model couldn't
+  shorten brings no "no progress" nudge.
 
 ### Watching a Harbor run, as a chat
 - **`evals/harbor/watch.py` shows a job from its start and then live**, with no

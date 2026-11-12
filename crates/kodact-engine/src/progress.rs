@@ -16,6 +16,10 @@
 //!   the budget (and the same [`MIN_CALLS`]), so a run with a limit gets a first version down
 //!   while there is time to improve it. Only with a budget.
 //!
+//! Time spent waiting on a tool (a build, a download, a test suite, a sub-agent) is left out of
+//! a stretch's time: the model could not have shortened it, and a nudge for it would be advice
+//! with no fact behind it.
+//!
 //! Every threshold is a share of the run's own budget or a count of the model's own calls:
 //! nothing depends on the model, the task or where it runs. All of it is off unless turned on
 //! (`nudges` in settings, or `KODACT_NUDGES`), and `reminders: false` turns it off with the
@@ -217,6 +221,8 @@ pub(crate) struct Stretch {
 pub(crate) struct Progress {
     calls: u32,
     since: Instant,
+    /// Time spent waiting on tools since then: not the model's to shorten.
+    waited: Duration,
     cost_since: f64,
     made_any: bool,
     nudged_this_stretch: bool,
@@ -230,12 +236,24 @@ impl Default for Progress {
 
 impl Progress {
     pub fn new(cost_now: f64) -> Progress {
-        Progress { calls: 0, since: Instant::now(), cost_since: cost_now, made_any: false, nudged_this_stretch: false }
+        Progress {
+            calls: 0,
+            since: Instant::now(),
+            waited: Duration::ZERO,
+            cost_since: cost_now,
+            made_any: false,
+            nudged_this_stretch: false,
+        }
     }
 
     /// A model call that made no progress.
     pub fn step(&mut self) {
         self.calls += 1;
+    }
+
+    /// Time spent waiting on tools: left out of the stretch's time.
+    pub fn waited(&mut self, d: Duration) {
+        self.waited += d;
     }
 
     /// Something was made: a file written, a check passed (or, when the request names no file,
@@ -255,7 +273,7 @@ impl Progress {
             share = share.max(f64::from(self.calls) / f64::from(m));
         }
         if let Some(t) = budget.time.filter(|t| !t.is_zero()) {
-            share = share.max(self.since.elapsed().as_secs_f64() / t.as_secs_f64());
+            share = share.max(time_share(self.since.elapsed(), self.waited, t));
         }
         if let Some(u) = budget.usd.filter(|u| *u > 0.0) {
             share = share.max((cost_now - self.cost_since).max(0.0) / u);
@@ -273,6 +291,11 @@ impl Progress {
         self.nudged_this_stretch = true;
         Some((kind, s))
     }
+}
+
+/// The share of a time budget a stretch took: its time, less what was spent waiting on tools.
+pub(crate) fn time_share(elapsed: Duration, waited: Duration, total: Duration) -> f64 {
+    elapsed.saturating_sub(waited).as_secs_f64() / total.as_secs_f64()
 }
 
 /// Which nudge a stretch calls for: the decision alone, for the tests.
@@ -469,6 +492,21 @@ mod tests {
         assert!((p.stretch(&b, 0.70).share - 0.20).abs() < 1e-9, "20 cents of a dollar since the start");
         let t = Budget { time: Some(Duration::from_secs(3600)), ..Default::default() };
         assert!(p.stretch(&t, 0.0).share < 0.01, "seconds of an hour");
+    }
+
+    #[test]
+    fn waiting_on_a_tool_is_not_time_without_progress() {
+        let m = Duration::from_secs(60);
+        // Half an hour: ten minutes in a build and one of the model's own is a thirtieth.
+        assert!((time_share(11 * m, 10 * m, 30 * m) - 1.0 / 30.0).abs() < 1e-9);
+        assert!((time_share(11 * m, Duration::ZERO, 30 * m) - 11.0 / 30.0).abs() < 1e-9, "as before without waits");
+        assert_eq!(time_share(m, 2 * m, 30 * m), 0.0, "never below nothing");
+        let mut p = Progress::new(0.0);
+        p.waited(Duration::from_secs(3600));
+        let t = Budget { time: Some(30 * m), ..Default::default() };
+        assert_eq!(p.stretch(&t, 0.0).share, 0.0);
+        p.made(0.0);
+        assert_eq!(p.waited, Duration::ZERO, "a new stretch starts with no waits");
     }
 
     #[test]

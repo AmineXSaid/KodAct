@@ -3144,6 +3144,39 @@ async fn a_named_check_is_told_not_run() {
     }
 }
 
+/// Waiting is not stalling (docs/goal.md, rule 8): time inside a slow command is left out of
+/// a stretch's time, so steps that wait on a build get no pacing nudge; the same number of
+/// steps whose time is the model's own does.
+#[tokio::test]
+async fn time_spent_waiting_on_a_tool_is_not_time_without_progress() {
+    let run = |slow_tools: bool| async move {
+        let h = Harness::new(vec![]);
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        for i in 0..6 {
+            let turn = if slow_tools {
+                MockTurn::tool("Bash", json!({"command": "sleep 0.3"}))
+            } else {
+                let f = h.cwd().join(format!("m{i}.py"));
+                std::fs::write(&f, "v = 1\n").unwrap();
+                MockTurn::tool("Read", json!({"file_path": f})).with_delay(Duration::from_millis(60))
+            };
+            h.provider.push(turn);
+        }
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": h.cwd().join("out.txt"), "content": "1\n"})));
+        h.provider.push(MockTurn::text("done"));
+        let cfg = EngineConfig {
+            time_limit: Some(TimeLimit::starting_now(Duration::from_secs(4))),
+            verify: None,
+            ..nudged_cfg("progress,progressEarly")
+        };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("Write out.txt.")).await;
+        nudges(&h.transcript_text()).len()
+    };
+    assert_eq!(run(true).await, 0, "six commands of 0.3 s: waiting, not stalling");
+    assert_eq!(run(false).await, 1, "the same steps taking the model's time: nudged");
+}
+
 /// The notes due as a turn would end go in one message, one model call (docs/goal.md, rule 8):
 /// open todos, what the request names and isn't there, and unchecked changes, each counted
 /// and logged on its own. Before, each cost a call of its own.

@@ -2968,7 +2968,10 @@ impl Engine {
                 // Shell commands that may write: the files they name, as they are now.
                 let shell_before: Vec<Option<crate::shell_edit::Before>> =
                     tool_uses.iter().map(|(_, name, input)| self.shell_edit_before(name, input)).collect();
+                let tools_started = Instant::now();
                 let mut ran = crate::exec::run_tools(&self.shared, &to_run, &cancel, self.mode_str()).await.into_iter();
+                // Waiting on tools (a build, a download) is not the model's time without progress.
+                self.progress.waited(tools_started.elapsed());
                 let writes_now = self.shared.history.writes_len();
                 let mut results: Vec<crate::exec::CallResult> = tool_uses
                     .iter()
@@ -3136,7 +3139,10 @@ impl Engine {
             // end while they run, so their result isn't lost (unattended, the run's end would stop
             // them). It waits for them, then goes on with how they ended.
             if background_waits < BACKGROUND_WAITS && stop_reason != Some(StopReason::Refusal) {
-                if let Some(text) = self.wait_for_background(&cancel).await {
+                let waiting = Instant::now();
+                let ended = self.wait_for_background(&cancel).await;
+                self.progress.waited(waiting.elapsed());
+                if let Some(text) = ended {
                     background_waits += 1;
                     self.push_user(Message::user_text(text), true, None, true);
                     continue;
