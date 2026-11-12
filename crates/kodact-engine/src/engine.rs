@@ -3033,6 +3033,8 @@ impl Engine {
                 });
                 if made_progress {
                     self.progress_for_back_off();
+                } else if self.cfg.nudges.back_off {
+                    self.back_off.step();
                 }
                 for ((_, name, input), r) in tool_uses.iter().zip(&results) {
                     if name == "Bash" && r.denial.is_none() {
@@ -4129,8 +4131,9 @@ impl Engine {
         })
     }
 
-    /// May this nudge be given now? With `nudges.backOff`, not once it has twice been followed
-    /// by progress in this run. Giving it is noted, for the count.
+    /// May this nudge be given now? With `nudges.backOff`, a pacing nudge the model twice didn't
+    /// need (progress came only late) is not; any other note always is. Giving it is noted, for
+    /// the count.
     fn may_nudge(&mut self, kind: crate::progress::Nudge) -> bool {
         if !self.cfg.nudges.back_off {
             return true;
@@ -4142,7 +4145,8 @@ impl Engine {
         true
     }
 
-    /// Progress was made this step: count it for back-off, and log the nudges it silences.
+    /// Progress was made this step: settle the pacing nudges waiting on it (acted on, or not
+    /// needed), and log the ones back-off silences.
     fn progress_for_back_off(&mut self) {
         if !self.cfg.nudges.back_off {
             return;

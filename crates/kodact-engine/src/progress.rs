@@ -21,9 +21,13 @@
 //! (`nudges` in settings, or `KODACT_NUDGES`), and `reminders: false` turns it off with the
 //! rest of KodAct's reminders.
 //!
-//! **Back-off** ([`BackOff`]): a nudge the model has twice been seen to make progress after
-//! is not given again in that run, whatever its kind. A model that would have gone on anyway
-//! pays for no more of them.
+//! **Back-off** ([`BackOff`]): a pacing nudge the model did not need is not given again in
+//! that run. The signal is the delay: progress within [`ACTED_WITHIN`] model calls of the nudge
+//! means the model acted on it, and it is kept; progress only later means the model went its
+//! own way, and twice that silences it. A strong model that would have gone on anyway pays for
+//! no more of them; a model that needed one keeps getting it. Only the pacing nudges back off:
+//! a note that carries a fact (a file missing, a check never run, a limit passed) is never
+//! silenced, and a nudge is never silenced for having worked (docs/goal.md, rule 8).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -40,8 +44,12 @@ const EARLY_SHARE: f64 = 0.10;
 /// Without a budget: model calls without progress before the pacing nudge. A person answering
 /// a question by reading a dozen files is not slow; twice that with nothing made may be.
 pub(crate) const NO_BUDGET_CALLS: u32 = 15;
-/// Times a nudge may be followed by progress before back-off stops it for the run.
+/// Times a pacing nudge may be followed by progress only late (not needed) before back-off
+/// stops it for the run.
 const BACK_OFF_AFTER: u32 = 2;
+/// Model calls after a pacing nudge, the one that made progress included, within which the
+/// progress is taken as the nudge acted on.
+pub(crate) const ACTED_WITHIN: u32 = 2;
 
 /// Which nudges are on (`nudges.<name>` in settings, or `KODACT_NUDGES`). All are off by
 /// default: each is turned on once an eval task has measured it.
@@ -64,7 +72,8 @@ pub struct NudgeConfig {
     /// After a check passes, the files are saved with the Checkpoint tool; when the last check
     /// then fails, the model and the result are told where the passing version is.
     pub passing_snapshots: bool,
-    /// A nudge followed by progress twice is not repeated in the run.
+    /// A pacing nudge the model didn't need (progress came, but only long after it), twice, is
+    /// not repeated in the run; one it acted on is kept. Notes that carry a fact never back off.
     pub back_off: bool,
     /// The time-limit warning states the steps left at the run's own pace, comes earlier when
     /// few are left, and names the files the request asks for that don't exist yet.
@@ -336,31 +345,52 @@ pub(crate) fn record(kind: Nudge, s: Stretch) -> Value {
     json!({"kind": kind.as_str(), "calls": s.calls, "share": (s.share * 1000.0).round() / 1000.0})
 }
 
-/// Back-off, across a run: a nudge followed by progress [`BACK_OFF_AFTER`] times is silenced.
+/// Back-off, across a run, for the pacing nudges: one followed by progress only late,
+/// [`BACK_OFF_AFTER`] times, is silenced; one acted on (progress within [`ACTED_WITHIN`] calls)
+/// is kept.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BackOff {
-    /// Nudges given and not yet followed by progress.
-    waiting: Vec<Nudge>,
-    followed: HashMap<Nudge, u32>,
+    /// Pacing nudges given and not yet followed by progress, with the model calls since.
+    waiting: Vec<(Nudge, u32)>,
+    /// Times each was followed by progress only late: not needed.
+    unneeded: HashMap<Nudge, u32>,
 }
 
 impl BackOff {
+    /// Does this kind back off? Only the pacing nudges, which give advice; a note that
+    /// carries a fact the model lacks is always given.
+    pub fn backs_off(kind: Nudge) -> bool {
+        matches!(kind, Nudge::Progress | Nudge::ProgressEarly)
+    }
+
     pub fn allows(&self, kind: Nudge) -> bool {
-        self.followed.get(&kind).copied().unwrap_or(0) < BACK_OFF_AFTER
+        !Self::backs_off(kind) || self.unneeded.get(&kind).copied().unwrap_or(0) < BACK_OFF_AFTER
     }
 
     pub fn nudged(&mut self, kind: Nudge) {
-        if !self.waiting.contains(&kind) {
-            self.waiting.push(kind);
+        if Self::backs_off(kind) {
+            self.waiting.retain(|(k, _)| *k != kind);
+            self.waiting.push((kind, 0));
         }
     }
 
-    /// Progress was made: each nudge waiting on it counts once. Returns the nudges this
-    /// silenced, for the transcript.
+    /// A model call that made no progress: one more for each nudge waiting.
+    pub fn step(&mut self) {
+        for (_, calls) in &mut self.waiting {
+            *calls += 1;
+        }
+    }
+
+    /// Progress was made by this call. A nudge it came within [`ACTED_WITHIN`] calls of was
+    /// acted on, and is kept; one it came late to wasn't needed, and counts toward silence.
+    /// Returns the nudges this silenced, for the transcript.
     pub fn progress(&mut self) -> Vec<Nudge> {
         let mut silenced = vec![];
-        for kind in std::mem::take(&mut self.waiting) {
-            let n = self.followed.entry(kind).or_insert(0);
+        for (kind, calls) in std::mem::take(&mut self.waiting) {
+            if calls < ACTED_WITHIN {
+                continue;
+            }
+            let n = self.unneeded.entry(kind).or_insert(0);
             *n += 1;
             if *n == BACK_OFF_AFTER {
                 silenced.push(kind);
@@ -442,18 +472,48 @@ mod tests {
     }
 
     #[test]
-    fn back_off_silences_a_nudge_followed_by_progress_twice() {
+    fn back_off_keeps_a_nudge_acted_on_and_drops_one_not_needed() {
         let mut b = BackOff::default();
-        assert!(b.allows(Nudge::Progress));
+        // Acted on: progress in the next call, or the one after. Kept, however often.
+        for _ in 0..5 {
+            b.nudged(Nudge::Progress);
+            assert!(b.progress().is_empty());
+            b.nudged(Nudge::Progress);
+            b.step();
+            assert!(b.progress().is_empty(), "within {ACTED_WITHIN} calls: acted on");
+        }
+        assert!(b.allows(Nudge::Progress), "never silenced for having worked");
+        assert!(b.progress().is_empty(), "progress with no nudge waiting counts nothing");
+        // Not needed: progress came, but only calls later. Twice silences it.
         b.nudged(Nudge::Progress);
+        b.step();
+        b.step();
         assert!(b.progress().is_empty());
         assert!(b.allows(Nudge::Progress));
-        assert!(b.progress().is_empty(), "progress with no nudge waiting counts nothing");
         b.nudged(Nudge::Progress);
-        b.nudged(Nudge::ShellEdit);
+        for _ in 0..6 {
+            b.step();
+        }
         assert_eq!(b.progress(), vec![Nudge::Progress], "the second time silences it");
         assert!(!b.allows(Nudge::Progress));
-        assert!(b.allows(Nudge::ShellEdit), "each nudge on its own count");
+        assert!(b.allows(Nudge::ProgressEarly), "each nudge on its own count");
+    }
+
+    #[test]
+    fn notes_that_carry_a_fact_never_back_off() {
+        let mut b = BackOff::default();
+        let facts =
+            [Nudge::Constraints, Nudge::ShellEdit, Nudge::PassingSnapshot, Nudge::SizeLimit, Nudge::StaleDeliverable];
+        for kind in facts {
+            for _ in 0..4 {
+                b.nudged(kind);
+                for _ in 0..10 {
+                    b.step();
+                }
+                assert!(b.progress().is_empty());
+            }
+            assert!(b.allows(kind), "{kind:?}");
+        }
     }
 
     #[test]

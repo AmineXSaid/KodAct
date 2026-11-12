@@ -14,6 +14,11 @@
   to fail. One only mentioned ("see `make deploy`"), set aside ("avoid",
   "without", "instead of", "except") or ruled out is never suggested, and a
   request that isn't in English is not read at all rather than misread.
+- **`backOff` keeps the nudges that work**: a pacing nudge followed by
+  progress within two model calls was acted on and is kept; one followed by
+  progress only later wasn't needed, and twice silences it. Notes that carry
+  a fact (a missing file, an unrun check, a limit passed) never back off.
+  Before, any progress after any nudge counted toward silencing it.
 
 ### Watching a Harbor run, as a chat
 - **`evals/harbor/watch.py` shows a job from its start and then live**, with no
