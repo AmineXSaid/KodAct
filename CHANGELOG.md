@@ -23,6 +23,14 @@
   letters, so "the compressed form of data.txt" or "transform" dropped every
   file the sentence named. Markup (`</system-reminder>`) is no longer read as a
   file either.
+- **`np.float64` isn't a file**: a dotted code name had a file name's shape
+  (`np.float64`, `self.data`, `math.log`, `app.registry.route`), so the
+  constraint note and the pace warning said it was missing and asked the model
+  to write it. A bare `name.ext` now needs evidence: the file exists, its
+  extension is a common file type, a word just before it asks to write it
+  (`Write me data.comp`), or it is where a sentence that writes files puts
+  something (`... and the process ID to server.pid`). Of the 52 eval tasks'
+  requests, 5 read differently, each losing only names that weren't files.
 - **`watch.py`**: the end says what KodAct's last check ran (`KodAct's last
   check passed: $ gcc -O2 -o app app.c`) and which files the task asks for
   don't exist; a step already under way when the watch starts is timed from the

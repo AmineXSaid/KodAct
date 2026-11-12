@@ -143,6 +143,8 @@ impl Named {
             }
             // In the order the sentence names them: backticked spans and plain words alike.
             let mut files_here = vec![];
+            // The sentence's words so far, lower case: what comes just before a name.
+            let mut before: Vec<String> = vec![];
             let tokens = tokens(&sentence);
             for (i, part) in sentence.split('`').enumerate() {
                 if i % 2 == 1 {
@@ -153,16 +155,18 @@ impl Named {
                         if asked_to_run(&tokens, i / 2) || failing_check {
                             push(&mut n.commands, cmd);
                         }
-                    } else if is_file_word(&span) {
-                        push(&mut files_here, span);
+                    } else if is_file_word(&span) && file_evidence(&span, project, &before, !files_here.is_empty()) {
+                        push(&mut files_here, span.clone());
                     }
+                    before.push(span.to_lowercase());
                     continue;
                 }
                 for word in part.split_whitespace() {
                     let w = trim_word(word);
-                    if is_file_word(w) {
+                    if is_file_word(w) && file_evidence(w, project, &before, !files_here.is_empty()) {
                         push(&mut files_here, w.to_string());
                     }
+                    before.push(w.to_lowercase());
                 }
             }
             match (files_here.as_slice(), size_limit(&sentence)) {
@@ -500,6 +504,66 @@ fn trim_word(w: &str) -> &str {
         .trim_end_matches('.')
 }
 
+/// File types common enough that a bare name with one is read as a file even before it exists
+/// (`answer.txt`, `weights.json`, `report.md`). Left out on purpose: extensions that are also
+/// everyday attribute or function names in code (`self.data`, `math.log`, `self.db`, `self.cfg`,
+/// `mock.patch`, `np.diff`, `process.env`, `np.mat`), and one- or two-letter ones that read as
+/// variables (`p.r`, `v.o`). A file with any of these still counts when it exists or the request
+/// asks to write it.
+const FILE_EXTENSIONS: &str = concat!(
+    "c h cc cpp cxx hpp hh cs java kt kts scala go rs py pyi pyx ipynb js mjs cjs jsx ts tsx rb ",
+    "php pl pm lua jl swift dart exs erl hs clj vue svelte zig nim sh bash zsh fish ps1 bat sql ",
+    "graphql proto cu cuh f90 sol tf hcl nix cmake mk gradle groovy el scm rkt asm wasm wat vhd ",
+    "vhdl sv ",
+    "txt md markdown rst adoc tex bib json jsonl ndjson yaml yml toml ini xml xsd csv ",
+    "tsv plist html htm css scss sass less svg j2 jinja tpl erb ejs hbs ",
+    "bak ",
+    "bin dat sqlite sqlite3 parquet feather arrow avro orc h5 hdf5 npy npz pkl pickle pt pth ",
+    "ckpt safetensors onnx gguf tflite pb joblib pdf doc docx xls xlsx ppt pptx odt ods odp rtf ",
+    "epub png jpg jpeg gif bmp tif tiff webp ico ppm pgm pbm pnm heic psd mp3 wav flac ogg m4a ",
+    "aac mp4 mkv mov avi webm srt vtt ttf otf woff woff2 ",
+    "zip tar gz tgz bz2 xz zst 7z rar jar war whl deb rpm dmg iso so dll dylib exe pyc pem crt ",
+    "cer csr pub p12 pfx ",
+);
+/// Words that ask for the file named just after them to be made (`Write me data.comp`, `generate
+/// data.comp`, `save model.v2`): within [`WRITE_REACH`] words before the name. Farther, the name
+/// may be anything the sentence goes on to mention (`Write code that uses np.float64`). Asking
+/// forms only: `written as module.function` describes, it doesn't ask.
+const WRITE_WORDS: &str = concat!(
+    "write writes create creates save saves generate generates produce produces output outputs ",
+    "export exports dump dumps store stores emit emits ",
+);
+const WRITE_REACH: usize = 2;
+
+/// Is a word with the shape of a file name read as one? A path (with a folder) always is. A bare
+/// `name.ext` needs evidence: the file exists, its extension is a common file type
+/// ([`FILE_EXTENSIONS`]), one of the few words before it asks to write it ([`WRITE_WORDS`]), or
+/// it is where a sentence that writes files puts something (`Write the port to port.txt and the
+/// process ID to server.pid`: after "to", with a write word and a file earlier in the sentence,
+/// and not a numeric type: `converts the columns to np.float64`). `np.float64`, `self.data` and
+/// `math.log` have a file name's shape, not its sense: read as files, they were reported
+/// missing and the model was told to write them. `files_before`: the sentence already named one.
+fn file_evidence(w: &str, project: &Path, before: &[String], files_before: bool) -> bool {
+    if w.contains('/') || resolve(w, project).exists() || FILE_EXTENSIONS.split_whitespace().any(|e| e == extension(w))
+    {
+        return true;
+    }
+    let asks_to_write = |b: &String| WRITE_WORDS.split_whitespace().any(|v| v == b);
+    if before.iter().rev().take(WRITE_REACH).any(asks_to_write) {
+        return true;
+    }
+    before.last().is_some_and(|b| b == "to" || b == "into")
+        && files_before
+        && before.iter().any(asks_to_write)
+        && !numeric_type(&extension(w))
+}
+
+/// `float64`, `int8`, `uint16`, `bfloat16`, `complex128`: a numeric type's name, not a file type.
+fn numeric_type(ext: &str) -> bool {
+    let bits = ext.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    bits.len() < ext.len() && matches!(bits, "8" | "16" | "32" | "64" | "128")
+}
+
 fn is_file_word(w: &str) -> bool {
     // `<` and `>` are markup or redirections (`</system-reminder>`, `2>/dev/null`), never a path.
     if w.is_empty()
@@ -802,19 +866,53 @@ mod tests {
     }
 
     #[test]
+    fn a_dotted_code_name_is_not_a_file() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("vocab.bpe"), "x").unwrap();
+        // The shape of a file name, not the sense: no such file, no common file type, and nothing
+        // just before it asks to write it.
+        let ask = "The input is an array with real np.float64 entries. Use `math.log`, not self.data or notes.xyz.";
+        let n = Named::from_request(ask, d.path());
+        assert!(n.files.is_empty(), "{:?}", n.files);
+        // Evidence: it exists, its type is common, or the words just before it ask to write it.
+        let ask = "Read vocab.bpe and fix parser.py. Write me data.comp, then save model.v2.";
+        assert_eq!(Named::from_request(ask, d.path()).files, ["vocab.bpe", "parser.py", "data.comp", "model.v2"]);
+        assert_eq!(Named::from_request("You can generate data.comp any way you want.", d.path()).files, ["data.comp"]);
+        // A path is a file whatever its extension.
+        assert_eq!(Named::from_request("Run /app/a.out on it.", d.path()).files, ["/app/a.out"]);
+        // A write word farther before the name doesn't reach it, and a description isn't a request.
+        for ask in [
+            "Write code that uses np.float64 for the values.",
+            "Write a note that mentions model.v2.",
+            "Write a function that converts the array to np.float64.",
+            "List each handler, written as `module.function` the way the registry stores it.",
+        ] {
+            assert!(Named::from_request(ask, d.path()).files.is_empty(), "{ask}");
+        }
+        // Where a sentence that writes files puts something, unless it is a numeric type.
+        for (ask, files) in [
+            ("Write the compressed form of data.txt to data.comp.", vec!["data.txt", "data.comp"]),
+            ("Write the port number to port.txt and the process ID to server.pid.", vec!["port.txt", "server.pid"]),
+            ("Write a script that loads data.csv and converts the columns to np.float64.", vec!["data.csv"]),
+        ] {
+            assert_eq!(Named::from_request(ask, d.path()).files, files, "{ask}");
+        }
+    }
+
+    #[test]
     fn a_removal_is_a_word_not_letters_inside_one() {
         let d = tempfile::tempdir().unwrap();
         for ask in [
-            "Write the compressed form of data.txt to data.comp.",
-            "Transform data.txt into data.comp for the platform.",
-            "Confirm data.txt converts, then write data.comp.",
+            "Write the compressed form of data.txt to data.json.",
+            "Transform data.txt into data.json for the platform.",
+            "Confirm data.txt converts, then write data.json.",
         ] {
             let n = Named::from_request(ask, d.path());
-            assert_eq!(n.files, ["data.txt", "data.comp"], "{ask}");
+            assert_eq!(n.files, ["data.txt", "data.json"], "{ask}");
             assert!(n.removed.is_empty(), "{ask}");
         }
         for ask in
-            ["rm data.txt, then write data.comp.", "Delete data.txt and data.comp.", "Make sure data.txt is deleted."]
+            ["rm data.txt, then write data.json.", "Delete data.txt and data.json.", "Make sure data.txt is deleted."]
         {
             assert!(Named::from_request(ask, d.path()).removed.contains(&"data.txt".to_string()), "{ask}");
         }
