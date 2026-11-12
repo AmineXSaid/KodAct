@@ -38,23 +38,6 @@ pub(crate) struct Named {
     pub removed: Vec<String>,
 }
 
-/// Words that ask for a file to be gone: what such a sentence names is not missing when it is.
-/// Whole words: `form of`, `platform` and `long-term` have the letters of `rm`, not its sense.
-const REMOVALS: [&str; 13] = [
-    "delete",
-    "deletes",
-    "deleted",
-    "deleting",
-    "remove",
-    "removes",
-    "removed",
-    "removing",
-    "rm",
-    "get rid of",
-    "clean up",
-    "cleans up",
-    "cleaned up",
-];
 /// Words that turn a sentence into a prohibition, or set aside what it names: whole words,
 /// in any case.
 const PROHIBITIONS: [&str; 17] = [
@@ -174,7 +157,7 @@ impl Named {
                 ([], Some((bytes, said))) => unattached.push((type_words(&lower), bytes, said)),
                 _ => {}
             }
-            let removing = REMOVALS.iter().any(|w| has_word(&lower, w));
+            let removing = asks_to_remove(&lower);
             for f in files_here {
                 if removing {
                     push(&mut n.removed, f);
@@ -423,6 +406,28 @@ fn span_at(tokens: &[Option<String>], nth: usize) -> Option<usize> {
 }
 
 /// Is `w` in `text` as a whole word (or phrase): no letter, digit or `_` right before or after.
+/// Does a sentence ask for something to be gone? What it names is then not missing when it is.
+/// By stem, so every form counts (`delete`, `deleted`, `deleting`, `deletion`; `remove`,
+/// `removing`, `removal`; `clean up`, `cleaned up`, `cleanup`; `get rid of`, `got rid of`), and the
+/// command `rm` only as a word of its own: `form of`, `platform` and `long-term` have its letters,
+/// not its sense.
+fn asks_to_remove(lower: &str) -> bool {
+    let words: Vec<&str> = lower
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| !w.is_empty())
+        .collect();
+    has_word(lower, "rid of")
+        || words.iter().enumerate().any(|(i, w)| {
+            w.starts_with("delet")
+                || w.starts_with("remov")
+                || *w == "rm"
+                || *w == "cleanup"
+                || *w == "clean-up"
+                || (w.starts_with("clean") && words.get(i + 1) == Some(&"up"))
+        })
+}
+
 fn has_word(text: &str, w: &str) -> bool {
     text.match_indices(w).any(|(i, _)| {
         let before = text[..i].chars().next_back();
@@ -900,20 +905,33 @@ mod tests {
     }
 
     #[test]
-    fn a_removal_is_a_word_not_letters_inside_one() {
+    fn removal_words_count_in_every_form_and_rm_only_alone() {
         let d = tempfile::tempdir().unwrap();
+        // The letters of `rm` inside another word, or a removal word's letters across words: no removal.
         for ask in [
             "Write the compressed form of data.txt to data.json.",
             "Transform data.txt into data.json for the platform.",
             "Confirm data.txt converts, then write data.json.",
+            "Plan the long-term layout of data.txt and write data.json.",
+            "Draw a grid of data.txt values into data.json.",
         ] {
             let n = Named::from_request(ask, d.path());
             assert_eq!(n.files, ["data.txt", "data.json"], "{ask}");
             assert!(n.removed.is_empty(), "{ask}");
         }
-        for ask in
-            ["rm data.txt, then write data.json.", "Delete data.txt and data.json.", "Make sure data.txt is deleted."]
-        {
+        // Any form of a removal word, and `rm` as a word of its own.
+        for ask in [
+            "rm data.txt, then write data.json.",
+            "Run rm -f data.txt first.",
+            "Delete data.txt and data.json.",
+            "Make sure data.txt is deleted.",
+            "Deleting data.txt is part of the job.",
+            "Removing data.txt is fine.",
+            "The removal of data.txt is wanted.",
+            "Clean up data.txt when done.",
+            "We cleaned up data.txt already.",
+            "Get rid of data.txt.",
+        ] {
             assert!(Named::from_request(ask, d.path()).removed.contains(&"data.txt".to_string()), "{ask}");
         }
     }

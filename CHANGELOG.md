@@ -19,10 +19,11 @@
   it again. Only files that weren't there when the turn started count (task
   `rename-file`).
 - **"Form", "platform" or "confirm" don't make a sentence a removal**: the
-  words that set a sentence's files aside ("delete", "rm") were matched as
-  letters, so "the compressed form of data.txt" or "transform" dropped every
-  file the sentence named. Markup (`</system-reminder>`) is no longer read as a
-  file either.
+  command `rm` was matched as letters, so "the compressed form of data.txt" or
+  "transform" dropped every file the sentence named. `rm` now counts only as a
+  word of its own, and the removal words by their stem, so every form counts
+  ("deleted", "deleting", "removal", "cleaned up", "got rid of"). Markup
+  (`</system-reminder>`) is no longer read as a file either.
 - **`np.float64` isn't a file**: a dotted code name had a file name's shape
   (`np.float64`, `self.data`, `math.log`, `app.registry.route`), so the
   constraint note and the pace warning said it was missing and asked the model
