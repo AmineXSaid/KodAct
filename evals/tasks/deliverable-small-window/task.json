@@ -10,8 +10,7 @@
     "deliverable"
   ],
   "timeout_secs": 900,
-  "args": [
-    "--autocompact",
-    "32k"
-  ]
+  "env": {
+    "KODACT_CONTEXT_WINDOW": "32000"
+  }
 }

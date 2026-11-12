@@ -47,6 +47,10 @@ pub struct TaskSpec {
     /// Extra `kodact` arguments for this task.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Environment for this task's `kodact` runs (`KODACT_CONTEXT_WINDOW`, for a task about a
+    /// small window). Set after the run's own environment, so a task's value wins.
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
     /// A message sent while the agent works, as a desktop host sends one.
     #[serde(default)]
     pub steer: Option<SteerSpec>,
@@ -516,7 +520,7 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    for (k, v) in &opts.env {
+    for (k, v) in opts.env.iter().map(|(k, v)| (k, v)).chain(task.spec.env.iter()) {
         cmd.env(k, v);
     }
     let started = Instant::now();
@@ -590,7 +594,7 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        for (k, v) in &opts.env {
+        for (k, v) in opts.env.iter().map(|(k, v)| (k, v)).chain(task.spec.env.iter()) {
             cmd.env(k, v);
         }
         let left = timeout.saturating_sub(started.elapsed());
@@ -1059,5 +1063,23 @@ mod tests {
         let cmp = render_compare(&a, &b);
         assert!(cmp.contains("| Pass rate | 0% | 100% | B better |"));
         assert!(cmp.contains("| Cost per task | $0.2000 | $0.3000 | A better |"));
+    }
+
+    #[test]
+    fn a_task_can_set_environment_for_its_runs() {
+        let spec: TaskSpec =
+            serde_json::from_str(r#"{"instruction": "x", "check": "true", "env": {"KODACT_CONTEXT_WINDOW": "32000"}}"#)
+                .unwrap();
+        assert_eq!(spec.env.get("KODACT_CONTEXT_WINDOW").map(String::as_str), Some("32000"));
+        let plain: TaskSpec = serde_json::from_str(r#"{"instruction": "x", "check": "true"}"#).unwrap();
+        assert!(plain.env.is_empty());
+        // The small-window task asks for its window this way: `--autocompact` takes 100k at least.
+        let t = load_tasks(
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../evals/tasks")),
+            &["deliverable-small-window".into()],
+        )
+        .unwrap();
+        assert_eq!(t[0].spec.env.get("KODACT_CONTEXT_WINDOW").map(String::as_str), Some("32000"));
+        assert!(!t[0].spec.args.iter().any(|a| a == "--autocompact"));
     }
 }

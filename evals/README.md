@@ -12,6 +12,9 @@ A task can also send a message while the agent works, as a desktop host does:
 and sends `text` for the turn's next step once the agent has made N tool calls
 (as the next turn, if the turn ends first).
 
+`"env": {"NAME": "value"}` sets environment variables for that task's runs, after the
+run's own (a small window with `KODACT_CONTEXT_WINDOW`).
+
 `"crash": {"after_tool_calls": N, "resume": "Continue."}` kills kodact once
 the agent has made N tool calls, as a crash or a closed terminal does, then
 runs `kodact -p <resume> --continue` in the same workspace; both parts go to
@@ -82,6 +85,7 @@ and stderr.
 | log-needle | context | A 330 KB log with one error line in the middle; the fix is one setting |
 | verbose-stages | context | A four-stage build that traces every record and stops at the first failing stage, with a bug in each: every run adds up to 30,000 characters, so a typical fix brings the conversation near the compaction threshold of a 100k window (`--autocompact 100k`). Compactions should happen only once the conversation is that full, and a failed summary is tried at most twice (`compactions`, `compact_failures`) |
 | deliverable-after-compaction | context | The verbose-stages build, plus a deliverable the instruction names once, at the start: `FIXES.toml` listing the stages changed, in pipeline order. Each run of the build adds up to 30,000 characters, so the conversation reaches the compaction threshold of a 100k window (`--autocompact 100k`) before the work is done; the file must still be written, in the format asked, after any compaction |
+| deliverable-small-window | context | The deliverable-after-compaction build at a 32k window (`env`: `KODACT_CONTEXT_WINDOW=32000`): the conversation is compacted several times before the work is done, and `FIXES.toml` must still be written as asked. The variable applies only to a model KodAct knows no window for; with a known model the task runs at that model's own window |
 | env-default | context | Find one bug among many files from a vague report |
 | trace-discount | context | Trace a symptom through 40 modules to a casing bug two calls away (exercises sub-agents) |
 | build-recovery | recovery | Iterate on a build script's successive errors without editing it |
