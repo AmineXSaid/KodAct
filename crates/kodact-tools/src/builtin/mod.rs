@@ -22,7 +22,7 @@ pub use glob::Glob;
 pub use grep::Grep;
 pub use interact::{AskUserQuestion, EnterPlanMode, ExitPlanMode};
 pub use ls::Ls;
-pub use memory::{notes_path, Checkpoint, Checkpoints, Notes, NotesStore};
+pub use memory::{drop_checkpoint, notes_path, Checkpoint, Checkpoints, Notes, NotesStore};
 pub use notebook::NotebookEdit;
 pub use read::Read;
 pub use todo::TodoWrite;

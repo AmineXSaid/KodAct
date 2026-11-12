@@ -193,6 +193,19 @@ fn shown(paths: &[PathBuf]) -> Vec<String> {
     paths.iter().map(|p| p.display().to_string()).collect()
 }
 
+/// Forget the checkpoint `label` (in a repository, its ref): for a checkpoint KodAct saved
+/// itself and has replaced with a newer one. Nothing in the working tree changes.
+pub fn drop_checkpoint(ctx: &ToolContext, label: &str) {
+    match GitCheckpoints::of(ctx) {
+        Some(git) => {
+            for (name, _) in git.list().into_iter().filter(|(_, l)| l == label) {
+                let _ = kodact_git::delete_ref(&git.repo, &name);
+            }
+        }
+        None => ctx.checkpoints.saved.lock().unwrap().retain(|s| s.label != label),
+    }
+}
+
 pub struct Checkpoint;
 
 #[async_trait::async_trait]
