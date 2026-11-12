@@ -31,3 +31,19 @@ What it shows, and what it doesn't:
 
 Nothing is turned on by default from this. Owed: runs on tasks where the nudges' conditions
 actually arise, and more of them (`--repeat 5` at least), on more than one model.
+
+## Progress, 5 runs a side (same day)
+
+`scripts/nudge-ab.sh --repeat 5 progress`, same model and settings, task `map-the-routes`
+(`progress-5x.md`). Every run passed on both sides. Turns 12.0 → 9.0, tokens 139k → 99k,
+wall time 95s → 63s with the nudge on.
+
+The nudge spoke in one of the five "on" runs (the early form, once). The four "on" runs it
+never spoke in were shorter too (7 to 9 turns, against 9 to 16 with it off), so the
+difference is not the nudge's doing: it is the same run-to-run spread as in the 2-run
+comparison above. Over both comparisons the nudge fired in 2 of 7 runs where it could have,
+and both of those runs passed.
+
+Conclusion for now: on this task and model the progress nudge rarely has anything to say and
+costs nothing when silent. Whether it helps when it speaks needs a task where models stall
+more often. It stays off by default.

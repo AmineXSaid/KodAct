@@ -215,7 +215,10 @@ Each pillar lists what KodAct does about it and what shows that it works.
     turns on only after its before/after shows it helps. First A/B
     (`evals/baselines/2026-11-12-nudges/`, a small model, 2 runs a side, 5
     groups): one nudge given in 20 runs, none where nothing went wrong, so
-    they stay out of the way; no effect could be measured, and none is on;
+    they stay out of the way; no effect could be measured, and none is on.
+    The progress nudge at 5 runs a side: every run passed both ways; the
+    nudge spoke in 1 of 5 runs, so the shorter runs with it on were not its
+    doing;
   - the task list (TodoWrite) survives compaction: it is re-attached to the
     summary and recorded as `system/todos`. It also survives resume: it is
     rebuilt from the last TodoWrite call or that record;
