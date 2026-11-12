@@ -32,8 +32,54 @@ Before proposing or making a fix, check it against each point:
 6. **Prompts speak to every model.** A prompt rule is good practice for any
    model, worded as such, not a workaround for one model's habits.
 
+7. **Everyday work comes first.** Most sessions are a person at a terminal
+   with a small request and no budget or deadline: a question about the
+   code, a one-file fix, a rename, a command explained. A change is judged
+   there first. What it does for a time-boxed unattended run is a second
+   question, and a mechanism that only acts in such runs says so and is not
+   counted as helping daily use.
+8. **Quiet unless it has something to say.** Every reminder, nudge and hint
+   costs tokens on every model and attention on a strong one. KodAct speaks
+   when it holds a fact the model does not have (the file no longer parses,
+   this check was never run, the call returned nothing), not to give advice
+   the model could give itself. Notes due at the same moment go in one
+   message, never one model call each. A nudge the model acted on is kept;
+   one it did not need is dropped for the run. A nudge is never silenced
+   for having worked.
+9. **A turn with nothing to report costs nothing.** On the common path (the
+   model works, the checks pass) a feature adds no model call, no wait and
+   no process. Its proposal states that cost: the tokens it adds to every
+   request, and what it adds to a turn where it stays silent, which should
+   be zero. Speed is part of the goal, not a side effect.
+10. **A guess about what the person meant must fail safe.** Reading a
+    request for the files, commands and limits it names is a guess. It acts
+    on positive evidence (the request asks to run this), never on the
+    absence of a word (no "don't" nearby), and a wrong reading may cost a
+    line of text, never a suggestion to do what the person ruled out. Word
+    lists in one language are a fit to that language: where the request is
+    in another, the mechanism says nothing.
+
 A proposal states, next to its effect in real use, how it behaves on a large
-model.
+model, and what it costs an everyday turn in which it has nothing to say.
+
+## What KodAct is for
+
+A person's daily companion at the terminal: fast, cheap and right on
+ordinary work, with any model. Not a benchmark runner. The same harness has
+to serve a strong model, which needs facts and otherwise silence, and a
+small one, which needs more help, without knowing which it is running: the
+difference comes from what the model does in the run (it stalls, it repeats,
+it breaks a file), never from its name or size. A feature that makes a
+benchmark task pass and a daily session slower or noisier is a loss.
+
+## How quiet is checked
+
+On tasks a model solves without help, the harness should add nothing. Run
+them twice with the same model, once with `reminders: false` and once with
+the configuration under test, and compare tokens, model calls and wall time
+per task (`kodact-eval compare`): at the same pass rate the two should
+match. Any difference is what the configuration costs when it is not
+needed, and it is stated with the change.
 
 ## How it is checked without a large model at hand
 
