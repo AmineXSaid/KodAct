@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -761,6 +762,11 @@ pub struct Engine {
     watched: crate::named::Watched,
     /// Nudges silenced for the rest of the run (`nudges.backOff`).
     back_off: crate::progress::BackOff,
+    /// Files written since a check last passed: writing one of them again is not counted as
+    /// progress by the pacing nudges.
+    written_unchecked: HashSet<PathBuf>,
+    /// This step's only progress was writing again to such files.
+    rewrite_only: bool,
     /// The shell-edit suggestion was given this turn.
     shell_edit_told: bool,
     /// Shell commands run this turn, for the constraint report.
@@ -906,6 +912,8 @@ impl Engine {
             named: Default::default(),
             watched: Default::default(),
             back_off: Default::default(),
+            written_unchecked: Default::default(),
+            rewrite_only: false,
             shell_edit_told: false,
             ran_commands: vec![],
             constraints_told: false,
@@ -3024,7 +3032,7 @@ impl Engine {
                     self.unsaved = None;
                 }
                 self.judge_limits(&tool_uses, &mut results, turn.api_calls, named_changed);
-                let made_progress = self.made_progress(&tool_uses, &results, writes_before, named_changed);
+                let made_progress = self.made_progress(&tool_uses, &results, writes_before, &changed_named);
                 // Long thinking: a quarter of the reply budget, at least 2,000 tokens.
                 let long = self.last_thought >= u64::from(sent / 4).max(2_000);
                 self.effort_step(if made_progress {
@@ -3850,32 +3858,46 @@ impl Engine {
         calls: &[(String, String, Value)],
         results: &[crate::exec::CallResult],
         writes_before: usize,
-        named_changed: bool,
+        changed_named: &[String],
     ) -> bool {
-        if named_changed {
-            return true;
-        }
         let any_write = !self.watched.asks_for_new();
-        if any_write && self.shared.history.writes_len() > writes_before {
-            return true;
-        }
         let configured = self.check_commands();
         let changed = self.shared.history.writes_since(0);
-        calls.iter().zip(results).any(|((_, name, input), r)| {
-            if r.denial.is_some() || r.output.is_error {
+        // A check that passed, or (no file named) a command that changed something.
+        let ran = calls.iter().zip(results).any(|((_, name, input), r)| {
+            if name != "Bash" || r.denial.is_some() || r.output.is_error {
                 return false;
             }
-            match name.as_str() {
-                "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => any_write,
-                "Bash" => {
-                    let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
-                    crate::verify::is_check(command, &configured, &changed)
-                        || (!self.named.names_files()
-                            && !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true))
-                }
-                _ => false,
-            }
-        })
+            let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
+            crate::verify::is_check(command, &configured, &changed)
+                || (!self.named.names_files()
+                    && !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true))
+        });
+        self.rewrite_only = false;
+        if ran {
+            self.written_unchecked.clear();
+            return true;
+        }
+        // A write is progress the first time it reaches a file: a file the request names (by
+        // any tool), or, when it asks for no new file, any file an edit tool wrote. Writing the
+        // same files again with no check passing in between is the model going over its own
+        // work: that may be careful editing or thrashing, and the stretch doesn't start over.
+        let project = self.shared.tool_ctx.project_dir.clone();
+        let mut wrote: Vec<PathBuf> = changed_named.iter().map(|n| project.join(n)).collect();
+        if any_write {
+            wrote.extend(self.shared.history.writes_since(writes_before));
+        }
+        if wrote.is_empty() {
+            return false;
+        }
+        let mut new = false;
+        for p in wrote {
+            new |= self.written_unchecked.insert(p);
+        }
+        // Still work produced (for back-off and the reasoning level); only the pacing stretch
+        // treats it as going over the same ground.
+        self.rewrite_only = !new;
+        true
     }
 
     /// Shell output held against the limits the request states (`nudges.limitVerdicts`), and a
@@ -4175,9 +4197,12 @@ impl Engine {
             return None;
         }
         let cost = self.state.total_cost_usd;
-        if made {
+        if made && !self.rewrite_only {
             self.progress.made(cost);
             return None;
+        }
+        if made {
+            self.progress.rewrote();
         }
         self.progress.step();
         self.back_off.step();

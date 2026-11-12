@@ -3725,3 +3725,31 @@ async fn only_the_newest_passing_version_is_kept() {
     let listed = tool_results(&e).last().unwrap().1.clone();
     assert_eq!(listed.lines().count(), 1, "one checkpoint left: {listed}");
 }
+
+/// Rewriting the same file again and again with no check between is not progress: the stretch
+/// goes on, and its nudge says to run a check. Writing a new file each time is progress.
+#[tokio::test]
+async fn rewriting_one_file_without_a_check_is_not_progress() {
+    let n = crate::progress::NO_BUDGET_CALLS as usize + 2;
+    let run = |same_file: bool| async move {
+        let h = Harness::new(vec![]);
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        std::fs::write(h.cwd().join("app.py"), "v = 0\n").unwrap();
+        h.provider.push(MockTurn::tool("Read", json!({"file_path": h.cwd().join("app.py")})));
+        for i in 0..n {
+            let name = if same_file { "app.py".to_string() } else { format!("part_{i}.py") };
+            let f = h.cwd().join(name);
+            h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": format!("v = {i}\n")})));
+        }
+        h.provider.push(MockTurn::text("done"));
+        let cfg = EngineConfig { verify: None, ..nudged_cfg("progress") };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("improve app.py")).await;
+        let t = h.transcript_text();
+        let text =
+            h.provider.requests().iter().map(|r| serde_json::to_string(&r.messages).unwrap()).collect::<String>();
+        (nudges(&t).len(), text.contains("Run a check on what is there"))
+    };
+    assert_eq!(run(true).await, (1, true), "the same file over and over: nudged to check");
+    assert_eq!(run(false).await, (0, false), "a new file each time is progress");
+}
