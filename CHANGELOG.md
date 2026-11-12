@@ -28,6 +28,10 @@
   download, a test run, a background command) is left out of a pacing
   stretch's share of `--max-time`, so a long command the model couldn't
   shorten brings no "no progress" nudge.
+- **Rewriting isn't progress**: when the request asks for no new file, a
+  file counts as progress the first time it changes since a check last
+  passed. A model that keeps rewriting the same lines with no check passing
+  now meets the pacing nudge instead of resetting it with every write.
 
 ### Watching a Harbor run, as a chat
 - **`evals/harbor/watch.py` shows a job from its start and then live**, with no

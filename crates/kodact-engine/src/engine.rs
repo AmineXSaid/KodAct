@@ -755,6 +755,9 @@ pub struct Engine {
     guard: crate::stuck::LoopGuard,
     /// This turn's progress, for the pacing nudges.
     progress: crate::progress::Progress,
+    /// Files written since a check last passed this turn: writing one of them again is
+    /// rewriting, not progress, until a check passes.
+    written_since_check: Vec<std::path::PathBuf>,
     /// What this turn's request names: its files and commands.
     named: crate::named::Named,
     /// The named files on disk, watched for progress.
@@ -903,6 +906,7 @@ impl Engine {
             verify: Default::default(),
             guard: Default::default(),
             progress: Default::default(),
+            written_since_check: vec![],
             named: Default::default(),
             watched: Default::default(),
             back_off: Default::default(),
@@ -2516,6 +2520,7 @@ impl Engine {
         self.verify = Default::default();
         self.guard = Default::default();
         self.progress = crate::progress::Progress::new(self.state.total_cost_usd);
+        self.written_since_check.clear();
         self.named = crate::named::Named::from_request(&prompt_text, &self.shared.tool_ctx.project_dir);
         self.watched = crate::named::Watched::at_start(&self.named, &self.shared.tool_ctx.project_dir);
         self.shell_edit_told = false;
@@ -3024,7 +3029,7 @@ impl Engine {
                     self.unsaved = None;
                 }
                 self.judge_limits(&tool_uses, &mut results, turn.api_calls, named_changed);
-                let made_progress = self.made_progress(&tool_uses, &results, writes_before, named_changed);
+                let made_progress = self.made_progress(&tool_uses, &results, writes_before, &changed_named);
                 // Long thinking: a quarter of the reply budget, at least 2,000 tokens.
                 let long = self.last_thought >= u64::from(sent / 4).max(2_000);
                 self.effort_step(if made_progress {
@@ -3851,32 +3856,51 @@ impl Engine {
         calls: &[(String, String, Value)],
         results: &[crate::exec::CallResult],
         writes_before: usize,
-        named_changed: bool,
+        changed_named: &[String],
     ) -> bool {
-        if named_changed {
-            return true;
-        }
-        let any_write = !self.watched.asks_for_new();
-        if any_write && self.shared.history.writes_len() > writes_before {
-            return true;
-        }
         let configured = self.check_commands();
         let changed = self.shared.history.writes_since(0);
-        calls.iter().zip(results).any(|((_, name, input), r)| {
-            if r.denial.is_some() || r.output.is_error {
-                return false;
+        let ok = |r: &crate::exec::CallResult| r.denial.is_none() && !r.output.is_error;
+        let check_passed = calls.iter().zip(results).any(|((_, name, input), r)| {
+            let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
+            name == "Bash" && ok(r) && crate::verify::is_check(command, &configured, &changed)
+        });
+        // Rewriting a file already written since the last passing check is not progress: a
+        // model that keeps changing the same lines with no check passing looks busy, not done.
+        if check_passed {
+            self.written_since_check.clear();
+        }
+        // Written this step: by the edit tools, and the named files whatever changed them.
+        let mut written = self.shared.history.writes_since(writes_before);
+        for name in changed_named {
+            let path = self.shared.tool_ctx.project_dir.join(name);
+            if !written.contains(&path) {
+                written.push(path);
             }
-            match name.as_str() {
-                "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => any_write,
-                "Bash" => {
-                    let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
-                    crate::verify::is_check(command, &configured, &changed)
-                        || (!self.named.names_files()
-                            && !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true))
-                }
-                _ => false,
+        }
+        let fresh = written.iter().any(|f| !self.written_since_check.contains(f));
+        for f in written {
+            if !self.written_since_check.contains(&f) {
+                self.written_since_check.push(f);
             }
-        })
+        }
+        if check_passed {
+            return true;
+        }
+        if self.watched.asks_for_new() {
+            // The request asks for files that don't exist yet: a change to one is progress.
+            if !changed_named.is_empty() {
+                return true;
+            }
+        } else if fresh {
+            // Otherwise a change to a file counts the first time since the last passing check.
+            return true;
+        }
+        // A request that names no file: a shell command that changed something counts.
+        !self.named.names_files()
+            && calls.iter().zip(results).any(|((_, name, input), r)| {
+                name == "Bash" && ok(r) && !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true)
+            })
     }
 
     /// Shell output held against the limits the request states (`nudges.limitVerdicts`), and a

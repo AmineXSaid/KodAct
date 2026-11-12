@@ -3144,6 +3144,41 @@ async fn a_named_check_is_told_not_run() {
     }
 }
 
+/// Rewriting is not progress (docs/goal.md, rule 8): writing the same file again and again with
+/// no check passing is one stretch, nudged at the count; writing different files, or one file
+/// with a passing check between the rewrites, is progress each time and never nudged.
+#[tokio::test]
+async fn rewriting_the_same_file_with_no_check_passing_is_not_progress() {
+    if std::process::Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let run = |how: &'static str| async move {
+        let h = Harness::new(vec![]);
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        std::fs::write(h.cwd().join("app.py"), "x = 0\n").unwrap();
+        std::fs::write(h.cwd().join("test_app.py"), "import app\n").unwrap();
+        for i in 0..crate::progress::NO_BUDGET_CALLS as usize + 2 {
+            let file = if how == "other files" { format!("m{i}.py") } else { "app.py".to_string() };
+            let content = format!("x = {i}\n");
+            h.provider.push(MockTurn::tool("Write", json!({"file_path": h.cwd().join(file), "content": content})));
+            if how == "checked" {
+                h.provider.push(MockTurn::tool(
+                    "Bash",
+                    json!({"command": "python3 -m pytest -q test_app.py || python3 test_app.py"}),
+                ));
+            }
+        }
+        h.provider.push(MockTurn::text("done"));
+        let cfg = EngineConfig { verify: None, ..nudged_cfg("progress") };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("Fix app.py.")).await;
+        nudges(&h.transcript_text()).len()
+    };
+    assert_eq!(run("same file").await, 1, "the same file rewritten: one stretch, nudged");
+    assert_eq!(run("other files").await, 0, "a different file each time: progress");
+    assert_eq!(run("checked").await, 0, "a passing check between rewrites: progress");
+}
+
 /// Waiting is not stalling (docs/goal.md, rule 8): time inside a slow command is left out of
 /// a stretch's time, so steps that wait on a build get no pacing nudge; the same number of
 /// steps whose time is the model's own does.

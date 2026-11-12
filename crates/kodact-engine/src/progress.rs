@@ -5,7 +5,9 @@
 //! watches for something else: a long stretch of varied calls in which nothing was made.
 //! Progress is a file written by an edit tool, or a check that passed; when the person's
 //! request names no file, any call that changed something counts too (a request to start a
-//! service, to commit, to install). A stretch without progress that runs past its share of the
+//! service, to commit, to install). Rewriting a file already written since the last passing
+//! check is not progress: a model that keeps changing the same lines with no check passing
+//! looks busy, not done. A stretch without progress that runs past its share of the
 //! run's budget gets one suggestion to make the next concrete step, which the model is free to
 //! ignore when it is still rightly looking.
 //!
@@ -348,13 +350,13 @@ pub(crate) fn text(kind: Nudge, s: Stretch, has_budget: bool) -> String {
             s.calls
         ),
         (_, true) => format!(
-            "{} model calls (about {pct}% of this run's budget) have passed since anything was written or a check \
-             passed. Take stock: if you have what you need, make the change now; if you are answering a \
+            "{} model calls (about {pct}% of this run's budget) have passed since anything new was written or a \
+             check passed. Take stock: if you have what you need, make the change now; if you are answering a \
              question, answer with what you have. Ignore this if your next step is already a change.",
             s.calls
         ),
         (_, false) => format!(
-            "{} model calls have passed since anything was written or a check passed. Take stock: if you have \
+            "{} model calls have passed since anything new was written or a check passed. Take stock: if you have \
              what you need, make the change now; if you are answering a question, answer with what you have. \
              Ignore this if your next step is already a change, or if more looking is what was asked.",
             s.calls
