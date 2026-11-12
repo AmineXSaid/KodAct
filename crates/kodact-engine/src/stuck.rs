@@ -532,8 +532,8 @@ mod tests {
 
     #[test]
     fn polling_the_same_background_output_still_fires() {
-        // pytorch-model-cli (22f2cd7), gpt2-codegolf (963438f): a background job polled with
-        // BashOutput while other commands ran; its output hadn't changed.
+        // Seen in two runs (22f2cd7, 963438f): a background job polled with BashOutput while
+        // other commands ran; its output hadn't changed.
         let mut g = LoopGuard::default();
         let poll = json!({"bash_id": "bash_2"});
         for i in 0..2 {
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn results_are_forgotten_after_a_microcompaction() {
         let mut g = LoopGuard::default();
-        let read = json!({"file_path": "/app/warriors/stone.red"});
+        let read = json!({"file_path": "/work/players/stone.agent"});
         assert_eq!(g.observe("Read", &read, "x", false, false), None);
         assert_eq!(g.observe("Read", &read, "x", false, false), None);
         g.forget_results();

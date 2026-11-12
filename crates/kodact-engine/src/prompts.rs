@@ -191,7 +191,7 @@ mod tests {
         assert!(blocks[0].text.contains("\nShell: Git Bash (C:\\Program Files\\Git\\bin\\bash.exe)\n"));
     }
 
-    /// llm-inference-batching-scheduler (22f2cd7): every threshold passed at reply 19 of 35, and
+    /// A run (22f2cd7): every threshold passed at reply 19 of 35, and
     /// the rest of the run widened margins on deterministic metrics that couldn't change the
     /// grade; the rework broke the solver script, restored with about 5 minutes left. The rule is
     /// in the prompt for every mode, and it keeps the remaining work (06eba3b still had to write
@@ -224,9 +224,9 @@ mod tests {
         }
     }
 
-    /// winning-avg-corewars (231fd6b): an imp-based warrior lost 0-100 in seven tries (replies 44
-    /// to 79), including after the model wrote "imps are useless" at reply 58, while the parameter
-    /// sweeps that moved stone from 59 to 75 wins got less of the time. The score is in free-form
+    /// A run (231fd6b): one approach lost every game in seven tries (replies 44 to 79),
+    /// including after the model wrote that it was useless at reply 58, while the parameter
+    /// sweeps that moved another from 59 to 75 wins got less of the time. The score is in free-form
     /// output, so the switch is the model's call, made on its own measured results.
     #[test]
     fn autonomous_section_is_added_only_when_asked() {

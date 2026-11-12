@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn a_missing_parameter_names_keys_the_tool_does_not_take() {
-        // Seen on Terminal-Bench write-compressor: the file body sent as `file_path_content`.
+        // Seen in a run: the file body sent as `file_path_content`.
         let e = validate_required(&write_schema(), &json!({"file_path": "/a.pl", "file_path_content": "code"}))
             .unwrap_err();
         assert_eq!(

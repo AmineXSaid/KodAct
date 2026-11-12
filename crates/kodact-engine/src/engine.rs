@@ -303,8 +303,7 @@ const REASONING_HEAD: usize = 2_000;
 const REASONING_TAIL: usize = 6_000;
 /// For a reply that ended normally with no text and no tool call (only reasoning, or nothing).
 /// Taken as the end of the turn, it leaves the work undone and the person with an empty answer:
-/// seen on Terminal-Bench gpt2-codegolf, where such a reply ended unattended runs that had only
-/// started (06eba3b, ce92502).
+/// seen ending unattended runs that had only started (06eba3b, ce92502).
 const EMPTY_REPLY_PROMPT: &str = "<system-reminder>\nYour reply ended without an answer or an action: it had \
                                   no text and no tool call. Do not restart the analysis. Act on what you have now: \
                                   take the next concrete step (run a command, make an edit, or give your answer), \
@@ -1584,7 +1583,7 @@ impl Engine {
     /// Take the conversation's size from a reply in it, which is pushed right after: what its
     /// request held, plus what the next request carries of the reply. Its reasoning counts only
     /// when the provider sends reasoning back. Over chat completions it is gone after the reply,
-    /// and counting it compacted conversations at a quarter of the window (regex-chess, 9ef0955:
+    /// and counting it compacted conversations at a quarter of the window (9ef0955:
     /// 24k tokens in the request plus a 32k reply that was all reasoning, counted as 56k).
     fn measure_context(&mut self, model: &str, reply: &ApiMessage) {
         let u = &reply.usage;
@@ -1697,7 +1696,7 @@ impl Engine {
     /// Compact to make room: the conversation is nearly full, or (`overflowed`) no longer fits.
     /// A failed summary is never sent again unchanged: it gets one corrected try, then KodAct's
     /// own note stands in. An automatic attempt used to be repeated, the same, before every later
-    /// request (path-tracing-reverse, 9ef0955: seven empty summaries in a row, 140k tokens, about
+    /// request (9ef0955: seven empty summaries in a row, 140k tokens, about
     /// half of the run's 30 minutes). Nearly full, only an empty summary gets this (an API error
     /// may pass, and the conversation still fits); once it no longer fits, any failure but an
     /// interruption does, since the run can't go on without it.
@@ -1769,7 +1768,7 @@ impl Engine {
         });
         self.summary_effort(&mut req);
         // The summary gets a reply's whole output budget: a model that reasons spends its
-        // reasoning from the same budget before writing the summary. At 20k, path-tracing-reverse
+        // reasoning from the same budget before writing the summary. At 20k, a run
         // (9ef0955) reasoned to the limit and wrote nothing seven times in a row, and five of the
         // eight summaries that did come back that run used 18k to 20k.
         let sent = req.max_tokens;
@@ -1808,7 +1807,7 @@ impl Engine {
 
     /// Replace the conversation with `summary` (a full compaction). The person's requests go
     /// with it word for word, whatever the summary kept: a summary that lost the task left a
-    /// model rebuilding it from the last step it was on (video-processing, 090446d). The
+    /// model rebuilding it from the last step it was on (090446d). The
     /// requests are recorded (`system/requests`) so a resumed session carries them on too.
     fn install_summary(&mut self, trigger: &str, summary: String, continue_work: bool, model: &str) -> CompactInfo {
         let pre_tokens = self.projected_context_tokens();
@@ -2743,7 +2742,7 @@ impl Engine {
                         NoticeLevel::Warning,
                         "The conversation no longer fits the context window; compacting.",
                     );
-                    // Here a failed summary would end the run (password-recovery, 4e06b66: one
+                    // Here a failed summary would end the run (4e06b66: one
                     // came back empty, the next attempt worked).
                     let compacted = self.compact_for_room(true, true, &model, &cancel, &mut turn).await;
                     match compacted {
@@ -3281,7 +3280,7 @@ impl Engine {
 
             // Unattended: what still runs in the background is stopped when the session ends,
             // right after this turn, so a service the task needs would be gone before anything
-            // checks it (pypi-server, 9ef0955). Said once, with what is still running.
+            // checks it (9ef0955). Said once, with what is still running.
             if self.cfg.reminders
                 && self.cfg.autonomous
                 && !self.cfg.is_subagent
@@ -3336,8 +3335,8 @@ impl Engine {
                 Some(StopReason::Other) => "other",
             };
             // Ended with no answer: the last replies were all reasoning, and the reminders to act
-            // are used up. "Success" would tell a script the work was done (write-compressor,
-            // 9ef0955: four replies cut off while reasoning, nothing written, reported as success).
+            // are used up. "Success" would tell a script the work was done (9ef0955: four replies cut
+            // off while reasoning, nothing written, reported as success).
             if !reply_has_text && !was_continuation && stop_reason != Some(StopReason::Refusal) {
                 self.notice(NoticeLevel::Error, NO_ANSWER);
                 turn.errors.push(NO_ANSWER.into());
@@ -3560,8 +3559,8 @@ impl Engine {
     /// The reminder after a reply that was all reasoning, and how many characters of that
     /// reasoning it hands back. A provider that sends reasoning back keeps it in the next request,
     /// and `plain` applies. One that doesn't (chat completions) drops it, and "do not restart the
-    /// analysis" asks for what the model no longer has: write-compressor (9ef0955) began the same
-    /// analysis of the decoder again in three cut-off replies in a row and wrote nothing. There,
+    /// analysis" asks for what the model no longer has: a run (9ef0955) began the same analysis
+    /// again in three cut-off replies in a row and wrote nothing. There,
     /// the reminder carries how the reasoning began and where it stopped.
     fn act_reminder(&self, plain: &str, what: &str, model: &str, reasoning: &str) -> (String, usize) {
         if reasoning.trim().is_empty() || self.shared.provider.resends_reasoning(model) {
