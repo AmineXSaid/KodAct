@@ -5,7 +5,11 @@
 //!   with an extension (`answer.txt`). URLs, e-mail addresses, version numbers (`1.4.0`) and
 //!   abbreviations (`e.g.`) are not files.
 //! - A **command** is a span in backticks whose first word is a program this machine has
-//!   (on `PATH`) or a script in the project (`./build.sh`, `python3 run_tests.py`).
+//!   (on `PATH`) or a script in the project (`./build.sh`, `python3 run_tests.py`), and that
+//!   the request asks to run or to pass: "run `make test`", "make `make test` pass", "verify
+//!   with `pytest -q`". A command only mentioned ("see `make deploy` for releases") is not asked
+//!   for: reading a request is a guess, and it acts on what the request says, never on a word
+//!   it lacks (docs/goal.md, rule 10).
 //! - A **size limit** is a size with its unit (`40 KB`, `2048 bytes`, `<5000 bytes`) after "at
 //!   most", "under", "no more than", "less than", "smaller than", "below", "max", "maximum",
 //!   "limit" or `<`/`<=`/`≤`. "Under", "less than", "smaller than", "below" and `<` are strict
@@ -15,8 +19,11 @@
 //!   doesn't exist yet, or, of several, of the one whose type the sentence names ("c program":
 //!   `gpt2.c`; "the Python script": `run.py`).
 //!
-//! A sentence that says not to do something ("don't run `make deploy`", "never touch
-//! secrets.env") names nothing: what it names is not asked for.
+//! A sentence that says not to do something, or sets something aside ("don't run `make
+//! deploy`", "never touch secrets.env", "avoid `git push`", "use X instead of Y", "without
+//! `sudo`"), names nothing: what it names is not asked for. A request that isn't in English
+//! names nothing at all: these words are English, and in another language a prohibition would
+//! be missed, so the reading stays silent rather than guess.
 
 use std::path::{Path, PathBuf};
 
@@ -33,8 +40,63 @@ pub(crate) struct Named {
 
 /// Words that ask for a file to be gone: what such a sentence names is not missing when it is.
 const REMOVALS: [&str; 5] = ["delete", "remove", "rm ", "get rid of", "clean up"];
-/// Words that turn a sentence into a prohibition.
-const NEGATIONS: [&str; 6] = ["don't", "do not", "never", "must not", "should not", "shouldn't"];
+/// Words that turn a sentence into a prohibition, or set aside what it names: whole words,
+/// in any case.
+const PROHIBITIONS: [&str; 17] = [
+    "don't",
+    "dont",
+    "do not",
+    "never",
+    "not",
+    "must not",
+    "mustn't",
+    "shouldn't",
+    "cannot",
+    "can't",
+    "won't",
+    "avoid",
+    "avoiding",
+    "without",
+    "instead of",
+    "except",
+    "skip",
+];
+/// Words just before a command that ask to run it ("run `make test`", "then execute `./x.sh`").
+const RUN_WORDS: [&str; 8] = ["run", "rerun", "re-run", "execute", "invoke", "launch", "start", "call"];
+/// Words just after a command that ask for it to pass ("make `make test` pass", "`npm test` must
+/// succeed").
+const PASS_WORDS: [&str; 7] = ["pass", "passes", "succeed", "succeeds", "work", "works", "green"];
+/// Words just after a command that say what it does: a request to run it when the request
+/// wants it so ("so that `x 1994` prints `MCMXCIV`", "`x` must print ..."), a description
+/// otherwise ("`route.py <path>` prints the backend").
+const EXPECT_WORDS: [&str; 10] =
+    ["prints", "print", "outputs", "output", "returns", "return", "exits", "exit", "shows", "writes"];
+/// Words just after a command that say it fails: of a check, a request to make it pass.
+const FAIL_WORDS: [&str; 7] = ["fails", "fail", "failing", "failed", "errors", "breaks", "crashes"];
+/// Words that make "with `x`" a request to run it, when one comes before it in the sentence
+/// ("verify with `pytest -q`", "run the tests with `npm test`").
+const CHECK_WORDS: [&str; 12] =
+    ["run", "verify", "check", "test", "tests", "confirm", "validate", "build", "compile", "lint", "format", "execute"];
+/// The words that introduce the command a check verb asks for.
+const WITH_WORDS: [&str; 3] = ["with", "using", "via"];
+/// Common English words of requests, to tell an English request from one in another language.
+const ENGLISH: [&str; 96] = [
+    "the", "a", "an", "to", "of", "in", "on", "for", "with", "and", "or", "so", "it", "its", "this", "that", "these",
+    "those", "is", "are", "be", "was", "must", "should", "can", "will", "not", "from", "by", "at", "as", "if", "then",
+    "than", "all", "each", "every", "only", "into", "out", "up", "my", "your", "me", "you", "we", "i", "what", "which",
+    "how", "why", "where", "when", "does", "do", "there", "here", "please", "but", "after", "before", "until", "now",
+    "new", "same", "fix", "write", "run", "make", "add", "create", "change", "update", "remove", "delete", "rename",
+    "use", "using", "keep", "read", "find", "check", "test", "tests", "build", "move", "copy", "save", "set", "show",
+    "print", "pass", "file", "most", "under", "least",
+];
+/// Common words of other languages that requests are written in: more of them than of
+/// [`ENGLISH`] means the request isn't English.
+const FOREIGN: [&str; 62] = [
+    "le", "la", "les", "des", "du", "et", "est", "pas", "ne", "une", "pour", "dans", "avec", "sur", "que", "qui", "ce",
+    "el", "los", "las", "del", "y", "es", "para", "con", "por", "una", "se", "lo", "al", "der", "die", "das", "und",
+    "ist", "nicht", "mit", "für", "auf", "ein", "eine", "den", "dem", "zu", "von", "im", "o", "os", "não", "com", "um",
+    "uma", "da", "il", "gli", "di", "e", "è", "che", "non", "si", "en",
+];
 /// Words before a size that make it a limit.
 const LIMIT_WORDS: [&str; 12] = [
     "at most",
@@ -54,20 +116,28 @@ const LIMIT_WORDS: [&str; 12] = [
 impl Named {
     pub fn from_request(text: &str, project: &Path) -> Named {
         let mut n = Named::default();
+        if !looks_english(text) {
+            return n;
+        }
         // Limits stated without a file: (the file types their sentence names, bytes, words).
         let mut unattached: Vec<(Vec<&'static str>, u64, String)> = vec![];
         for sentence in sentences(text) {
-            let lower = sentence.to_lowercase();
-            if NEGATIONS.iter().any(|w| lower.contains(w)) {
+            let lower = sentence.to_lowercase().replace('\u{2019}', "'");
+            if PROHIBITIONS.iter().any(|w| has_word(&lower, w)) {
                 continue;
             }
             // In the order the sentence names them: backticked spans and plain words alike.
             let mut files_here = vec![];
+            let tokens = tokens(&sentence);
             for (i, part) in sentence.split('`').enumerate() {
                 if i % 2 == 1 {
                     let span = part.trim().to_string();
                     if let Some(cmd) = as_command(&span, project) {
-                        push(&mut n.commands, cmd);
+                        // A check said to fail ("`make test` fails") is one to make pass.
+                        let failing_check = said_to_fail(&tokens, i / 2) && crate::verify::named_check(&cmd, project);
+                        if asked_to_run(&tokens, i / 2) || failing_check {
+                            push(&mut n.commands, cmd);
+                        }
                     } else if is_file_word(&span) {
                         push(&mut files_here, span);
                     }
@@ -267,6 +337,91 @@ impl Watched {
     pub fn still_missing(&self) -> Vec<String> {
         self.files.iter().filter(|(_, p, _)| !p.exists()).map(|(n, ..)| n.clone()).collect()
     }
+}
+
+/// A sentence's words in order, lower case and without the punctuation around them; a span in
+/// backticks is one token, `None`, numbered by the order of the spans.
+fn tokens(sentence: &str) -> Vec<Option<String>> {
+    let mut out = vec![];
+    for (i, part) in sentence.split('`').enumerate() {
+        if i % 2 == 1 {
+            out.push(None);
+            continue;
+        }
+        for w in part.split_whitespace() {
+            let w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '-').to_lowercase();
+            if !w.is_empty() {
+                out.push(Some(w));
+            }
+        }
+    }
+    out
+}
+
+/// Does the sentence ask to run (or pass) its `nth` backticked span: a run word among the
+/// three words before it, a pass word among the three after it, "with" (`using`, `via`) just
+/// before it after a word that runs or checks something, or what it must do after it ("prints",
+/// "returns") where the sentence wants it so ("so that", "make sure", "must").
+fn asked_to_run(tokens: &[Option<String>], nth: usize) -> bool {
+    let Some(at) = span_at(tokens, nth) else { return false };
+    let word = |t: &Option<String>, list: &[&str]| t.as_deref().is_some_and(|w| list.contains(&w));
+    let before = &tokens[at.saturating_sub(3)..at];
+    let after = &tokens[at + 1..(at + 4).min(tokens.len())];
+    if before.iter().any(|t| word(t, &RUN_WORDS)) || after.iter().any(|t| word(t, &PASS_WORDS)) {
+        return true;
+    }
+    if at > 0 && word(&tokens[at - 1], &WITH_WORDS) && tokens[..at - 1].iter().any(|t| word(t, &CHECK_WORDS)) {
+        return true;
+    }
+    let pair = |a: &str, b: &str| tokens[..at].windows(2).any(|w| word(&w[0], &[a]) && word(&w[1], &[b]));
+    let wanted = after.iter().any(|t| word(t, &["must", "should"]))
+        || pair("so", "that")
+        || pair("such", "that")
+        || pair("make", "sure")
+        || tokens[..at].iter().any(|t| word(t, &["ensure", "ensures"]));
+    wanted && after.iter().any(|t| word(t, &EXPECT_WORDS))
+}
+
+/// Does the sentence say its `nth` backticked span fails: a fail word among the three after it.
+fn said_to_fail(tokens: &[Option<String>], nth: usize) -> bool {
+    let Some(at) = span_at(tokens, nth) else { return false };
+    tokens[at + 1..(at + 4).min(tokens.len())].iter().any(|t| t.as_deref().is_some_and(|w| FAIL_WORDS.contains(&w)))
+}
+
+/// Where the `nth` backticked span is among a sentence's tokens.
+fn span_at(tokens: &[Option<String>], nth: usize) -> Option<usize> {
+    tokens.iter().enumerate().filter(|(_, t)| t.is_none()).map(|(i, _)| i).nth(nth)
+}
+
+/// Is `w` in `text` as a whole word (or phrase): no letter, digit or `_` right before or after.
+fn has_word(text: &str, w: &str) -> bool {
+    text.match_indices(w).any(|(i, _)| {
+        let before = text[..i].chars().next_back();
+        let after = text[i + w.len()..].chars().next();
+        before.is_none_or(|c| !c.is_alphanumeric() && c != '_')
+            && after.is_none_or(|c| !c.is_alphanumeric() && c != '_')
+    })
+}
+
+/// Is the request in English: of its prose words (outside backticks, letters only), more are
+/// common English words than common words of other languages, and at least a fifth are. A
+/// request with no prose (paths and code alone) has nothing to misread.
+fn looks_english(text: &str) -> bool {
+    let mut prose = vec![];
+    for (i, part) in text.split('`').enumerate() {
+        if i % 2 == 1 {
+            continue;
+        }
+        for w in part.split_whitespace() {
+            let w = w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+            if !w.is_empty() && w.chars().all(char::is_alphabetic) {
+                prose.push(w);
+            }
+        }
+    }
+    let english = prose.iter().filter(|w| ENGLISH.contains(&w.as_str())).count();
+    let foreign = prose.iter().filter(|w| FOREIGN.contains(&w.as_str())).count();
+    prose.is_empty() || (english > foreign && english * 5 >= prose.len())
 }
 
 fn push(v: &mut Vec<String>, s: String) {
@@ -496,6 +651,59 @@ mod tests {
     fn a_prohibition_names_nothing() {
         let n = named("Fix app.py. Don't run `sh ./build.sh` and never touch secrets.env. Do not change tests.py!");
         assert_eq!((n.files.as_slice(), n.commands.len()), (["app.py".to_string()].as_slice(), 0));
+        // Ruled out or set aside, in other words than "don't": nothing named, file or command.
+        for text in [
+            "Avoid running `sh ./build.sh`.",
+            "Build it without `sh ./build.sh`.",
+            "Use `sh -c true` instead of `sh ./build.sh`.",
+            "Run `sh -c true`, not `sh ./build.sh`.",
+            "Avoid touching secrets.env.",
+            "Everything except notes.md can change.",
+        ] {
+            let n = named(text);
+            assert!(n.commands.is_empty() && n.files.is_empty(), "{text}: {n:?}");
+        }
+    }
+
+    #[test]
+    fn a_command_is_asked_for_only_when_the_request_says_to_run_or_pass_it() {
+        // Mentioned, not asked for: nothing to remind the model of.
+        assert!(named("See `sh ./build.sh` for how releases are made.").commands.is_empty());
+        assert!(named("The script `sh ./build.sh` is slow.").commands.is_empty());
+        // Asked for: run it, make it pass, check with it.
+        assert_eq!(named("Verify with `sh ./build.sh`.").commands, ["sh ./build.sh"]);
+        assert_eq!(named("Run the tests with `sh ./build.sh`.").commands, ["sh ./build.sh"]);
+        assert_eq!(named("`sh ./build.sh` must succeed.").commands, ["sh ./build.sh"]);
+        assert_eq!(named("Then execute `sh -c true` and `sh ./build.sh`.").commands, ["sh -c true", "sh ./build.sh"]);
+        // Said to fail: a check is one to make pass; anything else is only described.
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("run_checks.py"), "").unwrap();
+        let read = |t: &str| Named::from_request(t, d.path()).commands;
+        assert_eq!(read("`python3 run_checks.py` fails. Fix parser.py."), ["python3 run_checks.py"]);
+        assert!(read("`git push` fails because of the proxy.").is_empty(), "not a check: not asked for");
+        // What it must print, where the request wants it so; a description of a tool isn't.
+        assert_eq!(
+            named("Write x.sh so that `sh x.sh 1` prints `one` and `sh x.sh 2` prints `two`.").commands,
+            ["sh x.sh 1", "sh x.sh 2"]
+        );
+        assert_eq!(named("`sh ./build.sh` must print ok.").commands, ["sh ./build.sh"]);
+        assert!(named("`sh ./build.sh <dir>` prints where a file goes.").commands.is_empty());
+    }
+
+    #[test]
+    fn a_request_in_another_language_names_nothing() {
+        // Its prohibitions aren't in the English words above: silent rather than wrong.
+        for text in [
+            "Ne crée pas notes.md et n'exécute jamais `sh ./build.sh`.",
+            "Lance `sh ./build.sh` puis écris le rapport dans rapport.txt.",
+            "No ejecutes `sh ./build.sh` y no crees notas.md.",
+            "Schreibe die Datei bericht.txt und führe `sh ./build.sh` nicht aus.",
+        ] {
+            assert_eq!(named(text), Named::default(), "{text}");
+        }
+        // English with technical words, and a request that is all paths, still read.
+        assert_eq!(named("Optimize the kernel using tiling and write timings.csv.").files, ["timings.csv"]);
+        assert_eq!(named("out/report.json").files, ["out/report.json"]);
     }
 
     #[test]

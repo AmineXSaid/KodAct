@@ -8,6 +8,12 @@
   KodAct's reminders off and with the configuration under test, and compares
   tokens, model calls and time. On work the model does alone, the difference
   is what KodAct costs when it has nothing to say.
+- **A command in the request counts only when the request asks to run it**
+  (`constraints`, `namedChecks`): "run `make test`", "make `make test`
+  pass", "verify with `pytest`", "so that `x 1` prints `y`", or a check said
+  to fail. One only mentioned ("see `make deploy`"), set aside ("avoid",
+  "without", "instead of", "except") or ruled out is never suggested, and a
+  request that isn't in English is not read at all rather than misread.
 
 ### Watching a Harbor run, as a chat
 - **`evals/harbor/watch.py` shows a job from its start and then live**, with no
