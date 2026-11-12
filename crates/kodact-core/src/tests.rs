@@ -44,6 +44,26 @@ async fn builds_from_settings_and_flags() {
     assert_eq!(perm.rules.deny.len(), 2);
 }
 
+/// Notes and Checkpoint add about 250 tokens each to every request, used or not
+/// (docs/goal.md, rule 9): offered only when a setting turns them on, `--tools` names them, or
+/// (Checkpoint) the passing snapshots need it.
+#[tokio::test]
+async fn the_notes_and_checkpoint_tools_are_off_until_turned_on() {
+    let offered = |settings: &str, tools: Option<&str>| {
+        let (d, p) = setup();
+        std::fs::write(d.path().join("proj/.kodact/settings.json"), settings).unwrap();
+        let mut o = opts(d.path(), p);
+        o.tools = tools.map(|t| vec![t.to_string()]);
+        let names = build_session(o, Arc::new(NullSink), Arc::new(DenyPrompter)).unwrap().init.tools;
+        (names.contains(&"Notes".to_string()), names.contains(&"Checkpoint".to_string()))
+    };
+    assert_eq!(offered("{}", None), (false, false), "off by default");
+    assert_eq!(offered(r#"{"tools":{"notes":true}}"#, None), (true, false));
+    assert_eq!(offered(r#"{"tools":{"notes":true,"checkpoint":true}}"#, None), (true, true));
+    assert_eq!(offered(r#"{"nudges":{"passingSnapshots":true}}"#, None), (false, true), "the snapshots need it");
+    assert_eq!(offered("{}", Some("Bash,Notes,Checkpoint")), (true, true), "named in --tools");
+}
+
 #[tokio::test]
 async fn continue_and_fork() {
     let (d, p) = setup();

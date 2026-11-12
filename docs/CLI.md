@@ -477,6 +477,8 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_SANDBOX` | Same as `--sandbox` |
 | `KODACT_SHELL` | The shell commands run in: a full path, or a name on PATH (bash, sh, zsh, pwsh, powershell). Also read from the settings `env` block. See "Shells" below |
 | `KODACT_VERIFY` | `0` turns the verification loop off |
+| `KODACT_NOTES_TOOL` | `1` offers the Notes tool (`tools.notes`) |
+| `KODACT_CHECKPOINT_TOOL` | `1` offers the Checkpoint tool (`tools.checkpoint`) |
 | `KODACT_REMINDERS` | `0` turns KodAct's own reminders to the model off (on by default; see `reminders`) |
 | `KODACT_NUDGES` | Progress nudges for this run, instead of the `nudges` settings: a list such as `progress,shellEdit`, or `all`, or `none` (see "Progress nudges") |
 | `KODACT_DISABLE_CRON` | `1` turns scheduled prompts off (`/loop`, `CronCreate`, ...) |
@@ -669,6 +671,8 @@ listed in the system prompt's environment section.
 | `verification.format` | `false` | `true` runs a file through its formatter after an edit and says what moved, when the file was already in that formatter's style before the edit (a new file: only with a formatter named below). Built-in, each used when installed: `rustfmt`, `ruff format` or `black`, `gofmt`, `prettier`, `clang-format` |
 | `verification.formatters` | built-in | Extension to a command that formats stdin to stdout, used instead of the built-in one: `{"py": ["black", "-q", "-"]}`. `{file}` in an argument is the file's path; an empty list turns an extension off |
 | `nudges.progress`, `.progressEarly`, `.shellEdit`, `.constraints`, `.namedChecks`, `.passingSnapshots`, `.backOff`, `.pace`, `.limitVerdicts`, `.staleDeliverables`, `.adaptiveEffort`, `.thinkingTimeBox` | `false` | The progress nudges (below), each on its own |
+| `tools.notes` | `false` | `true` (or `KODACT_NOTES_TOOL=1`) offers the Notes tool: a notes file the model keeps, given back after every compaction. Off by default: its description adds about 250 tokens to every request, used or not |
+| `tools.checkpoint` | `false` | `true` (or `KODACT_CHECKPOINT_TOOL=1`) offers the Checkpoint tool: `save` a point and `restore` the files to it. Off by default (about 270 tokens a request); `nudges.passingSnapshots` turns it on, since it saves with it. Naming either tool in `--tools` offers it too |
 | `edit.lineRanges` | `false` | `true` (or `KODACT_EDIT_LINES=1`) lets Edit name the lines to replace (`start_line`, `end_line`, `anchor`) instead of retyping them as `old_string`. The anchor is the text of the first line: an edit whose line numbers moved since the file was read is refused with the lines as they are now |
 
 **Progress nudges** (`nudges.<name>: true`, or `KODACT_NUDGES`). Each follows

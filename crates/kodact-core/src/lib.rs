@@ -304,6 +304,17 @@ pub(crate) fn nudges(settings: &LoadedSettings, warnings: &mut Vec<String>) -> k
     c
 }
 
+/// Whether a tool that is off by default is on: its setting (`tools.notes`, `tools.checkpoint`),
+/// or its environment variable (for A/B runs). Notes and Checkpoint each add about 250 tokens
+/// to every request, whether the model uses them or not, so they are off until a person turns
+/// them on (docs/goal.md, rule 9).
+pub(crate) fn optional_tool(settings: &LoadedSettings, key: &str, env: &str) -> bool {
+    match env_nonempty(env) {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool(&format!("/tools/{key}")).unwrap_or(false),
+    }
+}
+
 /// Whether Edit may name the lines to replace instead of retyping them: `edit.lineRanges`, or
 /// `KODACT_EDIT_LINES` (for A/B runs). Off by default until it is measured.
 pub(crate) fn line_edits(settings: &LoadedSettings) -> bool {
@@ -878,6 +889,16 @@ pub fn build_session(
     // Tools.
     let mut tools = ToolRegistry::new();
     kodact_tools::builtin::register_core(&mut tools);
+    // Notes and Checkpoint are offered only when turned on, or named in `--tools`; the passing
+    // snapshots (`nudges.passingSnapshots`) save with Checkpoint and need it.
+    let in_tools_flag = |name: &str| {
+        opts.tools.iter().flatten().flat_map(|s| kodact_permissions::split_rule_list(s)).any(|n| n == name)
+    };
+    let notes_on = optional_tool(&settings, "notes", "KODACT_NOTES_TOOL") || in_tools_flag("Notes");
+    let checkpoint_on = optional_tool(&settings, "checkpoint", "KODACT_CHECKPOINT_TOOL")
+        || in_tools_flag("Checkpoint")
+        || nudges(&settings, &mut vec![]).passing_snapshots;
+    tools.retain(|n| (n != "Notes" || notes_on) && (n != "Checkpoint" || checkpoint_on));
     kodact_tools::builtin::set_shell(&mut tools, &shell);
     let line_edits = line_edits(&settings);
     kodact_tools::builtin::set_line_edits(&mut tools, line_edits);

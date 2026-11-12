@@ -248,7 +248,8 @@ Each pillar lists what KodAct does about it and what shows that it works.
     after every compaction, whole within a twentieth of the model's window
     and otherwise its latest part with the way to read the rest, and is kept
     next to the transcript (`<session>.notes.md`), so a resumed session and
-    the person have it (task `notes-across-compaction`);
+    the person have it (task `notes-across-compaction`). Off until turned
+    on (`tools.notes`): it adds about 250 tokens to every request;
   - checkpoints the model rolls back to itself (the Checkpoint tool): `save`
     before an approach that may fail, `restore` to put the files back as
     they were and remove the ones created since, instead of undoing changes
@@ -257,7 +258,9 @@ Each pillar lists what KodAct does about it and what shows that it works.
     ref of the session's own: it covers what shell commands changed, leaves
     the index and the branches alone, and a resumed session still has it.
     Outside a repository it covers the files changed with the edit tools,
-    for the run of the session.
+    for the run of the session. Off until turned on (`tools.checkpoint`, or
+    `nudges.passingSnapshots`, which saves with it): about 270 tokens a
+    request.
 - **Measured by:** pass rate on multi-step tasks, and success after a resume.
 
 ## Priority order

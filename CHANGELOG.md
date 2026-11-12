@@ -32,6 +32,11 @@
   file counts as progress the first time it changes since a check last
   passed. A model that keeps rewriting the same lines with no check passing
   now meets the pacing nudge instead of resetting it with every write.
+- **Notes and Checkpoint are off until turned on** (`tools.notes`,
+  `tools.checkpoint`, or naming them in `--tools`; `passingSnapshots` turns
+  Checkpoint on). Measured on a captured request: their descriptions add
+  about 2,050 characters (some 510 tokens, 9% of the tool list) to every
+  request, whether the model uses them or not.
 
 ### Watching a Harbor run, as a chat
 - **`evals/harbor/watch.py` shows a job from its start and then live**, with no
