@@ -4129,8 +4129,8 @@ impl Engine {
         })
     }
 
-    /// May this nudge be given now? With `nudges.backOff`, not once it has twice been followed
-    /// by progress in this run. Giving it is noted, for the count.
+    /// May this nudge be given now? With `nudges.backOff`, a pacing nudge is not given once the
+    /// model has twice gone on without it. Giving it is noted, for the count.
     fn may_nudge(&mut self, kind: crate::progress::Nudge) -> bool {
         if !self.cfg.nudges.back_off {
             return true;
@@ -4174,6 +4174,7 @@ impl Engine {
             return None;
         }
         self.progress.step();
+        self.back_off.step();
         if !may_nudge {
             return None;
         }

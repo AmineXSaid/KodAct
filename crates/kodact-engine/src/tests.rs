@@ -3209,15 +3209,17 @@ async fn a_passing_version_is_saved_and_reported_never_restored() {
     assert!(!h.transcript_text().contains("passing_snapshot"));
 }
 
-/// Back-off (#7): a model that makes progress after a nudge, twice, is not given it again in
-/// that run; what the conversation carries goes down with it. Off, the third nudge comes.
+/// Back-off: a pacing nudge the model twice went on without (its change came calls later) is
+/// not given again in that run, and what the conversation carries goes down with it. One the
+/// model acted on at once is kept, however often. Off, every nudge comes.
 #[tokio::test]
-async fn a_nudge_followed_by_progress_twice_is_silenced() {
+async fn a_pacing_nudge_the_model_did_not_need_is_silenced_and_one_that_worked_is_kept() {
     let at = crate::progress::NO_BUDGET_CALLS as usize;
-    let script = |h: &Harness| {
+    // Each round: reads up to the nudge, `more` further reads, then the change.
+    let script = |h: &Harness, more: usize| {
         std::fs::create_dir_all(h.cwd()).unwrap();
         for round in 0..3 {
-            for i in 0..at {
+            for i in 0..at + more {
                 let f = h.cwd().join(format!("r{round}_{i}.py"));
                 std::fs::write(&f, format!("v = {i}\n")).unwrap();
                 h.provider.push(MockTurn::tool("Read", json!({"file_path": f})));
@@ -3227,26 +3229,25 @@ async fn a_nudge_followed_by_progress_twice_is_silenced() {
         }
         h.provider.push(MockTurn::text("done"));
     };
-    let mut sent = vec![];
-    for list in ["progress", "progress,backOff"] {
+    let run = |list: &'static str, more: usize| async move {
         let h = Harness::new(vec![]);
-        script(&h);
+        script(&h, more);
         let cfg = EngineConfig { verify: None, ..nudged_cfg(list) };
         let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
         e.submit(prompt("map the modules")).await;
         let t = h.transcript_text();
-        let silenced = t.matches(r#""subtype":"nudge_silenced""#).count();
-        let given = nudges(&t).len();
-        if list.contains("backOff") {
-            assert_eq!((given, silenced), (2, 1), "{list}");
-        } else {
-            assert_eq!((given, silenced), (3, 0), "{list}");
-        }
-        sent.push(
-            h.provider.requests().iter().map(|r| serde_json::to_string(&r.messages).unwrap().len()).sum::<usize>(),
-        );
-    }
-    assert!(sent[1] < sent[0], "less sent with back-off: {sent:?}");
+        let sent: usize = h.provider.requests().iter().map(|r| serde_json::to_string(&r.messages).unwrap().len()).sum();
+        (nudges(&t).len(), t.matches(r#""subtype":"nudge_silenced""#).count(), sent)
+    };
+    // The model went on reading for four calls after each nudge: not needed.
+    let (given, silenced, sent_off) = run("progress", 4).await;
+    assert_eq!((given, silenced), (3, 0), "without back-off");
+    let (given, silenced, sent_on) = run("progress,backOff", 4).await;
+    assert_eq!((given, silenced), (2, 1), "ignored twice: silenced");
+    assert!(sent_on < sent_off, "less sent with back-off: {sent_on} against {sent_off}");
+    // The change came right after each nudge: it worked, and stays.
+    let (given, silenced, _) = run("progress,backOff", 0).await;
+    assert_eq!((given, silenced), (3, 0), "a nudge is never silenced for having worked");
 }
 
 /// Progress is the files the request asks for, not helper scripts: a run that writes one
