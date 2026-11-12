@@ -45,8 +45,6 @@ pub fn register_core(reg: &mut ToolRegistry) {
     reg.register(Arc::new(Write));
     reg.register(Arc::new(NotebookEdit));
     reg.register(Arc::new(TodoWrite));
-    reg.register(Arc::new(Notes));
-    reg.register(Arc::new(Checkpoint));
     reg.register(Arc::new(AskUserQuestion));
     reg.register(Arc::new(EnterPlanMode));
     reg.register(Arc::new(ExitPlanMode));
@@ -55,6 +53,18 @@ pub fn register_core(reg: &mut ToolRegistry) {
 /// Give the registry's Bash tool the session's shell (description and read-only rules).
 pub fn set_shell(reg: &mut ToolRegistry, shell: &crate::shells::ShellChoice) {
     reg.wrap("Bash", |_| Arc::new(Bash::new(shell)));
+}
+
+/// The Notes and Checkpoint tools (`tools.notes`, `tools.checkpoint`). Off by default: in the
+/// first 79 measured runs models called Notes never and Checkpoint twice, and together they
+/// add about 1,900 characters to every request (docs/goal.md, point 9).
+pub fn set_memory_tools(reg: &mut ToolRegistry, notes: bool, checkpoint: bool) {
+    if notes {
+        reg.register(Arc::new(Notes));
+    }
+    if checkpoint {
+        reg.register(Arc::new(Checkpoint));
+    }
 }
 
 /// Let Edit name the lines to replace (`edit.lineRanges`).

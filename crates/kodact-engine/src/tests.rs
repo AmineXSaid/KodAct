@@ -113,6 +113,7 @@ impl Harness {
         let transcript = Arc::new(Transcript::create(&store, &cwd, SID, None, true).unwrap());
         let mut tools = ToolRegistry::new();
         kodact_tools::builtin::register_core(&mut tools);
+        kodact_tools::builtin::set_memory_tools(&mut tools, true, true);
         for (name, writes, safe) in [("SafeA", false, true), ("Mut", true, false), ("AskSafe", true, true)] {
             tools.register(Arc::new(Sleepy { name, writes, safe, log: self.log.clone() }));
         }
