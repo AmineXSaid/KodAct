@@ -702,7 +702,8 @@ async fn a_quota_is_not_retried_and_a_long_wait_is_stated() {
 }
 
 /// `-p --output-format json`: the result says where the changes stand, and a one-shot run
-/// about to end with todo items open is sent back once.
+/// about to end with todo items open and unchecked changes is sent back once, with both notes
+/// in one message.
 #[tokio::test]
 async fn print_reports_verification_and_nudges_open_todos() {
     let e = env();
@@ -726,10 +727,11 @@ async fn print_reports_verification_and_nudges_open_todos() {
     let v: Value = serde_json::from_str(out.trim()).unwrap();
     assert_eq!(v["verification"], json!({"status": "unchecked", "files": ["notes.py"]}), "{out}");
     let reqs = api.requests();
-    assert_eq!(reqs.len(), 4, "the todo reminder, then the verification reminder");
+    assert_eq!(reqs.len(), 3, "the todo and verification reminders, in one message");
     let sent = |i: usize| reqs[i]["messages"].as_array().unwrap().last().unwrap().to_string();
     assert!(sent(2).contains("takes no further input") && sent(2).contains("run it"), "{}", sent(2));
-    assert!(sent(3).contains("no check has run since the last change"), "{}", sent(3));
+    assert!(sent(2).contains("no check has run since the last change"), "{}", sent(2));
+    assert_eq!(v["result"], json!("Left: running it."), "{out}");
     // The edit's own result said the file doesn't parse, when this machine has Python.
     if std::process::Command::new("python3").arg("--version").output().is_ok() {
         assert!(sent(1).contains("notes.py does not parse"), "{}", sent(1));
