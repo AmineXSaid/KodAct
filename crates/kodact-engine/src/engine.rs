@@ -2968,7 +2968,10 @@ impl Engine {
                 // Shell commands that may write: the files they name, as they are now.
                 let shell_before: Vec<Option<crate::shell_edit::Before>> =
                     tool_uses.iter().map(|(_, name, input)| self.shell_edit_before(name, input)).collect();
+                let tools_started = Instant::now();
                 let mut ran = crate::exec::run_tools(&self.shared, &to_run, &cancel, self.mode_str()).await.into_iter();
+                // Waiting on a tool is not the model stalling: left out of the pacing nudges' time.
+                self.progress.waited(tools_started.elapsed());
                 let writes_now = self.shared.history.writes_len();
                 let mut results: Vec<crate::exec::CallResult> = tool_uses
                     .iter()
