@@ -831,7 +831,7 @@ pub(crate) fn built_artifact(command: &str) -> Option<String> {
     built
 }
 
-/// Does `command` run the program at `artifact` (`./image`, `/app/image > out.ppm`,
+/// Does `command` run the program at `artifact` (`./image`, `/work/image > out.ppm`,
 /// `time ./a.out`)? Its path as the command names it, from the same directory or absolute.
 pub(crate) fn runs_artifact(command: &str, artifact: &str) -> bool {
     let commands = strip_heredoc_bodies(command);
