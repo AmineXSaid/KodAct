@@ -2,6 +2,34 @@
 
 ## 0.1.0 (unreleased)
 
+### What KodAct says it checked
+- **A tool asked about itself isn't a check**: `gcc --version`, `pytest
+  --help`, `make --version` or `gcc -v` after an edit counted as testing it,
+  so the reminder about untested changes stayed silent and the result said
+  `passed`; a compiler given nothing to compile was also taken to have built
+  `a.out`. They are probes now, and change nothing.
+- **The result names the files never made**: `verification.missing` lists the
+  files the request asks to be made that don't exist when the turn ends, beside
+  the status and never changing it (which files are asked for is read from the
+  request's words, a guess). `/goal`'s check is told them too, and
+  `kodact-eval` records them per run.
+- **A renamed or removed file isn't called missing**: the end-of-turn
+  constraint note and the pace warning listed a file the request asked to
+  rename ("Rename helper.py to utils.py") as missing, asking the model to make
+  it again. Only files that weren't there when the turn started count (task
+  `rename-file`).
+- **"Form", "platform" or "confirm" don't make a sentence a removal**: the
+  words that set a sentence's files aside ("delete", "rm") were matched as
+  letters, so "the compressed form of data.txt" or "transform" dropped every
+  file the sentence named. Markup (`</system-reminder>`) is no longer read as a
+  file either.
+- **`watch.py`**: the end says what KodAct's last check ran (`KodAct's last
+  check passed: $ gcc -O2 -o app app.c`) and which files the task asks for
+  don't exist; a step already under way when the watch starts is timed from the
+  log's last write, read from the container, or says `over` when that can't be
+  told; and a trial that starts while watched shows its header before its first
+  step.
+
 ### Nudges that stay out of the way (docs/goal.md rules 7 to 10)
 - **A quiet check**: `scripts/quiet-check.sh` runs three everyday tasks (a
   question about the code, a one-line fix, a rename; tag `quiet`) with

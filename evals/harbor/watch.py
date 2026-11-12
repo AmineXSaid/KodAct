@@ -450,10 +450,24 @@ def finish_lines(ev: dict) -> list[str]:
             out.append(f"  {RED}{first_line(why, width() - 4)}{RESET}")
     check = ev.get("verification")
     if isinstance(check, dict) and check.get("status"):
-        files = ", ".join(check.get("files") or [])
-        status = str(check["status"]).replace("_", " ")
-        out.append(f"  {DIM}KodAct's own check of the result: {status}{(' (' + files + ')') if files else ''}{RESET}")
+        out.append(f"  {DIM}{check_line(check)}{RESET}")
+        if check.get("missing"):
+            out.append(f"  {YELLOW}files the task asks for that don't exist: {', '.join(check['missing'])}{RESET}")
     return out
+
+
+def check_line(check: dict) -> str:
+    """KodAct's record of the changes at the end (`verification`), and what its last check ran:
+    a pass is that command passing, not the task's result."""
+    status, command = check.get("status"), check.get("command")
+    files = ", ".join(check.get("files") or [])
+    if status in ("passed", "failed") and command:
+        return f"KodAct's last check {status}: $ {first_line(command, width() - 30)}"
+    if status == "unchecked":
+        return "KodAct: changes no check has run on since: " + (files or "made by shell commands")
+    return {"no_changes": "KodAct: no file changed", "read_back": "KodAct: data files read back after their last change"}.get(
+        status, f"KodAct's check: {status}"
+    )
 
 
 class Chat:
@@ -467,6 +481,7 @@ class Chat:
         self.multi = False  # the last step made more than one call: say which one a result answers
         self.done = False
         self.took: float | None = None  # seconds the next step took, when seen live
+        self.took_over = False  # its start wasn't seen: it took at least `took`
         self.events = 0
         self.ended: set[str] = set()  # the errors the run ended with, as KodAct also prints them
 
@@ -503,8 +518,8 @@ class Chat:
         if context:
             facts.append(f"context {context / 1000:,.0f}k" if context >= 1000 else f"context {context}")
         if self.took is not None and self.took >= 1:
-            facts.append(dur(self.took))
-        self.took = None
+            facts.append(("over " if self.took_over else "") + dur(self.took))
+        self.took, self.took_over = None, False
         label = "sub-agent step" if sub else f"step {self.steps}"
         out = [f"{BOLD}▸ {label}{RESET}" + (f" {DIM}· {' · '.join(facts)}{RESET}" if facts else "")]
         calls = []
@@ -548,12 +563,14 @@ class Chat:
                     out += [f"{BOLD}❖ user{RESET}"] + [f"  {line}" for line in wrap(block["text"], width() - 4)]
         return ["  " + line for line in out] if ev.get("parent_tool_use_id") else out
 
-    def waiting(self, quiet: float) -> str:
-        """A line for a trial with no news for `quiet` seconds: what it is waiting for."""
+    def waiting(self, quiet: float, over: bool = False) -> str:
+        """A line for a trial with no news for `quiet` seconds: what it is waiting for. `over`:
+        the wait began before the watch could tell when, so it is at least that long."""
+        so_far = ("over " if over else "") + f"{dur(quiet)} so far"
         if self.running:
             name, args = next(iter(self.running.values()))
-            return f"{DIM}⋯ running {short(tool_line(name, args), 70)} · {dur(quiet)} so far{RESET}"
-        return f"{DIM}⋯ the model is working on step {self.steps + 1} · {dur(quiet)} so far{RESET}"
+            return f"{DIM}⋯ running {short(tool_line(name, args), 70)} · {so_far}{RESET}"
+        return f"{DIM}⋯ the model is working on step {self.steps + 1} · {so_far}{RESET}"
 
 
 # ---- the compact view (--compact): one short line per tool call ------------------------------
@@ -713,10 +730,21 @@ def size_of(log: Path) -> int:
 
 
 def changed_at(log: Path) -> float | None:
-    """When a log was last written to, when this machine can tell."""
+    """When a log was last written to: from here, or, while its trial runs and its logs are the
+    container user's, from inside the container (one clock: the container shares this machine's).
+    None when neither can tell."""
     try:
         return log.stat().st_mtime
     except OSError:
+        pass
+    trial = log.parent.parent
+    if not DOCKER or (trial / "result.json").exists() or not (cid := container(trial)):
+        return None
+    try:
+        r = subprocess.run([DOCKER, "exec", cid, "stat", "-c", "%Y", f"/logs/agent/{log.name}"],
+                           capture_output=True, text=True, timeout=10)
+        return float(r.stdout.strip()) if r.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
 
 
@@ -845,6 +873,7 @@ def main() -> None:
     chats: dict[Path, Chat] = {}
     pi_streams: dict[Path, PiStream] = {}
     seen_at: dict[Path, float] = {}  # when each log last had news
+    guessed: set[Path] = set()  # logs whose last news came before the watch, when unknown
     news: dict[Path, float] = {}  # when each trial last had news
     beat: dict[Path, float] = {}  # when each trial's last "still working" line was shown
     informed: dict[Path, float] = {}  # trial -> 0 once its header is shown, else when it was last looked for
@@ -861,7 +890,7 @@ def main() -> None:
             print(f"\n{BOLD}=== next job:{RESET} {job_line(job)}\n", flush=True)
             for state in (offsets, pending, chats, pi_streams, seen_at, news, beat, informed):
                 state.clear()
-            for state in (rewarded, started, failed):
+            for state in (rewarded, started, failed, guessed):
                 state.clear()
             score = [0, 0]
             screen.last = None
@@ -882,7 +911,9 @@ def main() -> None:
         # One trial after another: its header, what its agent did, how it ended, its reward.
         for trial in trials:
             if trial in fresh:
-                news[trial] = now
+                # One there when the watch began has news as old as its logs say, not from now.
+                if not first_scan:
+                    news[trial] = now
                 if past:
                     screen.show(trial.name, [f"{DIM}trial started{RESET}"])
             if informed.get(trial) != 0 and now - informed.get(trial, 0) >= 5:
@@ -892,7 +923,6 @@ def main() -> None:
                     screen.show(trial.name, info)
             # A task's stderr after its other logs: an error usually ends what came before it.
             for log in sorted(by_trial.get(trial, []), key=lambda p: (p.name.endswith(".stderr.txt"), p.name)):
-                replay = log not in offsets and first_scan
                 if log not in offsets:
                     # By default every log is shown from its start; with --new, those there at
                     # start are followed from their end, and a task that starts later from its beginning.
@@ -910,12 +940,28 @@ def main() -> None:
                 is_err = log.name.endswith(".stderr.txt")
                 pi = pi_streams.setdefault(log, PiStream()) if log.name == "pi.jsonl" else None
                 chat = chats.setdefault(log, Chat("Pi" if pi is not None else "KodAct"))
-                # How long the step that just arrived took: known only when its start was seen live.
-                chat.took = None if replay or log not in seen_at else now - seen_at[log]
+                # How long the step that just arrived took: since the log's news before it. A
+                # log's first read has nothing earlier to count from.
+                first = log not in seen_at
+                chat.took = None if first else now - seen_at[log]
+                chat.took_over = log in guessed
                 shown = {e for lg, c in chats.items() if lg.parent.parent == trial for e in c.ended}
-                screen.show(trial.name, [text for line in lines for text in handle(line, is_err, chat, pi, shown)])
-                # A log shown from its start: its news is as old as its last write.
-                seen_at[log] = (changed_at(log) or now) if replay else now
+                said = [text for line in lines for text in handle(line, is_err, chat, pi, shown)]
+                # A trial's header before its first lines: its agent writes it before it starts.
+                if said and informed.get(trial) != 0 and (info := trial_info(trial)) is not None:
+                    informed[trial] = 0
+                    if past:
+                        screen.show(trial.name, info)
+                screen.show(trial.name, said)
+                # A log read for the first time may hold news from before the watch: as old as its
+                # last write, from here or from its container. When neither can tell, counted from
+                # now and said as "over".
+                at = changed_at(log) if first else None
+                seen_at[log] = at if at is not None else now
+                if first and first_scan and at is None:
+                    guessed.add(log)
+                else:
+                    guessed.discard(log)
                 news[trial] = max(news.get(trial, 0), seen_at[log])
             if trial not in failed and (text := trial_error(trial)):
                 failed.add(trial)
@@ -939,7 +985,8 @@ def main() -> None:
             if chat.done or quiet < HEARTBEAT or now - beat.get(trial, 0) < HEARTBEAT:
                 continue
             beat[trial] = now
-            screen.show(trial.name, [chat.waiting(quiet)])
+            over = any(log in guessed for log in chats if log.parent.parent == trial)
+            screen.show(trial.name, [chat.waiting(quiet, over)])
         time.sleep(1)
 
 

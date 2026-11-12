@@ -5,9 +5,12 @@
 What they hold: a job is shown from its start without a flag; each step shows its
 reasoning (start and end), the whole command, the start of a file written, the lines
 an edit changes and the output of each call (first and last lines); KodAct's
-reminders and events are named; a run's error is shown once; and while the agent
-is at work with nothing new, a line says what it is waiting for. The events are cut
-down from real KodAct stream-json (terminal-bench 2.0 trials).
+reminders and events are named; a run's error is shown once; the end says what
+KodAct's last check ran and which files the task asks for don't exist; and while the
+agent is at work with nothing new, a line says what it is waiting for, timed from the
+log's last write (or "over" when that can't be told). A trial's header comes before
+its first step. The events are cut down from real KodAct stream-json (terminal-bench
+2.0 trials).
 """
 
 import json
@@ -147,6 +150,27 @@ def test_a_runs_error_is_shown_once():
     assert "unknown model" in text(watch.handle("error: unknown model", True))
 
 
+def test_the_end_says_what_the_last_check_ran_and_what_is_missing():
+    end = {"type": "result", "subtype": "error_during_execution", "is_error": True, "num_turns": 3,
+           "errors": ["Reached the time limit (--max-time)."],
+           "verification": {"status": "passed", "command": "cd /app && gcc --version | head -1", "missing": ["data.comp"]}}
+    shown = text(watch.Chat().render(end))
+    assert "KodAct's last check passed: $ cd /app && gcc --version | head -1" in shown, shown
+    assert "files the task asks for that don't exist: data.comp" in shown
+    unchecked = dict(end, verification={"status": "unchecked", "files": ["a.py", "b.py"]})
+    shown = text(watch.Chat().render(unchecked))
+    assert "KodAct: changes no check has run on since: a.py, b.py" in shown and "don't exist" not in shown
+
+
+def test_a_step_whose_start_came_before_the_watch_says_over():
+    chat = watch.Chat()
+    chat.took, chat.took_over = 138, True
+    assert "▸ step 1 · 120 tokens out · context 8k · over 2m18s" in text(chat.render(assistant({"type": "text", "text": "x"})))
+    chat.took = 20
+    assert text(chat.render(assistant({"type": "text", "text": "y"}))).startswith("▸ step 2 · 120 tokens out · context 8k · 20s")
+    assert "· over 1m00s so far" in text([chat.waiting(60, over=True)])
+
+
 def make_job(tmp: Path, events: list[dict], *, finished: bool) -> Path:
     job = tmp / "job"
     agent = job / "demo-task__AbC123" / "agent"
@@ -162,15 +186,21 @@ def make_job(tmp: Path, events: list[dict], *, finished: bool) -> Path:
     return job
 
 
-def run_watch(args: list[str], *, heartbeat: int | None = None, seconds: float | None = None) -> str:
-    """watch.py's output: with --once, until it stops; else for `seconds`, then stopped."""
-    setup = f"watch.HEARTBEAT = {heartbeat}; " if heartbeat else ""
+def run_watch(args: list[str], *, heartbeat: int | None = None, seconds: float | None = None, setup: str = "",
+              meanwhile=None) -> str:
+    """watch.py's output: with --once, until it stops; else for `seconds`, then stopped.
+    `setup` runs in the watcher before it starts; `meanwhile` here, a second into the watch."""
+    setup = (f"watch.HEARTBEAT = {heartbeat}; " if heartbeat else "") + setup
     code = (f"import sys; sys.path.insert(0, {str(HERE)!r}); import watch; {setup}"
             f"sys.argv = ['watch.py'] + {args!r}; watch.main()")
     env = dict(os.environ, NO_COLOR="1", COLUMNS="100", PATH=os.environ.get("PATH", ""))
     if seconds is None:
         return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=60).stdout
     proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    if meanwhile:
+        time.sleep(1.5)
+        meanwhile()
+        seconds -= 1.5
     time.sleep(seconds)
     proc.terminate()
     return proc.communicate(timeout=30)[0]
@@ -203,3 +233,34 @@ def test_a_trial_at_work_says_what_it_is_waiting_for(tmp_path):
     job = make_job(tmp_path / "2", events, finished=False)
     out = run_watch([str(job)], heartbeat=1, seconds=4)
     assert "⋯ the model is working on step 2 ·" in out, out
+
+
+def test_a_wait_is_timed_from_the_logs_last_write(tmp_path):
+    # Watched from 5 minutes into a step: the time counts from the log's last write.
+    events = [assistant({"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}}),
+              result("t1", "a.txt", {"exitCode": 0})]
+    job = make_job(tmp_path, events, finished=False)
+    log = job / "demo-task__AbC123" / "agent" / "kodact.jsonl"
+    then = time.time() - 300
+    os.utime(log, (then, then))
+    out = run_watch([str(job)], heartbeat=1, seconds=4)
+    assert "⋯ the model is working on step 2 · 5m0" in out and "over" not in out, out
+    # When the last write can't be told (a log inside a container that can't be asked): "over".
+    out = run_watch([str(job)], heartbeat=1, seconds=4, setup="watch.changed_at = lambda log: None; ")
+    assert "⋯ the model is working on step 2 · over " in out, out
+
+
+def test_a_trial_that_starts_while_watched_shows_its_header_first(tmp_path):
+    job = tmp_path / "job"
+    agent = job / "demo-task__AbC123" / "agent"
+    agent.mkdir(parents=True)
+    (job / "config.json").write_text(json.dumps({"n_concurrent_trials": 1}))
+
+    def start():  # the agent writes the task, then its log, within the watch's first seconds
+        (agent / "instruction.txt").write_text("Fix the bug in /app/x.py.")
+        (agent / "run.json").write_text(json.dumps({"model": "m", "flags": ["--max-time", "870"]}))
+        (agent / "kodact.jsonl").write_text(json.dumps(assistant({"type": "text", "text": "Looking."})) + "\n")
+
+    out = run_watch([str(job)], seconds=4, meanwhile=start)
+    assert "time limit 14m30s" in out and "▸ step 1" in out, out
+    assert out.index("time limit 14m30s") < out.index("Fix the bug") < out.index("▸ step 1"), out

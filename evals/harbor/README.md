@@ -130,13 +130,18 @@ says, each tool call in full (the whole command, the start of a file it writes,
 the lines an edit takes out and puts in) and each result under its call: the
 exit code and the first and last lines of the output, red when it failed.
 KodAct's reminders and events are named (retries, output limit, the server's
-window, compaction, nudges), then how the run ended, KodAct's own check of the
-result, and the task's reward with the score so far. While the model thinks or a
+window, compaction, nudges), then how the run ended, what KodAct's last check
+ran (`KodAct's last check passed: $ gcc -O2 -o app app.c`: that command passed,
+which isn't the task's verdict), the files the task asks for that don't exist,
+and the task's reward with the score so far. While the model thinks or a
 command runs, a line every minute says which and for how long. Pi's events are
 shown the same way; other agents' logs (Ante, ...) as they are.
 
 A step shows up once the model finishes it. Running trials are read from their
-containers (Harbor's logs aren't readable from the host until a trial ends).
+containers (Harbor's logs aren't readable from the host until a trial ends),
+and so are their times: a step already under way when the watch starts is timed
+from the log's last write. Where that can't be told, the time counts from the
+watch's start and says `over` (`over 2m18s`: at least that long).
 
 ## The report of a run
 
