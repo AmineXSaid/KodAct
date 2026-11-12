@@ -37,6 +37,10 @@
   Checkpoint on). Measured on a captured request: their descriptions add
   about 2,050 characters (some 510 tokens, 9% of the tool list) to every
   request, whether the model uses them or not.
+- **No benchmark names in the code**: comments and test fixtures no longer
+  name the benchmark tasks and paths they were found on (task names,
+  `/app/...`, the Core War files, `gpt2.c`); the tests check the same
+  mechanisms with neutral files (`/work/...`, `player.cfg`, `model.c`).
 
 ### Watching a Harbor run, as a chat
 - **`evals/harbor/watch.py` shows a job from its start and then live**, with no

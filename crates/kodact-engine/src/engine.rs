@@ -302,8 +302,7 @@ const REASONING_HEAD: usize = 2_000;
 const REASONING_TAIL: usize = 6_000;
 /// For a reply that ended normally with no text and no tool call (only reasoning, or nothing).
 /// Taken as the end of the turn, it leaves the work undone and the person with an empty answer:
-/// seen on Terminal-Bench gpt2-codegolf, where such a reply ended unattended runs that had only
-/// started (06eba3b, ce92502).
+/// seen in unattended runs, where such a reply ended a run that had only started.
 const EMPTY_REPLY_PROMPT: &str = "<system-reminder>\nYour reply ended without an answer or an action: it had \
                                   no text and no tool call. Do not restart the analysis. Act on what you have now: \
                                   take the next concrete step (run a command, make an edit, or give your answer), \
@@ -3278,7 +3277,7 @@ impl Engine {
 
             // Unattended: what still runs in the background is stopped when the session ends,
             // right after this turn, so a service the task needs would be gone before anything
-            // checks it (pypi-server, 9ef0955). Said once, with what is still running.
+            // checks it. Said once, with what is still running.
             if self.cfg.reminders
                 && self.cfg.autonomous
                 && !self.cfg.is_subagent
@@ -3333,8 +3332,8 @@ impl Engine {
                 Some(StopReason::Other) => "other",
             };
             // Ended with no answer: the last replies were all reasoning, and the reminders to act
-            // are used up. "Success" would tell a script the work was done (write-compressor,
-            // 9ef0955: four replies cut off while reasoning, nothing written, reported as success).
+            // are used up. "Success" would tell a script the work was done (seen in a run: four
+            // replies cut off while reasoning, nothing written, reported as success).
             if !reply_has_text && !was_continuation && stop_reason != Some(StopReason::Refusal) {
                 self.notice(NoticeLevel::Error, NO_ANSWER);
                 turn.errors.push(NO_ANSWER.into());
@@ -3557,8 +3556,8 @@ impl Engine {
     /// The reminder after a reply that was all reasoning, and how many characters of that
     /// reasoning it hands back. A provider that sends reasoning back keeps it in the next request,
     /// and `plain` applies. One that doesn't (chat completions) drops it, and "do not restart the
-    /// analysis" asks for what the model no longer has: write-compressor (9ef0955) began the same
-    /// analysis of the decoder again in three cut-off replies in a row and wrote nothing. There,
+    /// analysis" asks for what the model no longer has: one run began the same analysis again in
+    /// three cut-off replies in a row and wrote nothing. There,
     /// the reminder carries how the reasoning began and where it stopped.
     fn act_reminder(&self, plain: &str, what: &str, model: &str, reasoning: &str) -> (String, usize) {
         if reasoning.trim().is_empty() || self.shared.provider.resends_reasoning(model) {

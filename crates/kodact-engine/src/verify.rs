@@ -831,7 +831,7 @@ pub(crate) fn built_artifact(command: &str) -> Option<String> {
     built
 }
 
-/// Does `command` run the program at `artifact` (`./image`, `/app/image > out.ppm`,
+/// Does `command` run the program at `artifact` (`./image`, `/work/image > out.ppm`,
 /// `time ./a.out`)? Its path as the command names it, from the same directory or absolute.
 pub(crate) fn runs_artifact(command: &str, artifact: &str) -> bool {
     let commands = strip_heredoc_bodies(command);
@@ -977,7 +977,7 @@ mod tests {
     #[test]
     fn a_built_program_is_known_and_so_is_running_it() {
         assert_eq!(built_artifact("gcc -static -o image image.c -lm").as_deref(), Some("image"));
-        assert_eq!(built_artifact("cd /app && gcc -O3 gpt2.c -lm").as_deref(), Some("a.out"));
+        assert_eq!(built_artifact("cd /work && gcc -O3 model.c -lm").as_deref(), Some("a.out"));
         assert_eq!(built_artifact("gcc -oprog x.c").as_deref(), Some("prog"));
         assert_eq!(built_artifact("rustc -O main.rs").as_deref(), Some("main"));
         assert_eq!(built_artifact("go build -o bin/app ./cmd").as_deref(), Some("bin/app"));
@@ -985,8 +985,8 @@ mod tests {
             assert_eq!(built_artifact(none), None, "{none}");
         }
         assert!(runs_artifact("./image && ls -l reconstructed.ppm", "image"));
-        assert!(runs_artifact("time /app/a.out > out.txt", "a.out"));
-        assert!(runs_artifact("cd /app && ./bin/app --help", "bin/app"));
+        assert!(runs_artifact("time /work/a.out > out.txt", "a.out"));
+        assert!(runs_artifact("cd /work && ./bin/app --help", "bin/app"));
         assert!(!runs_artifact("wc -c image.c && head -3 image.c", "image"));
         assert!(!runs_artifact("ls -l image", "image"));
     }
@@ -1062,11 +1062,11 @@ mod tests {
     fn recognizes_inline_interpreter_checks() {
         // A project with no test runner, verified by running the changed code inline.
         let none: &[String] = &[];
-        let changed = [PathBuf::from("/app/repo/algo.py"), PathBuf::from("/app/util.js")];
+        let changed = [PathBuf::from("/work/repo/algo.py"), PathBuf::from("/work/util.js")];
         for yes in [
             r#"python3 -c "from algo import solve; assert solve(1) == 1""#,
             r#"python3 -c "import algo; print(algo.area(2))""#,
-            r#"cd /app/repo && python3 -c "import ast; ast.parse(open('algo.py').read())""#,
+            r#"cd /work/repo && python3 -c "import ast; ast.parse(open('algo.py').read())""#,
             "python3 - <<'EOF'\nimport algo\nprint(algo.solve(1))\nEOF",
             r#"node -e "require('./util').run()""#,
         ] {
@@ -1086,18 +1086,18 @@ mod tests {
     fn recognizes_a_program_run_on_a_changed_file() {
         let none: &[String] = &[];
         let changed = [
-            PathBuf::from("/app/my_warrior.red"),
-            PathBuf::from("/app/x.sh"),
-            PathBuf::from("/app/a.xml"),
-            PathBuf::from("/app/config.json"),
-            PathBuf::from("/app/input.txt"),
-            PathBuf::from("/app/f.py"),
+            PathBuf::from("/work/player.cfg"),
+            PathBuf::from("/work/x.sh"),
+            PathBuf::from("/work/a.xml"),
+            PathBuf::from("/work/config.json"),
+            PathBuf::from("/work/input.txt"),
+            PathBuf::from("/work/f.py"),
         ];
         for yes in [
-            // winning-avg-corewars (231fd6b): the warrior was edited, then run against each opponent.
-            "cd /app && for opp in stone vampire paper snake g2-clear; do\n  pmars -b -r 100 -f my_warrior.red \
-             warriors/$opp.red | tail -1\ndone",
-            "pmars -b -r 100 -f my_warrior.red warriors/stone.red 2>&1 | tail -4",
+            // Seen in a run: the file was edited, then run against each opponent.
+            "cd /work && for opp in a b c d e; do\n  sim -b -r 100 -f player.cfg \
+             opponents/$opp.cfg | tail -1\ndone",
+            "sim -b -r 100 -f player.cfg opponents/a.cfg 2>&1 | tail -4",
             "shellcheck x.sh",
             "xmllint --noout a.xml",
             "./app config.json",
@@ -1105,16 +1105,16 @@ mod tests {
             "./solve < input.txt",
             "python3 tool.py config.json",
             "python3 -m json.tool config.json",
-            "if pmars -b my_warrior.red w/stone.red; then echo ok; fi",
-            "bash -c \"cd /app && pmars -b my_warrior.red w/stone.red\"",
+            "if sim -b player.cfg o/a.cfg; then echo ok; fi",
+            "bash -c \"cd /work && sim -b player.cfg o/a.cfg\"",
         ] {
             assert!(is_check(yes, none, &changed), "{yes}");
         }
         for no in [
-            "cat my_warrior.red",
-            "head -5 my_warrior.red && wc -l my_warrior.red",
-            "grep -n spl my_warrior.red",
-            "cp my_warrior.red /tmp/best.red",
+            "cat player.cfg",
+            "head -5 player.cfg && wc -l player.cfg",
+            "grep -n level player.cfg",
+            "cp player.cfg /tmp/best.cfg",
             "rm -f input.txt",
             "chmod +x x.sh",
             "sed -i 's/a/b/' f.py",
@@ -1123,12 +1123,12 @@ mod tests {
             "git add f.py && git commit -m fix",
             "echo x > config.json",
             "./prog > input.txt 2>&1",
-            "test -f my_warrior.red",
+            "test -f player.cfg",
             "black f.py",
             "vim f.py",
             "python3 -m pip install -r input.txt",
-            "for f in my_warrior.red x.sh; do echo $f; done",
-            "bash -c \"cat my_warrior.red\"",
+            "for f in player.cfg x.sh; do echo $f; done",
+            "bash -c \"cat player.cfg\"",
         ] {
             assert!(!is_check(no, none, &changed), "{no}");
         }
@@ -1137,9 +1137,9 @@ mod tests {
     #[test]
     fn recognizes_inline_code_that_names_a_changed_module() {
         let none: &[String] = &[];
-        // llm-inference-batching-scheduler (f4d913e): both changed modules imported by name.
-        let changed = [PathBuf::from("/app/task_file/scripts/optimizer.py"), PathBuf::from("/app/scripts/sweep.py")];
-        let real = "cd /app/task_file/scripts && python3 -c \"\nimport importlib, sys\n# import both changed modules \
+        // Seen in a run: both changed modules imported by name.
+        let changed = [PathBuf::from("/work/tools/scripts/optimizer.py"), PathBuf::from("/work/scripts/sweep.py")];
+        let real = "cd /work/tools/scripts && python3 -c \"\nimport importlib, sys\n# import both changed modules \
                     to confirm they parse/import cleanly\nfor m in ['optimizer','sweep']:\n    \
                     importlib.import_module(m)\nprint('ok')\"";
         assert!(is_check(real, none, &changed));
@@ -1155,16 +1155,16 @@ mod tests {
         {
             assert!(!is_check(no, none, &changed), "{no}");
         }
-        let short = [PathBuf::from("/app/ab.py")];
+        let short = [PathBuf::from("/work/ab.py")];
         assert!(!is_check(r#"python3 -c "x = 'ab'""#, none, &short), "a 2-letter string is not the module");
         assert!(is_check(r#"python3 -c "import ab""#, none, &short), "an import is, whatever the length");
     }
 
     #[test]
     fn a_package_is_imported_by_its_name() {
-        // pypi-server (090446d): the package's __init__.py changed, and the check imported the
-        // package; the file's own stem (`__init__`) is never what code names.
-        let changed = vec![PathBuf::from("/app/vectorops/vectorops/__init__.py")];
+        // Seen in a run: the package's __init__.py changed, and the check imported the package;
+        // the file's own stem (`__init__`) is never what code names.
+        let changed = vec![PathBuf::from("/work/vectorops/vectorops/__init__.py")];
         assert!(is_check(
             r#"python3 -c "from vectorops import dotproduct; assert dotproduct([1],[2]) == 2""#,
             &[],
@@ -1176,8 +1176,8 @@ mod tests {
     #[test]
     fn files_read_back_are_named_and_plain_data_is_told_apart() {
         assert_eq!(
-            files_viewed("cat /app/move.txt && od -c /app/move.txt | tail -3"),
-            ["/app/move.txt", "/app/move.txt"]
+            files_viewed("cat /work/move.txt && od -c /work/move.txt | tail -3"),
+            ["/work/move.txt", "/work/move.txt"]
         );
         assert_eq!(files_viewed("diff out.csv expected.csv"), ["out.csv", "expected.csv"]);
         assert!(files_viewed("python3 solve.py && ls").is_empty());
@@ -1187,16 +1187,16 @@ mod tests {
         for code in ["solve.py", "config.toml", "package.json", "Makefile", "app.rs", "deploy.yaml"] {
             assert!(!is_data_file(Path::new(code)), "{code}");
         }
-        assert!(names_file(Path::new("/app/move.txt"), "move.txt"));
-        assert!(names_file(Path::new("/app/move.txt"), "./move.txt"));
-        assert!(!names_file(Path::new("/app/move.txt"), "remove.txt"));
+        assert!(names_file(Path::new("/work/move.txt"), "move.txt"));
+        assert!(names_file(Path::new("/work/move.txt"), "./move.txt"));
+        assert!(!names_file(Path::new("/work/move.txt"), "remove.txt"));
     }
 
     #[test]
     fn eval_and_bench_scripts_are_checks() {
         let none: &[String] = &[];
-        // largest-eigenval (f4d913e): the task's own evaluation script, run twice.
-        let changed = [PathBuf::from("/app/eigen.py"), PathBuf::from("/app/_fast_eigen.c")];
+        // Seen in a run: the project's own evaluation script, run twice.
+        let changed = [PathBuf::from("/work/solver.py"), PathBuf::from("/work/_fast_solver.c")];
         for yes in [
             r#"python eval.py && echo "=== second run ===" && python eval.py"#,
             "./bench.sh",
@@ -1211,18 +1211,18 @@ mod tests {
     #[test]
     fn here_document_bodies_are_data_not_commands() {
         let none: &[String] = &[];
-        let changed = [PathBuf::from("/app/solver.py"), PathBuf::from("/app/my_warrior.red")];
+        let changed = [PathBuf::from("/work/solver.py"), PathBuf::from("/work/player.cfg")];
         for no in [
             "cat > run.sh <<'EOF'\npython3 solver.py input.txt\nEOF",
-            "cat > my_warrior.red <<'EOF'\n;redcode-94\n        org start\nstart   spl 1\nEOF",
+            "cat > player.cfg <<'EOF'\nlevel = 1\nname = b\nEOF",
             // A shell fed a here-document runs its lines: here, only a viewer.
-            "bash <<'EOF'\ncat my_warrior.red\nEOF",
+            "bash <<'EOF'\ncat player.cfg\nEOF",
         ] {
             assert!(!is_check(no, none, &changed), "{no}");
         }
         for yes in [
-            "bash <<'EOF'\ncd /app && python3 -m pytest -q\nEOF",
-            "sh -s <<EOF\npmars -b my_warrior.red w/stone.red\nEOF",
+            "bash <<'EOF'\ncd /work && python3 -m pytest -q\nEOF",
+            "sh -s <<EOF\nsim -b player.cfg o/a.cfg\nEOF",
             "python3 - <<'EOF'\nimport solver\nprint(solver.solve(1))\nEOF",
             "cat > run.sh <<'EOF'\necho hi\nEOF\npython3 solver.py input.txt",
             // An unterminated `<<` (a shift inside code) hides nothing.
