@@ -3771,6 +3771,38 @@ async fn only_the_newest_passing_version_is_kept() {
     assert_eq!(listed.lines().count(), 1, "one checkpoint left: {listed}");
 }
 
+/// A restore to an earlier checkpoint removes the passing snapshot saved after it; the next
+/// passing version then takes its free label (`passing-1` again). Dropping "the one before"
+/// must not drop the one just saved: it stays, and the note names a version that exists.
+#[tokio::test]
+async fn a_passing_version_saved_under_a_reused_label_is_kept() {
+    if std::process::Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let h = Harness::new(vec![]);
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    std::fs::write(h.cwd().join("test_app.py"), "from app import f\nassert f() > 0\n").unwrap();
+    let app = h.cwd().join("app.py");
+    let write =
+        |n: i32| MockTurn::tool("Write", json!({"file_path": app, "content": format!("def f():\n    return {n}\n")}));
+    let test = || MockTurn::tool("Bash", json!({"command": "python3 test_app.py"}));
+    h.provider.push(MockTurn::tool("Checkpoint", json!({"action": "save", "label": "start"})));
+    h.provider.push(write(2));
+    h.provider.push(test()); // passing-1
+    h.provider.push(MockTurn::tool("Checkpoint", json!({"action": "restore", "label": "start"}))); // passing-1 goes
+    h.provider.push(write(33));
+    h.provider.push(test()); // passing-1 again, the label being free
+    h.provider.push(MockTurn::tool("Checkpoint", json!({"action": "list"})));
+    h.provider.push(MockTurn::text("done"));
+    let cfg = EngineConfig { verify: Some(crate::verify::VerifyConfig::default()), ..nudged_cfg("passingSnapshots") };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("make f return something")).await;
+    let t = h.transcript_text();
+    assert_eq!(t.matches(r#""subtype":"passing_snapshot""#).count(), 2);
+    let listed = tool_results(&e).last().unwrap().1.clone();
+    assert!(listed.contains("passing-1"), "the version just saved is still there: {listed}");
+}
+
 /// Rewriting the same file again and again with no check between is not progress: the stretch
 /// goes on, and its nudge says to run a check. Writing a new file each time is progress.
 #[tokio::test]

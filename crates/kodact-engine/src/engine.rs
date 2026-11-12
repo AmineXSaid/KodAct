@@ -4141,8 +4141,13 @@ impl Engine {
         self.system_event("passing_snapshot", json!({"label": label, "command": command}));
         // One passing version is kept: the newest. The one before it is dropped, so a long
         // session doesn't leave a snapshot (and, in a repository, a ref) per passing check.
+        let saved = label.clone();
         if let Some((old, ..)) = self.passing.replace((label, command.to_string(), writes)) {
-            kodact_tools::builtin::drop_checkpoint(&self.shared.tool_ctx, &old);
+            // The one before may be gone already (a restore to an earlier checkpoint removes the
+            // ones saved after it) and its label taken by this one: never drop the one just saved.
+            if old != saved {
+                kodact_tools::builtin::drop_checkpoint(&self.shared.tool_ctx, &old);
+            }
         }
     }
 
