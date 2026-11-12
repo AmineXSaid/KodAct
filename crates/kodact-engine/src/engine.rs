@@ -3195,6 +3195,10 @@ impl Engine {
                 }
             }
 
+            // What is due before the turn may end goes in one message, so the model answers all
+            // of it in one call instead of one call each (docs/goal.md, point 8).
+            let mut closing: Vec<String> = vec![];
+
             // What the request names and isn't there (`nudges.constraints`): said once a turn.
             if self.cfg.reminders
                 && self.cfg.nudges.constraints
@@ -3206,16 +3210,14 @@ impl Engine {
                 let report = crate::named::report(&self.named, &self.shared.tool_ctx.project_dir, &self.ran_commands);
                 if let Some((text, record)) = report.filter(|_| self.may_nudge(crate::progress::Nudge::Constraints)) {
                     self.system_event("nudge", record);
-                    self.push_user(Message::user_text(text), true, None, true);
-                    continue;
+                    closing.push(text);
                 }
             }
 
             // A result that met every limit was printed and never written: said once at the end.
             if stop_reason != Some(StopReason::Refusal) {
                 if let Some(text) = self.stale_note(turn.api_calls, true) {
-                    self.push_user(Message::user_text(text), true, None, true);
-                    continue;
+                    closing.push(text);
                 }
             }
 
@@ -3231,25 +3233,22 @@ impl Engine {
                         "nudge",
                         json!({"kind": crate::progress::Nudge::PassingSnapshot.as_str(), "label": label}),
                     );
-                    self.push_user(
-                        Message::user_text(format!(
-                            "<system-reminder>\n{note} If you can't fix the failure, put that version back rather \
-                             than finish on a failing one, or say why the failing one is right.\n</system-reminder>"
-                        )),
-                        true,
-                        None,
-                        true,
-                    );
-                    continue;
+                    closing.push(format!(
+                        "<system-reminder>\n{note} If you can't fix the failure, put that version back rather \
+                         than finish on a failing one, or say why the failing one is right.\n</system-reminder>"
+                    ));
                 }
             }
 
             // Verification loop (GOALS pillar 3): no finishing on unchecked changes.
             if self.cfg.reminders && stop_reason != Some(StopReason::Refusal) {
                 if let Some(text) = self.verification_reminder().await {
-                    self.push_user(Message::user_text(text), true, None, true);
-                    continue;
+                    closing.push(text);
                 }
+            }
+            if !closing.is_empty() {
+                self.push_user(Message::user_text(closing.join("\n\n")), true, None, true);
+                continue;
             }
 
             // A reply that ended with no text and no tool call answers nothing, whatever ended it: ask

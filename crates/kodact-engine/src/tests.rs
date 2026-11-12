@@ -3675,3 +3675,26 @@ async fn a_summary_asks_for_the_lowest_reasoning_level() {
         .collect();
     assert_eq!(levels, ["high", "high", "low", "high"], "only the summary asks for low");
 }
+
+/// What is due before a turn may end is said in one message, answered in one model call:
+/// here a file the request names that isn't there, and changes no check has run on.
+#[tokio::test]
+async fn notes_due_at_the_end_of_a_turn_go_in_one_message() {
+    let h = Harness::new(vec![]);
+    let cwd = h.cwd();
+    std::fs::create_dir_all(&cwd).unwrap();
+    let app = cwd.join("app.py");
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": app, "content": "x = 1\n"})));
+    h.provider.push(MockTurn::text("done"));
+    h.provider.push(MockTurn::text("notes.txt was only an example; nothing was verified."));
+    let cfg = EngineConfig {
+        verify: Some(crate::verify::VerifyConfig { commands: vec!["true".into()], max_reminders: 2 }),
+        ..nudged_cfg("constraints")
+    };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("Write app.py and notes.txt.")).await;
+    assert_eq!(r.num_turns, 3, "one call answers both notes");
+    let last = h.provider.requests()[2].messages.last().unwrap().text();
+    assert!(last.contains("names files that don't exist: `notes.txt`"), "{last}");
+    assert!(last.matches("<system-reminder>").count() == 2 && last.contains("true"), "the check is named too: {last}");
+}
