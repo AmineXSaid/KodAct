@@ -1,0 +1,12 @@
+{
+  "instruction": "Rename the function `calc` in pricing.py to `total_price`, and update its callers. Nothing else should change.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": [
+    "python",
+    "quiet",
+    "everyday",
+    "rename"
+  ],
+  "timeout_secs": 300
+}

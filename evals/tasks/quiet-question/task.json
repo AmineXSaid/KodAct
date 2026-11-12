@@ -1,0 +1,12 @@
+{
+  "instruction": "How many seconds does `Client.fetch` wait in total before giving up on a server that never answers? Work it out from the code and write only the number to answer.txt.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "context",
+  "tags": [
+    "python",
+    "quiet",
+    "everyday",
+    "question"
+  ],
+  "timeout_secs": 300
+}

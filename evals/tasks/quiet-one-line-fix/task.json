@@ -1,0 +1,12 @@
+{
+  "instruction": "`python3 test_pages.py` fails: the last page of a listing is missing when the item count is not a multiple of the page size. Fix it.",
+  "check": "python3 test_pages.py && python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": [
+    "python",
+    "quiet",
+    "everyday",
+    "bugfix"
+  ],
+  "timeout_secs": 300
+}
