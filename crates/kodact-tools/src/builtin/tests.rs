@@ -740,11 +740,19 @@ async fn failures_and_empty_results_say_what_to_try() {
     // A path that isn't there: the directory that is, and the close names in it.
     let out = Read.call(json!({"file_path": root.join("src/config.py")}), &c).await.text_content();
     assert!(out.contains("Its directory exists") && out.contains("Config.py"), "{out}");
-    let out = Read.call(json!({"file_path": root.join("lib/deep/config.rs")}), &c).await.text_content();
+    let out = Read.call(json!({"file_path": root.join("lib/deep/zebra.rs")}), &c).await.text_content();
     assert!(
         out.contains("nearest directory that exists is") && out.contains("Nothing there has a similar name"),
         "{out}"
     );
+    // The folder named isn't there, but the file is, under another folder and in another case.
+    let out = Read.call(json!({"file_path": root.join("src/settings/config.py")}), &c).await.text_content();
+    assert!(
+        out.contains("elsewhere below it") && out.contains("Config.py") && out.contains("instead of creating"),
+        "{out}"
+    );
+    let out = Read.call(json!({"file_path": root.join("src/settings/helper.py")}), &c).await.text_content();
+    assert!(out.contains("helpers.py"), "a shorter name finds the longer one: {out}");
     let missing = json!({"file_path": root.join("src/helpers.py"), "old_string": "a", "new_string": "b"});
     assert!(Edit::default().validate(&missing, &c).unwrap_err().contains("File does not exist"));
     let out = Ls.call(json!({"path": root.join("src/Config.py")}), &c).await.text_content();

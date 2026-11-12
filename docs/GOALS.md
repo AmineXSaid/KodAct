@@ -185,11 +185,16 @@ Each pillar lists what KodAct does about it and what shows that it works.
   search, an unescaped regex character, an offset past the end); LS counts
   its entries; NotebookEdit lists the cell ids it has (task
   `near-miss-paths`).
-- **To build:**
-  - tool descriptions tuned against the eval suite. The means is there
-    (`scripts/eval-descriptions.sh` runs the suite with and without a set of
-    descriptions and prints the A/B table); the tuning itself needs runs on
-    a real model, and no description is changed without them.
+  Tool descriptions are tuned by measurement: `scripts/eval-descriptions.sh`
+  runs the suite with and without a set of descriptions and prints the A/B
+  table, and a description changes only when the table says so. The first
+  pass (2026-11-11, `evals/baselines/2026-11-11-tool-descriptions/`: a small
+  model, 7 tasks, 21 runs a side) tried a TodoWrite and a Glob text; the
+  pass rate stayed at 81% and turns moved from 10.0 to 9.7, within noise, so
+  neither was adopted. Each later pass is recorded the same way.
+  A missing path also names a file with a close name elsewhere below the
+  nearest directory that exists (the request named another folder or case),
+  found in that pass.
 - **Measured by:** turns per task and invalid-call rate.
 
 ### 5. Long-horizon execution

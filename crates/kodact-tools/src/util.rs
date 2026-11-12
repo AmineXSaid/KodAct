@@ -82,10 +82,66 @@ pub fn missing_path_hint(path: &Path) -> String {
     } else {
         format!("The nearest directory that exists is {}.", dir.display())
     };
-    match close.is_empty() {
-        false => format!(" {place} Close names there: {}.", close.join(", ")),
-        true => format!(" {place} Nothing there has a similar name ({total} entries; list it with LS or Glob)."),
+    if !close.is_empty() {
+        return format!(" {place} Close names there: {}.", close.join(", "));
     }
+    // The directory asked for isn't there under any close name: the file may be, somewhere
+    // below the nearest directory that exists (another folder name, another case).
+    let elsewhere = named_like_below(dir, path);
+    if !elsewhere.is_empty() {
+        return format!(
+            " {place} A file with a close name is elsewhere below it: {}. If that is the one meant, use it \
+             instead of creating a new file.",
+            elsewhere.join(", ")
+        );
+    }
+    format!(" {place} Nothing there has a similar name ({total} entries; list it with LS or Glob).")
+}
+
+/// Files below `dir` whose name is close to `path`'s last component (the same name in another
+/// case, or the same stem), nearest first, at most five. The walk is bounded, and skips hidden
+/// directories and dependency or build folders.
+fn named_like_below(dir: &Path, path: &Path) -> Vec<String> {
+    const MAX_VISITED: usize = 20_000;
+    let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_lowercase()) else { return vec![] };
+    let stem = name.rsplit_once('.').map(|(s, _)| s).filter(|s| !s.is_empty()).unwrap_or(&name).to_string();
+    let close = |n: &str| {
+        let n = n.to_lowercase();
+        let n_stem = n.rsplit_once('.').map(|(s, _)| s).filter(|s| !s.is_empty()).unwrap_or(&n);
+        n == name
+            || n_stem == stem
+            || (stem.len() >= 4 && (n_stem.starts_with(&stem) || stem.starts_with(n_stem) && n_stem.len() >= 4))
+    };
+    let (mut found, mut visited) = (vec![], 0usize);
+    let mut level = vec![dir.to_path_buf()];
+    // Breadth first: the nearest matches come first.
+    while !level.is_empty() && found.len() < 5 && visited < MAX_VISITED {
+        let mut next = vec![];
+        for d in level {
+            let Ok(rd) = std::fs::read_dir(&d) else { continue };
+            let mut entries: Vec<_> = rd.flatten().collect();
+            entries.sort_by_key(|e| e.file_name());
+            for e in entries {
+                visited += 1;
+                let n = e.file_name().to_string_lossy().into_owned();
+                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                if is_dir {
+                    if !n.starts_with('.')
+                        && !matches!(
+                            n.as_str(),
+                            "node_modules" | "target" | "__pycache__" | "dist" | "build" | "vendor"
+                        )
+                    {
+                        next.push(e.path());
+                    }
+                } else if close(&n) && found.len() < 5 {
+                    found.push(e.path().display().to_string());
+                }
+            }
+        }
+        level = next;
+    }
+    found
 }
 
 pub fn number_lines(lines: &[&str], first: usize) -> String {

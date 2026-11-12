@@ -239,6 +239,38 @@ pub(crate) fn strip_provider_data(body: &mut Value) {
     }
 }
 
+/// The wait an error body states in words or in a `retryDelay` field: `1h36m48.5s`, `6m0s`,
+/// `12s`, `350ms`. `None` when it states none, so the usual backoff applies.
+pub(crate) fn stated_wait(text: &str) -> Option<Duration> {
+    let lower = text.to_ascii_lowercase();
+    let at = ["retry in ", "try again in ", "retrydelay\": \"", "retrydelay\":\""]
+        .iter()
+        .find_map(|k| lower.find(k).map(|i| i + k.len()))?;
+    let (mut total, mut number, mut any) = (0f64, String::new(), false);
+    let mut chars = lower[at..].chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '0'..='9' | '.' => number.push(c),
+            'h' | 'm' | 's' if !number.is_empty() => {
+                let n: f64 = number.trim_end_matches('.').parse().ok()?;
+                number.clear();
+                any = true;
+                total += match c {
+                    'h' => n * 3600.0,
+                    'm' if chars.peek() == Some(&'s') => {
+                        chars.next();
+                        n / 1000.0
+                    }
+                    'm' => n * 60.0,
+                    _ => n,
+                };
+            }
+            _ => break,
+        }
+    }
+    (any && total.is_finite() && total >= 0.0).then(|| Duration::from_secs_f64(total))
+}
+
 pub(crate) async fn http_error(resp: reqwest::Response) -> ApiError {
     let status = resp.status().as_u16();
     let url = crate::auth::display_url(resp.url().as_str());
@@ -249,6 +281,9 @@ pub(crate) async fn http_error(resp: reqwest::Response) -> ApiError {
         .and_then(|v| v.parse::<f64>().ok())
         .map(Duration::from_secs_f64);
     let text = resp.text().await.unwrap_or_default();
+    // No header, but the body says how long ("Please retry in 1h36m48.5s", `"retryDelay": "20s"`):
+    // a gateway in front of another provider often passes only the body on.
+    let retry_after = retry_after.or_else(|| stated_wait(&text));
     let (kind, message) = match serde_json::from_str::<Value>(&text) {
         Ok(v) => (
             v.pointer("/error/type").and_then(Value::as_str).unwrap_or("error").to_string(),
@@ -520,5 +555,23 @@ mod tests {
         assert_eq!(h.get(BETA_HEADER).unwrap(), "from-flag,fast-mode-2026-02-01,long-context");
         assert_eq!(h.get_all(BETA_HEADER).iter().count(), 1);
         assert_eq!(h.get("x-a").unwrap(), "1");
+    }
+}
+
+#[cfg(test)]
+mod stated_wait_tests {
+    use super::stated_wait;
+    use std::time::Duration;
+
+    #[test]
+    fn a_wait_stated_in_the_body_is_read() {
+        let day = "Quota exceeded for metric: requests per day limit exceeded on Free Tier.\nPlease retry in 1h36m48.519213421s.";
+        assert_eq!(stated_wait(day).unwrap().as_secs(), 5808);
+        assert_eq!(stated_wait("Rate limit reached. Please try again in 6m0s."), Some(Duration::from_secs(360)));
+        assert_eq!(stated_wait("please retry in 12s"), Some(Duration::from_secs(12)));
+        assert_eq!(stated_wait("Try again in 350ms"), Some(Duration::from_millis(350)));
+        assert_eq!(stated_wait(r#"{"details": [{"retryDelay": "20s"}]}"#), Some(Duration::from_secs(20)));
+        assert_eq!(stated_wait("Rate limit reached, retry in a moment"), None);
+        assert_eq!(stated_wait("overloaded"), None);
     }
 }

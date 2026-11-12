@@ -36,7 +36,14 @@
   searched and the usual cause. LS and NotebookEdit return structured
   results, as every other tool does.
 - `scripts/eval-descriptions.sh` measures a set of tool descriptions against
-  the built-in ones.
+  the built-in ones. First pass recorded in
+  `evals/baselines/2026-11-11-tool-descriptions/`: two candidates, neither
+  better than noise, none adopted.
+- **A missing path names a close file elsewhere in the tree** (another
+  folder, another case), not only in the nearest directory.
+- **A wait stated only in an error's body is honoured** ("Please retry in
+  1h36m48s", `retryDelay`), where an endpoint sends no `retry-after` header:
+  a spent daily quota is no longer retried after a few seconds.
 
 ### Three gaps closed from a source comparison with other harnesses
 - **A session killed mid-turn says so when resumed.** The transcript records
