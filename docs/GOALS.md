@@ -244,6 +244,9 @@ Each pillar lists what KodAct does about it and what shows that it works.
     overwrite each other or the session's tree. The result names the branch
     and directory when the agent changed something; an untouched copy is
     removed (task `parallel-plugins`).
+  - both tools below are opt-in (`tools.notes`, `tools.checkpoint`): they add
+    about 1,900 characters to every request, and in the first 79 measured
+    runs models called Notes never and Checkpoint twice (docs/goal.md, point 9);
   - a notes file (the Notes tool): what the model writes there is given back
     after every compaction, whole within a twentieth of the model's window
     and otherwise its latest part with the way to read the rest, and is kept

@@ -304,6 +304,15 @@ pub(crate) fn nudges(settings: &LoadedSettings, warnings: &mut Vec<String>) -> k
     c
 }
 
+/// Whether an opt-in tool is offered: its variable (for A/B runs), else its setting; off by
+/// default.
+pub(crate) fn memory_tool(settings: &LoadedSettings, var: &str, pointer: &str) -> bool {
+    match env_nonempty(var) {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool(pointer).unwrap_or(false),
+    }
+}
+
 /// Whether Edit may name the lines to replace instead of retyping them: `edit.lineRanges`, or
 /// `KODACT_EDIT_LINES` (for A/B runs). Off by default until it is measured.
 pub(crate) fn line_edits(settings: &LoadedSettings) -> bool {
@@ -881,6 +890,14 @@ pub fn build_session(
     kodact_tools::builtin::set_shell(&mut tools, &shell);
     let line_edits = line_edits(&settings);
     kodact_tools::builtin::set_line_edits(&mut tools, line_edits);
+    // The passing-snapshot nudge saves with the Checkpoint tool, so it brings the tool along.
+    let checkpoints = memory_tool(&settings, "KODACT_CHECKPOINTS", "/tools/checkpoint")
+        || nudges(&settings, &mut vec![]).passing_snapshots;
+    kodact_tools::builtin::set_memory_tools(
+        &mut tools,
+        memory_tool(&settings, "KODACT_NOTES", "/tools/notes"),
+        checkpoints,
+    );
     let web_tools = web_tools(&provider, &settings, &session_model(&opts, &settings));
     for t in &web_tools {
         tools.register(t.clone());

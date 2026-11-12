@@ -855,3 +855,19 @@ async fn checkpoint_in_a_repository_covers_shell_changes_and_outlasts_the_proces
         .unwrap_err()
         .contains("No checkpoint"));
 }
+
+/// What each core tool costs in every request: its name, description and schema, as sent.
+/// Printed for the record (`cargo test -p kodact-tools tool_sizes -- --nocapture`).
+#[test]
+fn tool_sizes() {
+    let mut reg = crate::ToolRegistry::new();
+    register_core(&mut reg);
+    set_memory_tools(&mut reg, true, true);
+    let mut total = 0;
+    for s in reg.specs() {
+        let n = s.name.len() + s.description.len() + s.input_schema.to_string().len();
+        total += n;
+        println!("{:>6}  {}", n, s.name);
+    }
+    println!("{total:>6}  all core tools");
+}
