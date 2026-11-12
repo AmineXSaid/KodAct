@@ -16,6 +16,10 @@
 //!   the budget (and the same [`MIN_CALLS`]), so a run with a limit gets a first version down
 //!   while there is time to improve it. Only with a budget.
 //!
+//! A write counts the first time it reaches a file. Writing the same files again with no check
+//! passing in between does not start the stretch over: fifteen edits to one file and no test
+//! run is a stretch too, and its nudge says to run a check, not to make a change.
+//!
 //! Time spent waiting on a tool (a build, a download, a test suite, a sub-agent) is left out of
 //! a stretch's time: the model could not have shortened it, and a nudge for it would be advice
 //! with no fact behind it.
@@ -214,6 +218,8 @@ pub(crate) struct Stretch {
     pub calls: u32,
     /// The largest share of any budget spent since then (0 without a budget).
     pub share: f64,
+    /// Calls in it that wrote again to files already written, with no check passing between.
+    pub rewrites: u32,
 }
 
 /// One turn's progress: when something was last made, and which nudges this stretch has had.
@@ -226,6 +232,7 @@ pub(crate) struct Progress {
     cost_since: f64,
     made_any: bool,
     nudged_this_stretch: bool,
+    rewrites: u32,
 }
 
 impl Default for Progress {
@@ -243,12 +250,18 @@ impl Progress {
             cost_since: cost_now,
             made_any: false,
             nudged_this_stretch: false,
+            rewrites: 0,
         }
     }
 
     /// A model call that made no progress.
     pub fn step(&mut self) {
         self.calls += 1;
+    }
+
+    /// This step wrote again to files already written since a check last passed.
+    pub fn rewrote(&mut self) {
+        self.rewrites += 1;
     }
 
     /// Time spent waiting on tools: left out of the stretch's time.
@@ -278,7 +291,7 @@ impl Progress {
         if let Some(u) = budget.usd.filter(|u| *u > 0.0) {
             share = share.max((cost_now - self.cost_since).max(0.0) / u);
         }
-        Stretch { calls: self.calls, share }
+        Stretch { calls: self.calls, share, rewrites: self.rewrites }
     }
 
     /// The nudge due now, if any (at most one per stretch). `early` and `pacing` say which are on.
@@ -339,6 +352,18 @@ pub(crate) fn time_warning_due(left: Duration, total: Duration, steps: Option<u3
 /// What the model is told, as a suggestion it can set aside.
 pub(crate) fn text(kind: Nudge, s: Stretch, has_budget: bool) -> String {
     let pct = (s.share * 100.0).round() as u32;
+    // Most of the stretch went into the same files: the next step is a check, not a change.
+    if kind == Nudge::Progress && s.rewrites * 2 >= s.calls && s.rewrites > 0 {
+        let spent = if has_budget { format!(" (about {pct}% of this run's budget)") } else { String::new() };
+        return format!(
+            "<system-reminder>\n{} model calls{spent} have passed since a file was first changed or a check \
+             passed, {} of them changing files you had already changed. Run a check on what is there (the \
+             tests, the build, the program itself) before changing it further: it tells you whether the \
+             changes are going the right way. Ignore this if a check can't run until the change is \
+             complete.\n</system-reminder>",
+            s.calls, s.rewrites
+        );
+    }
     let body = match (kind, has_budget) {
         (Nudge::ProgressEarly, _) => format!(
             "About {pct}% of this run's budget has gone in {} model calls, and nothing has been written or \
@@ -428,7 +453,7 @@ mod tests {
     use super::*;
 
     fn s(calls: u32, share: f64) -> Stretch {
-        Stretch { calls, share }
+        Stretch { calls, share, rewrites: 0 }
     }
 
     #[test]
