@@ -39,7 +39,22 @@ pub(crate) struct Named {
 }
 
 /// Words that ask for a file to be gone: what such a sentence names is not missing when it is.
-const REMOVALS: [&str; 5] = ["delete", "remove", "rm ", "get rid of", "clean up"];
+/// Whole words: `form of`, `platform` and `long-term` have the letters of `rm`, not its sense.
+const REMOVALS: [&str; 13] = [
+    "delete",
+    "deletes",
+    "deleted",
+    "deleting",
+    "remove",
+    "removes",
+    "removed",
+    "removing",
+    "rm",
+    "get rid of",
+    "clean up",
+    "cleans up",
+    "cleaned up",
+];
 /// Words that turn a sentence into a prohibition, or set aside what it names: whole words,
 /// in any case.
 const PROHIBITIONS: [&str; 17] = [
@@ -155,7 +170,7 @@ impl Named {
                 ([], Some((bytes, said))) => unattached.push((type_words(&lower), bytes, said)),
                 _ => {}
             }
-            let removing = REMOVALS.iter().any(|w| lower.contains(w));
+            let removing = REMOVALS.iter().any(|w| has_word(&lower, w));
             for f in files_here {
                 if removing {
                     push(&mut n.removed, f);
@@ -778,6 +793,25 @@ mod tests {
             Named::from_request("Move config.ini to settings.toml and delete config.ini. Write notes.md.", d.path());
         assert_eq!(Watched::at_start(&n, d.path()).still_missing(), ["notes.md"]);
         assert_eq!(n.removed, ["config.ini", "settings.toml"]);
+    }
+
+    #[test]
+    fn a_removal_is_a_word_not_letters_inside_one() {
+        let d = tempfile::tempdir().unwrap();
+        for ask in [
+            "Write the compressed form of data.txt to data.comp.",
+            "Transform data.txt into data.comp for the platform.",
+            "Confirm data.txt converts, then write data.comp.",
+        ] {
+            let n = Named::from_request(ask, d.path());
+            assert_eq!(n.files, ["data.txt", "data.comp"], "{ask}");
+            assert!(n.removed.is_empty(), "{ask}");
+        }
+        for ask in
+            ["rm data.txt, then write data.comp.", "Delete data.txt and data.comp.", "Make sure data.txt is deleted."]
+        {
+            assert!(Named::from_request(ask, d.path()).removed.contains(&"data.txt".to_string()), "{ask}");
+        }
     }
 
     #[test]
