@@ -18,3 +18,17 @@ Of the 12 runs that ran to the end, 9 passed. The three that failed:
 
 The 47-task baseline is therefore 25 tasks from the first part plus these 12, on one model at
 one run each. A full pass owes the 10 quota-stopped tasks and `deliverable-small-window`.
+
+## Third part: the 11 left, on another model (same day)
+
+`report-part3.md`, `report-part3.json`: the 11 tasks above on `gemini-3.5-flash-lite` (the
+first model's quota was spent; its preview name shares that quota), same settings. Three ran
+to the end and passed: `slow-build`, `split-module`, `steer-more-work`. `deliverable-small-
+window` now starts (cc222de) and ran 22 turns before this model's daily quota ended it too;
+the other seven ended on the quota at once. A different model, so these three join the
+baseline as a lead for those tasks, not as the first model's result.
+
+So far: 40 of the 47 tasks have run to the end at least once (37 on gemini-3.1-flash-lite, 3
+on gemini-3.5-flash-lite). Owed: stop-at-target, switch-idea, three-reports, tool-chain,
+trace-discount, two-plan-scheduler, verbose-stages and deliverable-small-window on the first
+model, which a scheduled run picks up when its quota resets.
