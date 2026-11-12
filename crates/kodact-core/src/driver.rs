@@ -932,7 +932,7 @@ impl Driver {
             let transcript = goal::evaluator_transcript(&self.engine.state.messages);
             // With what KodAct itself recorded of the last turn's changes: the transcript may
             // have lost the check to its length, and an agent's "all tests pass" is a claim.
-            let harness = goal::harness_note(last.verification.as_ref());
+            let harness = goal::harness_note(last.verification.as_ref(), &last.missing);
             let user = format!("Goal: {condition}\n\nTranscript:\n{transcript}{harness}");
             let model = commands::goal_model(self);
             let answer = commands::side_request_on(self, &model, goal::EVALUATOR_PROMPT, user, 800, &cancel).await;

@@ -54,7 +54,13 @@ pub fn result_message(r: &TurnResult, session_id: &str) -> ResultMessage {
         permission_denials: r.permission_denials.clone(),
         structured_output: r.structured_output.clone(),
         errors: r.errors.clone(),
-        verification: r.verification.as_ref().map(|v| v.record()),
+        verification: r.verification.as_ref().map(|v| {
+            let mut record = v.record();
+            if !r.missing.is_empty() {
+                record["missing"] = serde_json::json!(r.missing);
+            }
+            record
+        }),
         uuid: new_uuid(),
         immediate: None,
     }

@@ -219,6 +219,59 @@ const CHECK_PREFIXES: &[&str] = &[
 const INTERPRETERS: &[&str] =
     &["python", "python3", "node", "bash", "sh", "ruby", "perl", "php", "deno", "bun", "tsx", "ts-node"];
 
+/// Flags that ask a tool about itself (`pytest --version`, `make --help`): a run with only these
+/// checks nothing. `-v` isn't one: `pytest -v` is a verbose test run as often as `-v` is a
+/// version elsewhere. A compiler with no file to compile is told by [`has_input`] instead.
+const INFO_FLAGS: &[&str] =
+    &["--version", "-version", "-V", "--help", "-help", "-h", "-dumpversion", "-dumpfullversion", "-dumpmachine"];
+
+/// Do these arguments only ask the tool about itself: [`INFO_FLAGS`], and redirections of what
+/// it prints (`gcc --version 2>&1`, `pytest --help > help.txt`)?
+fn asks_about_itself(args: &[String]) -> bool {
+    let mut asked = false;
+    let mut args = args.iter().map(String::as_str);
+    while let Some(a) = args.next() {
+        if INFO_FLAGS.contains(&a) {
+            asked = true;
+        } else if is_redirect(a) {
+            if bare_redirect(a) {
+                args.next();
+            }
+        } else {
+            return false;
+        }
+    }
+    asked
+}
+
+/// A redirection word: `>`, `>>`, `2>&1`, `2>/dev/null`, `&>log`, `<in.txt`.
+fn is_redirect(w: &str) -> bool {
+    let op = w.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
+    op.starts_with('>') || op.starts_with('<')
+}
+
+/// A redirection whose target is the next word (`>`, `2>`, `<`), not attached (`2>&1`, `>out`).
+fn bare_redirect(w: &str) -> bool {
+    let op = w.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
+    !op.is_empty() && op.chars().all(|c| matches!(c, '>' | '<'))
+}
+
+/// Does a C-family compiler run get a file to compile (`-` is its standard input)? `gcc -v`,
+/// `gcc --version` and `clang -print-search-dirs` don't: they build nothing and check nothing.
+fn has_input(args: &[String]) -> bool {
+    let mut args = args.iter().map(String::as_str);
+    while let Some(a) = args.next() {
+        if matches!(a, "-o" | "-I" | "-L" | "-D" | "-U" | "-x" | "-MF" | "-MT" | "-include" | "-isystem")
+            || bare_redirect(a)
+        {
+            args.next();
+        } else if a == "-" || (!a.starts_with('-') && !is_redirect(a)) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Words a command can start with that don't change what it runs.
 fn skip_wrappers(words: &[String]) -> &[String] {
     let mut i = 0;
@@ -685,8 +738,14 @@ fn part_is_check(part: &str, configured: &[String], changed: &[PathBuf]) -> bool
     let all = words(part);
     let w = skip_wrappers(&all);
     let Some(first) = w.first() else { return false };
-    if configured.iter().map(String::as_str).chain(CHECK_PREFIXES.iter().copied()).any(|c| starts_with_words(w, c)) {
-        return true;
+    if let Some(tool) =
+        configured.iter().map(String::as_str).chain(CHECK_PREFIXES.iter().copied()).find(|c| starts_with_words(w, c))
+    {
+        // `pytest --version`, `make --help`, `gcc -v`: the tool is asked about itself, and that
+        // checks nothing (an edited project isn't tested by it).
+        let rest = &w[tool.split_whitespace().count()..];
+        let compiler = matches!(tool, "gcc" | "g++" | "clang" | "javac");
+        return !asks_about_itself(rest) && (!compiler || has_input(rest));
     }
     if is_check_script(first) {
         return true;
@@ -810,6 +869,10 @@ pub(crate) fn built_artifact(command: &str) -> Option<String> {
             .iter()
             .any(|a| matches!(a.as_str(), "-c" | "-S" | "-E" | "-fsyntax-only" | "-shared" | "--crate-type=lib"))
         {
+            continue;
+        }
+        // `gcc --version`, `gcc -v`, `rustc --version`: nothing given to compile, nothing built.
+        if asks_about_itself(args) || (!matches!(prog, "rustc" | "go") && !has_input(args)) {
             continue;
         }
         let named = args.iter().enumerate().find_map(|(i, a)| match a.as_str() {
@@ -984,6 +1047,12 @@ mod tests {
         for none in ["gcc -c x.c", "gcc -fsyntax-only x.c", "go test ./...", "cargo build", "make", "go build ./..."] {
             assert_eq!(built_artifact(none), None, "{none}");
         }
+        assert_eq!(built_artifact("gcc -x c - -o prog <<'EOF'\nint main(){}\nEOF").as_deref(), Some("prog"));
+        // Asking the compiler about itself builds nothing.
+        for none in ["gcc --version", "gcc --version | head -1", "gcc -v 2>&1", "clang -dumpmachine", "rustc --version"]
+        {
+            assert_eq!(built_artifact(none), None, "{none}");
+        }
         assert!(runs_artifact("./image && ls -l reconstructed.ppm", "image"));
         assert!(runs_artifact("time /work/a.out > out.txt", "a.out"));
         assert!(runs_artifact("cd /work && ./bin/app --help", "bin/app"));
@@ -1056,6 +1125,42 @@ mod tests {
             assert!(!is_check(no, none, &changed), "{no}");
         }
         assert!(is_check("just verify", &["just verify".into()], &changed), "configured commands count");
+    }
+
+    /// A tool asked about itself checks nothing: after an edit, `pytest --version` must not
+    /// mark the change as tested. A real run of the same tools still does.
+    #[test]
+    fn a_version_or_help_run_is_not_a_check() {
+        let none: &[String] = &[];
+        let changed = [PathBuf::from("/p/convert.py")];
+        for no in [
+            "gcc --version",
+            "cd /app && gcc --version | head -1; perl -e 'print 1'",
+            "gcc -v 2>&1",
+            "clang -print-search-dirs",
+            "pytest --version",
+            "python3 -m pytest --help",
+            "make --version > /dev/null",
+            "cargo test --help",
+            "mypy -V",
+            "npx tsc --version 2>&1 | head -1",
+        ] {
+            assert!(!is_check(no, none, &changed), "{no}");
+        }
+        assert!(!is_check("just verify --help", &["just verify".into()], &changed), "configured commands too");
+        for yes in [
+            "gcc -O2 -o decomp decomp.c",
+            "gcc -c x.c",
+            "pytest -v",
+            "pytest",
+            "make -j8",
+            "cargo test -q",
+            "python3 convert.py --version",
+            "javac Main.java",
+            "gcc -x c - -o prog <<'EOF'\nint main(){return 0;}\nEOF",
+        ] {
+            assert!(is_check(yes, none, &changed), "{yes}");
+        }
     }
 
     #[test]

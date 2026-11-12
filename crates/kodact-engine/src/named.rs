@@ -501,7 +501,13 @@ fn trim_word(w: &str) -> &str {
 }
 
 fn is_file_word(w: &str) -> bool {
-    if w.is_empty() || w.contains(char::is_whitespace) || w.contains("://") || w.contains('@') || w.starts_with('-') {
+    // `<` and `>` are markup or redirections (`</system-reminder>`, `2>/dev/null`), never a path.
+    if w.is_empty()
+        || w.contains(char::is_whitespace)
+        || w.contains("://")
+        || w.contains(['@', '<', '>'])
+        || w.starts_with('-')
+    {
         return false;
     }
     if w.starts_with("www.") || w.chars().all(|c| c == '/' || c == '.') {
@@ -812,6 +818,13 @@ mod tests {
         {
             assert!(Named::from_request(ask, d.path()).removed.contains(&"data.txt".to_string()), "{ask}");
         }
+    }
+
+    #[test]
+    fn markup_is_not_a_file() {
+        let d = tempfile::tempdir().unwrap();
+        let ask = "<system-reminder>\nKeep working toward the goal: report.txt has the totals\n</system-reminder>";
+        assert_eq!(Named::from_request(ask, d.path()).files, ["report.txt"]);
     }
 
     #[test]

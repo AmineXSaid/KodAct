@@ -734,6 +734,12 @@ pub struct TurnResult {
     /// Where the turn's changes stand: checked, failed, or not run (`None` with the
     /// verification loop off).
     pub verification: Option<crate::verify::Verified>,
+    /// The files the request asks to be made (those it names that were absent when the turn
+    /// started) that don't exist when it ends, reported beside `verification` and never instead
+    /// of it: which files a request asks for is read from its words, a guess, so it adds a line
+    /// to the result and changes no status a script gates on. Empty with the verification loop
+    /// off.
+    pub missing: Vec<String>,
 }
 
 pub struct Engine {
@@ -2272,6 +2278,7 @@ impl Engine {
             auth_failed: false,
             tool_calls: 0,
             verification: None,
+            missing: vec![],
         }
     }
 
@@ -2371,6 +2378,9 @@ impl Engine {
         // A turn a hook blocked before it began did nothing to report on.
         if result.prompt_blocked.is_none() {
             result.verification = self.verification_state().await;
+            if result.verification.is_some() {
+                result.missing = self.watched.still_missing();
+            }
         }
         self.handle.set_turn_running(false);
         self.handle.end_turn_overrides();
@@ -4334,6 +4344,7 @@ impl Engine {
             auth_failed: false,
             tool_calls: turn.tool_calls,
             verification: None,
+            missing: vec![],
         }
     }
 

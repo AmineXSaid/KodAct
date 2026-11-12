@@ -238,11 +238,13 @@ fn first_chars(s: &str, max: usize) -> String {
 
 /// What KodAct itself recorded about the last turn's changes, for the evaluator: the same
 /// state the verification reminder and the result's `verification` field are decided on. Said
-/// only where it bears on a goal: changes nobody checked, and how the last check ended. A turn
-/// that changed nothing says nothing (an earlier turn's changes are in the transcript).
-pub fn harness_note(state: Option<&kodact_engine::Verified>) -> String {
+/// only where it bears on a goal: changes nobody checked, how the last check ended, and the
+/// files the turn's request asks for that don't exist (`missing`, the result's
+/// `verification.missing`). A turn that changed nothing and left nothing missing says nothing
+/// (an earlier turn's changes are in the transcript).
+pub fn harness_note(state: Option<&kodact_engine::Verified>, missing: &[String]) -> String {
     use kodact_engine::Verified;
-    let said = match state {
+    let mut said = match state {
         Some(Verified::Unchecked { files, shell: false }) if !files.is_empty() => {
             format!("in the last turn these files changed and no check has run since: {}.", files.join(", "))
         }
@@ -255,8 +257,19 @@ pub fn harness_note(state: Option<&kodact_engine::Verified>) -> String {
         Some(Verified::Passed { command }) => {
             format!("the last check (`{command}`) passed, and nothing changed after it.")
         }
-        _ => return String::new(),
+        _ => String::new(),
     };
+    if !missing.is_empty() {
+        let files = missing.join(", ");
+        said = if said.is_empty() {
+            format!("files the last request names don't exist: {files}.")
+        } else {
+            format!("{said} Files the last request names don't exist: {files}.")
+        };
+    }
+    if said.is_empty() {
+        return String::new();
+    }
     format!("\n\nHARNESS: {said}")
 }
 
@@ -299,16 +312,26 @@ mod tests {
         use kodact_engine::Verified;
         let unchecked = Verified::Unchecked { files: vec!["a.py".into(), "b.py".into()], shell: false };
         assert_eq!(
-            harness_note(Some(&unchecked)),
+            harness_note(Some(&unchecked), &[]),
             "\n\nHARNESS: in the last turn these files changed and no check has run since: a.py, b.py."
         );
-        assert!(harness_note(Some(&Verified::Unchecked { files: vec![], shell: true })).contains("shell commands"));
-        assert!(harness_note(Some(&Verified::Failed { command: "make test".into() })).contains("(`make test`) failed"));
-        assert!(harness_note(Some(&Verified::Passed { command: "make test".into() })).contains("passed"));
+        assert!(harness_note(Some(&Verified::Unchecked { files: vec![], shell: true }), &[]).contains("shell commands"));
+        assert!(
+            harness_note(Some(&Verified::Failed { command: "make test".into() }), &[]).contains("(`make test`) failed")
+        );
+        assert!(harness_note(Some(&Verified::Passed { command: "make test".into() }), &[]).contains("passed"));
         // Nothing to say of a turn that changed nothing, or with the loop off.
-        assert_eq!(harness_note(Some(&Verified::NoChanges)), "");
-        assert_eq!(harness_note(Some(&Verified::ReadBack)), "");
-        assert_eq!(harness_note(None), "");
+        assert_eq!(harness_note(Some(&Verified::NoChanges), &[]), "");
+        assert_eq!(harness_note(Some(&Verified::ReadBack), &[]), "");
+        assert_eq!(harness_note(None, &[]), "");
+        // The files the request asks for that were never made, with or without a check to report.
+        let missing = ["data.comp".to_string()];
+        assert_eq!(
+            harness_note(Some(&Verified::NoChanges), &missing),
+            "\n\nHARNESS: files the last request names don't exist: data.comp."
+        );
+        assert!(harness_note(Some(&Verified::Passed { command: "gcc -o x x.c".into() }), &missing)
+            .ends_with("nothing changed after it. Files the last request names don't exist: data.comp."));
         assert!(EVALUATOR_PROMPT.contains("A HARNESS line"));
     }
 

@@ -1000,6 +1000,32 @@ async fn the_result_reports_the_verification_state() {
     assert_eq!(h.engine().submit(prompt("hi")).await.verification, None);
 }
 
+/// A file the request asks to be made that the turn never made is said beside the status,
+/// which it doesn't change: which files are asked for is read from the request's words, a guess.
+/// A check that ran (here on other work) passed, and the result still says what is missing.
+#[tokio::test]
+async fn the_result_names_the_requested_files_never_made() {
+    let h = Harness::new(vec![]);
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    std::fs::write(h.cwd().join("data.txt"), "some text").unwrap();
+    let ask = "Write the compressed form of data.txt to data.comp, so that the decoder gives the text back.";
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "true"})));
+    h.provider.push(MockTurn::text("I ran out of ideas."));
+    let mut e = verifying_engine(&h, &["true"]);
+    let r = e.submit(prompt(ask)).await;
+    assert_eq!(r.missing, ["data.comp"], "data.txt was there all along");
+    assert_eq!(r.verification, Some(Verified::Passed { command: "true".into() }), "the status is unchanged");
+    // Made this time: nothing is missing.
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": h.cwd().join("data.comp"), "content": "x"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "true"})));
+    h.provider.push(MockTurn::text("done"));
+    let r = e.submit(prompt(ask)).await;
+    assert!(r.missing.is_empty(), "{:?}", r.missing);
+    // With the verification loop off, the result says nothing of it either.
+    h.provider.push(MockTurn::text("no"));
+    assert!(h.engine().submit(prompt("Write notes.md.")).await.missing.is_empty());
+}
+
 #[tokio::test]
 async fn verify_accepts_a_check_after_the_last_change() {
     let h = Harness::new(vec![]);

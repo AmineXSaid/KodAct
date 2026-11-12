@@ -138,6 +138,14 @@ Each pillar lists what KodAct does about it and what shows that it works.
     `passed`, `failed`, `unchecked`, `read_back`, `no_changes`), for scripts
     to gate on; `kodact-eval` records it per run, so a false finish shows as
     announced (`unchecked`, `failed`) or as slipped past a check (`passed`);
+  - `verification.missing` names the files the request asks to be made that
+    don't exist when the turn ends, beside the status and never changing it
+    (which files are asked for is read from the request's words); a false
+    finish with it was announced too (`kodact-eval` records
+    `verification_missing`, task `named-deliverables`);
+  - a tool asked only about itself (`gcc --version`, `pytest --help`,
+    `gcc -v`) is not a check and builds nothing: before, a version probe after
+    an edit marked the change as tested and silenced the reminder;
   - a file an edit leaves unparseable is said with the edit's result, by the
     language's own parser when installed (`verification.syntaxCheck`;
     `edit_diagnostics` per run, task `syntax-after-edit`).

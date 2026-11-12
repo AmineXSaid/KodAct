@@ -372,8 +372,25 @@ answer. It is absent with the verification loop off.
 | `failed` | The last check failed, and nothing changed after it | `command` |
 | `unchecked` | Changes no check has run on since | `files`, and `shell: true` when they came from shell commands |
 
+A check is a test, build or lint run (`cargo test`, `make`, `pytest`, a
+configured `verification.commands` entry) or a run of the changed code. A
+tool asked only about itself (`gcc --version`, `pytest --help`, `gcc -v`) is
+not one: it tests nothing.
+
+With any status, `missing` lists the files the request asks to be made that
+don't exist when the turn ends: files it names that weren't there when the
+turn started (a file named in a sentence asking to remove something isn't
+one, and a request that isn't in English isn't read). Which files a request
+asks for is read from its words, a guess, so `missing` sits beside the
+status and never changes it:
+
+```json
+"verification": {"status": "passed", "command": "make", "missing": ["out/report.txt"]}
+```
+
 ```bash
 kodact -p "fix the failing test" --output-format json | jq -e '.verification.status == "passed"'
+kodact -p "write the report to out/report.txt" --output-format json | jq -e '.verification.missing == null'
 ```
 
 `exit_code` appears in `json` mode only. A turn whose last replies held only
