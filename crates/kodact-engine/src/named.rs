@@ -5,7 +5,12 @@
 //!   with an extension (`answer.txt`). URLs, e-mail addresses, version numbers (`1.4.0`) and
 //!   abbreviations (`e.g.`) are not files.
 //! - A **command** is a span in backticks whose first word is a program this machine has
-//!   (on `PATH`) or a script in the project (`./build.sh`, `python3 run_tests.py`).
+//!   (on `PATH`) or a script in the project (`./build.sh`, `python3 run_tests.py`), in a
+//!   sentence that asks for it: words before it that say to run or use it ("run", "verify
+//!   with", "make sure"), or words after it about its outcome ("must pass", "fails"). A
+//!   command a sentence merely mentions, or mentions next to "avoid", "without", "instead of"
+//!   and the like, is not asked for. This is positive evidence only (docs/goal.md, point 10):
+//!   a request in words these lists don't have names no command, and nothing is said.
 //! - A **size limit** is a size with its unit (`40 KB`, `2048 bytes`, `<5000 bytes`) after "at
 //!   most", "under", "no more than", "less than", "smaller than", "below", "max", "maximum",
 //!   "limit" or `<`/`<=`/`≤`. "Under", "less than", "smaller than", "below" and `<` are strict
@@ -35,6 +40,35 @@ pub(crate) struct Named {
 const REMOVALS: [&str; 5] = ["delete", "remove", "rm ", "get rid of", "clean up"];
 /// Words that turn a sentence into a prohibition.
 const NEGATIONS: [&str; 6] = ["don't", "do not", "never", "must not", "should not", "shouldn't"];
+/// Words before a command that ask for it to be run.
+const ASKS_BEFORE: [&str; 22] = [
+    "run", "rerun", "execute", "use", "using", "with", "via", "by", "pass", "make", "sure", "ensure", "verify",
+    "check", "test", "try", "call", "invoke", "until", "when", "after", "get",
+];
+/// Words after a command that say how it should (or does) end: it is the request's check.
+const OUTCOMES_AFTER: [&str; 12] =
+    ["pass", "passes", "succeed", "succeeds", "work", "works", "fail", "fails", "failing", "exits", "exit", "prints"];
+/// Words that take a command out of what is asked, wherever they stand in its sentence.
+const NOT_ASKED: [&str; 12] =
+    ["avoid", "without", "instead", "rather", "skip", "except", "unless", "not", "no", "nor", "neither", "stop"];
+
+/// Does `sentence` ask for the backticked command that starts at byte `at` and ends at `end`?
+fn asks_for(sentence: &str, at: usize, end: usize) -> bool {
+    let words = |t: &str| -> Vec<String> {
+        t.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric() && c != '\'')
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let (before, after) = (words(&sentence[..at]), words(&sentence[end..]));
+    if before.iter().chain(&after).any(|w| NOT_ASKED.contains(&w.as_str()) || w.ends_with("n't")) {
+        return false;
+    }
+    before.iter().any(|w| ASKS_BEFORE.contains(&w.as_str()))
+        || after.iter().any(|w| OUTCOMES_AFTER.contains(&w.as_str()))
+}
+
 /// Words before a size that make it a limit.
 const LIMIT_WORDS: [&str; 12] = [
     "at most",
@@ -63,11 +97,18 @@ impl Named {
             }
             // In the order the sentence names them: backticked spans and plain words alike.
             let mut files_here = vec![];
+            let mut at = 0;
             for (i, part) in sentence.split('`').enumerate() {
+                let start = at;
+                at += part.len() + 1;
                 if i % 2 == 1 {
                     let span = part.trim().to_string();
                     if let Some(cmd) = as_command(&span, project) {
-                        push(&mut n.commands, cmd);
+                        // Mentioned is not asked for: only a command the sentence says to run.
+                        let end = (start + part.len() + 1).min(sentence.len());
+                        if asks_for(&sentence, start.saturating_sub(1), end) {
+                            push(&mut n.commands, cmd);
+                        }
                     } else if is_file_word(&span) {
                         push(&mut files_here, span);
                     }
@@ -490,6 +531,40 @@ mod tests {
         assert_eq!(n.commands, ["sh ./build.sh", "./build.sh --release"]);
         let n = named("Run `FOO=1 sh -c true`.");
         assert_eq!(n.commands, ["FOO=1 sh -c true"]);
+    }
+
+    /// A command counts only when its sentence asks for it; a mention, a prohibition in other
+    /// words, or a request in another language names none.
+    #[test]
+    fn a_command_is_named_only_when_the_sentence_asks_for_it() {
+        let asked = [
+            "Run `sh -c true` when you are done.",
+            "`sh -c true` fails. Fix it.",
+            "Make sure `sh -c true` passes.",
+            "Verify the result with `sh -c true`.",
+            "The change is done when `sh -c true` exits 0.",
+        ];
+        for t in asked {
+            assert_eq!(named(t).commands, ["sh -c true"], "{t}");
+        }
+        let not_asked = [
+            "Avoid `sh -c true`, it takes an hour.",
+            "Do it without `sh -c true`.",
+            "Edit the file by hand instead of running `sh -c true`.",
+            "Skip `sh -c true` this time.",
+            "There is no need to run `sh -c true`.",
+            "The docs mention `sh -c true` somewhere.",
+            "`sh -c true` is how the old build worked.",
+            "N'exécute pas `sh -c true`.",
+            "Führe `sh -c true` nicht aus.",
+            "لا تشغل `sh -c true`",
+        ];
+        for t in not_asked {
+            assert!(named(t).commands.is_empty(), "{t}: {:?}", named(t).commands);
+        }
+        // One sentence's prohibition doesn't reach the next.
+        let n = named("Avoid `sh -c false`. Then run `sh -c true`.");
+        assert_eq!(n.commands, ["sh -c true"]);
     }
 
     #[test]
