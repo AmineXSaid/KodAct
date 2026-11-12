@@ -854,4 +854,17 @@ async fn checkpoint_in_a_repository_covers_shell_changes_and_outlasts_the_proces
         .validate(&json!({"action": "restore", "label": "before sed"}), &other)
         .unwrap_err()
         .contains("No checkpoint"));
+
+    // KodAct removes one of its own snapshots by label (the passing version keeps its latest):
+    // that ref goes, the others keep what they hold, and another session's are not touched.
+    Checkpoint.call(json!({"action": "save", "label": "passing-1"}), &resumed).await;
+    Checkpoint.call(json!({"action": "save", "label": "mine"}), &other).await;
+    assert!(super::drop_checkpoint(&resumed, "passing-1"));
+    assert!(!super::drop_checkpoint(&resumed, "passing-1"), "gone already");
+    assert!(!super::drop_checkpoint(&resumed, "mine"), "another session's");
+    let listed = Checkpoint.call(json!({"action": "list"}), &resumed).await.text_content();
+    assert!(listed.contains("before sed") && !listed.contains("passing-1"), "{listed}");
+    let out = Checkpoint.call(json!({"action": "restore", "label": "before sed"}), &resumed).await;
+    assert!(!out.is_error, "the others still restore: {}", out.text_content());
+    assert!(Checkpoint.call(json!({"action": "list"}), &other).await.text_content().contains("mine"));
 }

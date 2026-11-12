@@ -4140,7 +4140,11 @@ impl Engine {
         if out.is_error {
             return;
         }
-        self.system_event("passing_snapshot", json!({"label": label, "command": command}));
+        // Only the latest passing version is kept: the one before it is removed once this one
+        // is saved, so passing checks don't pile up snapshots of the whole tree.
+        let previous = self.passing.as_ref().map(|(l, ..)| l.clone()).filter(|l| *l != label);
+        let dropped = previous.filter(|l| kodact_tools::builtin::drop_checkpoint(ctx, l));
+        self.system_event("passing_snapshot", json!({"label": label, "command": command, "dropped": dropped}));
         self.passing = Some((label, command.to_string(), writes));
     }
 

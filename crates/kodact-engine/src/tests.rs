@@ -3245,6 +3245,36 @@ async fn the_notes_due_at_the_end_of_a_turn_go_in_one_message() {
     assert!(t.contains(r#""kind":"constraints""#), "the constraint report logged");
 }
 
+/// Passing snapshots keep only the latest (docs/goal.md, rule 9): each passing check after a
+/// change saves the version, and the one saved before it is removed, so a run with many passing
+/// checks holds one snapshot of the tree, not one per check. The note names the latest.
+#[tokio::test]
+async fn only_the_latest_passing_version_is_kept() {
+    if std::process::Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let h = Harness::new(vec![]);
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    std::fs::write(h.cwd().join("test_app.py"), "from app import f\nassert f() >= 2\n").unwrap();
+    let app = h.cwd().join("app.py");
+    for (i, body) in ["return 2", "return 30", "return 400"].iter().enumerate() {
+        let content = format!("def f():\n    {body}\n");
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": app, "content": content})));
+        h.provider.push(MockTurn::tool("Bash", json!({"command": format!("python3 test_app.py  # {i}")})));
+    }
+    h.provider.push(MockTurn::tool("Checkpoint", json!({"action": "list"})));
+    h.provider.push(MockTurn::text("done"));
+    let cfg = EngineConfig { verify: Some(crate::verify::VerifyConfig::default()), ..nudged_cfg("passingSnapshots") };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("make f return something larger")).await;
+    let t = h.transcript_text();
+    assert_eq!(t.matches(r#""subtype":"passing_snapshot""#).count(), 3, "saved after each passing check");
+    assert_eq!(t.matches(r#""dropped":"passing-"#).count(), 2, "the one before removed each time");
+    let listed = tool_results(&e).last().map(|(_, text, _)| text.clone()).unwrap_or_default();
+    assert_eq!(listed.matches("passing-").count(), 1, "one snapshot left: {listed}");
+    assert!(listed.contains("passing-1"), "the latest, under the first free label: {listed}");
+}
+
 /// Passing snapshots (#6): a passing check saves the version with the Checkpoint tool; when
 /// the files then fail, the model is told once where that version is, and a run cut by its
 /// limit reports it. Nothing is restored by KodAct.

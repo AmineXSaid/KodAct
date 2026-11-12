@@ -181,6 +181,21 @@ impl GitCheckpoints {
     }
 }
 
+/// Remove the session's checkpoint named `label`, if there is one; true when one was removed.
+/// For KodAct's own snapshots (the passing version keeps only its latest), not a model action.
+/// Each checkpoint stands alone (its own ref, or its own copy of the files), so the others keep
+/// what they hold.
+pub fn drop_checkpoint(ctx: &ToolContext, label: &str) -> bool {
+    if let Some(git) = GitCheckpoints::of(ctx) {
+        let Some((refname, _)) = git.list().into_iter().find(|(_, l)| l == label) else { return false };
+        return kodact_git::delete_ref(&git.repo, &refname).is_ok();
+    }
+    let mut saved = ctx.checkpoints.saved.lock().unwrap();
+    let before = saved.len();
+    saved.retain(|s| s.label != label);
+    saved.len() != before
+}
+
 /// The checkpoints a call can name: git's in a repository, the in-memory ones elsewhere.
 fn known_labels(ctx: &ToolContext) -> Vec<String> {
     match GitCheckpoints::of(ctx) {

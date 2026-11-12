@@ -41,6 +41,10 @@
   name the benchmark tasks and paths they were found on (task names,
   `/app/...`, the Core War files, `gpt2.c`); the tests check the same
   mechanisms with neutral files (`/work/...`, `player.cfg`, `model.c`).
+- **One passing snapshot**: `passingSnapshots` keeps only the latest passing
+  version; the one saved before it is removed. A run with many passing
+  checks used to keep a whole-tree snapshot (and, in a git repository, a
+  hidden ref) for every one of them, up to 99.
 
 ### Watching a Harbor run, as a chat
 - **`evals/harbor/watch.py` shows a job from its start and then live**, with no
