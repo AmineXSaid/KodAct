@@ -71,6 +71,7 @@ and stderr.
 | change-signature | verification | Give a function a new required parameter; its two callers are in other modules, one through `from … import`, one through the module. Nothing fails until a caller runs, so an agent that edits the function and stops finishes falsely. With `verification.languageServer` on, the broken callers are told with the edit (`edit_diagnostics`) |
 | rename-symbol | long-horizon | Rename across modules, an aliased import and a module-qualified call |
 | explain-setting | tool-design | Everyday (`quiet`): answer a question about the code (which environment variable sets the server's port, and its default) by writing `NAME=PORT` to answer.txt. The model needs no help, so KodAct should add nothing (`scripts/quiet-check.sh`) |
+| quiet-question | context | Everyday (`quiet`): work out from two small modules how long a client waits in total before giving up, and write the number to answer.txt. The answer needs the code read and added up, not guessed |
 | fix-page-count | tool-design | Everyday (`quiet`): a one-line fix (a page count that rounds down), with its tests. KodAct should add nothing |
 | rename-helper | tool-design | Everyday (`quiet`): rename one function across three small files. KodAct should add nothing |
 | split-module | long-horizon | Split a module into a package and keep the public API |
