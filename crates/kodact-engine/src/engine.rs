@@ -88,6 +88,25 @@ impl Drop for AbortOnDrop {
 /// it is, and a refusal for length compacts the conversation and tries again.
 const MIN_REPLY: u32 = 4_096;
 
+/// Times a turn's request is sent again with half the reply budget, after refusals for length
+/// whose prompt fits the window: 32,000 → 16,000 → 8,000 → 4,096, then the conversation is
+/// compacted.
+const MAX_REPLY_SHRINKS: u32 = 3;
+
+/// The least a reply may think before the thinking time-box can stop it.
+const TIME_BOX_FLOOR: Duration = Duration::from_secs(120);
+/// The time-box's limit, in usual replies: a reply may think this many times as long as this
+/// run's replies usually take.
+const TIME_BOX_FACTOR: u32 = 3;
+/// Replies stopped by the time-box in a row, with no answer or action between them; past it, a
+/// reply runs to its end.
+const MAX_TIME_BOXES: u32 = 2;
+
+/// Compactions one turn makes because the conversation no longer fits. More than one: a long
+/// `-p` run is one turn, and it fills a small window again after each compaction. Each needs the
+/// conversation to have grown since the last, so one that didn't make room isn't repeated.
+const MAX_LENGTH_COMPACTIONS: u32 = 8;
+
 /// A reply budget that fits the window: `cap`, but no more than what `window` has left after a
 /// `prompt` of that many tokens, less a margin for the parts of the prompt that are estimated (a
 /// fiftieth of the window, at least 1,024). Endpoints that count the requested output against the
@@ -185,6 +204,8 @@ const API_RETRY_ATTEMPTS: u32 = 10;
 /// With `--max-time`, the most tries, and the time kept after a wait for the model to wrap up.
 const API_RETRY_MAX_ATTEMPTS: u32 = 30;
 const API_RETRY_RESERVE: Duration = Duration::from_secs(60);
+/// Retries of a `-p` run whose endpoint never answered and can't be reached.
+const FIRST_CONTACT_RETRIES: u32 = 3;
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -211,6 +232,9 @@ pub struct EngineConfig {
     pub autonomous: bool,
     /// The first wait before such a retry; each next one doubles, up to a minute.
     pub api_retry_wait: Duration,
+    /// The least a reply may think before the thinking time-box (`nudges.thinkingTimeBox`) can
+    /// stop it (2 minutes; tests set it lower).
+    pub time_box_floor: Duration,
     /// `--json-schema`: structured output for the final answer.
     pub json_schema: Option<Value>,
     pub pricing: HashMap<String, Pricing>,
@@ -245,6 +269,9 @@ pub struct EngineConfig {
     pub escalate_output: bool,
     /// Start in fast mode (`fastMode` setting).
     pub fast: bool,
+    /// Progress nudges (`nudges` in settings, `KODACT_NUDGES`): each off until measured, and
+    /// all off with `reminders`. Never in sub-agents.
+    pub nudges: crate::progress::NudgeConfig,
 }
 
 /// The output cap after a `max_tokens` stop (capped by the model).
@@ -307,6 +334,7 @@ impl Default for EngineConfig {
             time_limit: None,
             autonomous: false,
             api_retry_wait: API_RETRY_FIRST_WAIT,
+            time_box_floor: TIME_BOX_FLOOR,
             json_schema: None,
             pricing: HashMap::new(),
             initial_context: None,
@@ -321,6 +349,7 @@ impl Default for EngineConfig {
             one_shot: false,
             escalate_output: true,
             fast: false,
+            nudges: Default::default(),
         }
     }
 }
@@ -724,10 +753,48 @@ pub struct Engine {
     time_up: Arc<std::sync::atomic::AtomicBool>,
     verify: crate::verify::Tracker,
     guard: crate::stuck::LoopGuard,
+    /// This turn's progress, for the pacing nudges.
+    progress: crate::progress::Progress,
+    /// What this turn's request names: its files and commands.
+    named: crate::named::Named,
+    /// The named files on disk, watched for progress.
+    watched: crate::named::Watched,
+    /// Nudges silenced for the rest of the run (`nudges.backOff`).
+    back_off: crate::progress::BackOff,
+    /// The shell-edit suggestion was given this turn.
+    shell_edit_told: bool,
+    /// Shell commands run this turn, for the constraint report.
+    ran_commands: Vec<String>,
+    /// The constraint report was given this turn.
+    constraints_told: bool,
+    /// The latest version that passed a check, saved with the Checkpoint tool
+    /// (`nudges.passingSnapshots`): its checkpoint label, the check, and the file writes then.
+    passing: Option<(String, String, usize)>,
+    /// The model was told this turn where the passing version is.
+    passing_told: bool,
+    /// The limits this turn's request states (`nudges.limitVerdicts`, `nudges.staleDeliverables`).
+    limits: crate::limits::Limits,
+    /// A measurement that met every limit for its row, with the files the request asks for
+    /// unchanged since: (step, command, line, row).
+    unsaved: Option<(u32, String, String, Option<String>)>,
+    /// Stale-deliverable notes given this turn, and whether the end-of-turn one was.
+    stale_told: u32,
+    stale_end_told: bool,
+    /// Size-limit notes given this turn, per file (`nudges.constraints`).
+    size_told: HashMap<String, u32>,
     /// The session's language servers, started on first use ([`EngineConfig::language_servers`]).
     lsp: Option<Arc<crate::lsp::Manager>>,
     /// This turn's raised output cap, after a `max_tokens` stop.
     output_cap: Option<u32>,
+    /// The most reply a request asks for after a refusal for length whose prompt fit the window
+    /// (`shrink_reply`); cleared when the turn starts and when a compaction makes room.
+    reply_shrink: Option<u32>,
+    /// The reasoning level of this turn's requests, when it adapts (`nudges.adaptiveEffort`).
+    effort_loop: Option<crate::effort_loop::EffortLoop>,
+    /// Tokens the last reply spent thinking, for judging its step once its tools have run.
+    last_thought: u64,
+    /// How long this session's complete replies took, latest last: the run's own pace.
+    reply_secs: Vec<f64>,
     /// After `/clear`: attach the memory context to the next prompt again.
     reattach_context: bool,
     /// Notes for the model, attached to the next prompt (`/add-dir`, ...).
@@ -777,6 +844,9 @@ enum StreamOutcome {
     Failed(ApiError),
     /// The reply was stopped while it streamed: it was one passage repeated ([`crate::repeat`]).
     Repeating(crate::repeat::Repeating),
+    /// The reply was stopped while it was still all thinking, past the time-box: the reasoning
+    /// it had streamed, and the limit.
+    TimeBoxed(String, Duration),
 }
 
 impl Engine {
@@ -832,7 +902,25 @@ impl Engine {
             session_context,
             verify: Default::default(),
             guard: Default::default(),
+            progress: Default::default(),
+            named: Default::default(),
+            watched: Default::default(),
+            back_off: Default::default(),
+            shell_edit_told: false,
+            ran_commands: vec![],
+            constraints_told: false,
+            passing: None,
+            passing_told: false,
+            limits: Default::default(),
+            unsaved: None,
+            stale_told: 0,
+            stale_end_told: false,
+            size_told: HashMap::new(),
             output_cap: None,
+            reply_shrink: None,
+            effort_loop: None,
+            last_thought: 0,
+            reply_secs: Vec::new(),
             reattach_context: false,
             carried_requests: vec![],
             lsp: None,
@@ -943,7 +1031,8 @@ impl Engine {
     fn reply_budget(&self, model: &str) -> u32 {
         let cap = self.output_cap.unwrap_or(self.cfg.max_output_tokens);
         let window = kodact_api::models::model_info_or_default(model).context_window;
-        fit_reply(cap, window, self.projected_context_tokens())
+        let fitted = fit_reply(cap, window, self.projected_context_tokens());
+        self.reply_shrink.map_or(fitted, |s| fitted.min(s))
     }
 
     /// The window compaction is measured against, for `model`.
@@ -1231,8 +1320,18 @@ impl Engine {
             || matches!(e, ApiError::Parse(m) if m.starts_with("stream ended"));
         // Every run, attended or not: an outage or a 429 is waited out (Esc stops the wait). An
         // endpoint that can't be reached before it ever answered is a setting to fix, not an
-        // outage to wait for, in a session with a person at the prompt: said at once.
-        if !passes || (!self.cfg.autonomous && !answered() && matches!(e, ApiError::Network { .. })) {
+        // outage to wait for, in a session with a person at the prompt: said at once. A script
+        // (`-p`, `--autonomous`) has nobody to fix it at once and is often one of many runs, so
+        // a network that drops for a moment (a name lookup that fails, a VPN reconnecting) is
+        // waited out there; a wrong URL still ends the run after the retries.
+        let unattended = self.cfg.autonomous || self.cfg.one_shot;
+        let unreached = !answered() && matches!(e, ApiError::Network { .. });
+        if !passes || (!unattended && unreached) {
+            return None;
+        }
+        // A `-p` run that never reached the endpoint: a few short tries (about half a minute),
+        // enough for a network that drops for a moment, not minutes on a mistyped URL.
+        if unreached && !self.cfg.autonomous && retries >= FIRST_CONTACT_RETRIES {
             return None;
         }
         // KODACT_MAX_RETRIES, the person's own cap on retries, holds here too (0: none).
@@ -1286,7 +1385,10 @@ impl Engine {
     }
 
     fn build_request(&self, model: &str) -> MessagesRequest {
-        let rt = self.handle.runtime.read().unwrap().clone();
+        let mut rt = self.handle.runtime.read().unwrap().clone();
+        if let Some(l) = &self.effort_loop {
+            rt.effort = Some(l.level().to_string());
+        }
         crate::snapshot::assemble(
             model,
             &rt,
@@ -1347,8 +1449,14 @@ impl Engine {
 
     /// Stream one model response, emitting events. Keeps a usable partial on interrupt.
     /// One model call of the turn. `watch`: stop a reply that repeats itself as it streams.
-    async fn stream_once(&self, req: MessagesRequest, cancel: &CancellationToken, watch: bool) -> StreamOutcome {
-        self.stream_inner(req, cancel, true, watch).await
+    async fn stream_once(
+        &self,
+        req: MessagesRequest,
+        cancel: &CancellationToken,
+        watch: bool,
+        think_until: Option<Instant>,
+    ) -> StreamOutcome {
+        self.stream_inner(req, cancel, true, watch, think_until).await
     }
 
     async fn stream_inner(
@@ -1357,7 +1465,9 @@ impl Engine {
         cancel: &CancellationToken,
         emit: bool,
         watch: bool,
+        think_until: Option<Instant>,
     ) -> StreamOutcome {
+        let started = Instant::now();
         let mut stream = match self.shared.provider.stream(req, cancel.clone()).await {
             Ok(s) => s,
             Err(ApiError::Cancelled) => return StreamOutcome::Interrupted(None),
@@ -1366,16 +1476,40 @@ impl Engine {
         let mut acc = MessageAccumulator::new();
         let mut stopped: HashSet<usize> = HashSet::new();
         let mut watcher = crate::repeat::Watcher::default();
+        // The thinking time-box: armed while the reply is still all thinking. Once it answers or
+        // starts a tool call it is never cut: stopping an action halfway does more harm than good.
+        let boxed = think_until.is_some();
+        let time_box = tokio::time::sleep_until(tokio::time::Instant::from_std(
+            think_until.unwrap_or_else(|| Instant::now() + Duration::from_secs(86_400)),
+        ));
+        tokio::pin!(time_box);
+        let mut acted = false;
         loop {
             let next = tokio::select! {
                 n = stream.next() => n,
                 _ = cancel.cancelled() => Some(Err(ApiError::Cancelled)),
+                _ = &mut time_box, if boxed && !acted => {
+                    // Dropping the stream ends the request: the server stops generating.
+                    let reasoning = acc.snapshot().map(|m| reasoning_of(&m.content)).unwrap_or_default();
+                    return StreamOutcome::TimeBoxed(reasoning, started.elapsed());
+                }
             };
             match next {
                 Some(Ok(ev)) => {
                     if let StreamEvent::ContentBlockStop { index } = &ev {
                         stopped.insert(*index);
                     }
+                    acted = acted
+                        || match &ev {
+                            StreamEvent::ContentBlockStart { content_block, .. } => {
+                                matches!(content_block, ContentBlock::Text { .. } | ContentBlock::ToolUse { .. })
+                            }
+                            StreamEvent::ContentBlockDelta { delta, .. } => matches!(
+                                delta,
+                                kodact_types::Delta::TextDelta { .. } | kodact_types::Delta::InputJsonDelta { .. }
+                            ),
+                            _ => false,
+                        };
                     if watch {
                         let repeating = match &ev {
                             StreamEvent::ContentBlockStart { .. } => {
@@ -1625,20 +1759,28 @@ impl Engine {
             }
             oc
         });
+        self.summary_effort(&mut req);
         // The summary gets a reply's whole output budget: a model that reasons spends its
         // reasoning from the same budget before writing the summary. At 20k, path-tracing-reverse
         // (9ef0955) reasoned to the limit and wrote nothing seven times in a row, and five of the
         // eight summaries that did come back that run used 18k to 20k.
+        let sent = req.max_tokens;
         let t0 = Instant::now();
-        let outcome = self.stream_inner(req, cancel, false, false).await;
+        let outcome = self.stream_inner(req, cancel, false, false, None).await;
         turn.api_ms += t0.elapsed().as_millis() as u64;
         let msg = match outcome {
             StreamOutcome::Done(m) => m,
-            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) => return Err("interrupted".into()),
+            // Summaries are never time-boxed (`None` above): the last case can't happen here.
+            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) | StreamOutcome::TimeBoxed(..) => {
+                return Err("interrupted".into())
+            }
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
                 self.record_compact_failure(trigger, &reason, None);
-                self.learn_from_refusal(model, &e, false);
+                // The next attempt, sized to the window it states or with half the reply.
+                if !self.learn_from_refusal(model, &e, false) {
+                    self.shrink_reply(model, &e, sent);
+                }
                 return Err(reason);
             }
         };
@@ -1694,6 +1836,7 @@ impl Engine {
         }
         self.state.context_tokens = kodact_compact::estimate_tokens(&self.state.messages);
         self.state.counted = self.state.messages.len();
+        self.reply_shrink = None;
         self.forget_seen_results();
         CompactInfo { trigger: trigger.into(), pre_tokens, summary }
     }
@@ -1725,6 +1868,76 @@ impl Engine {
         );
         // Sending it again only helps when the prompt itself fits, with room for a reply.
         reported.prompt.is_none_or(|p| p.saturating_add(u64::from(MIN_REPLY)) <= window)
+    }
+
+    /// A summary asks for the lowest reasoning level. Summarizing is reading and writing down, not
+    /// solving; at full depth a reasoning model could spend the whole budget thinking and return
+    /// no summary (on a 100,000-token model, 2026-11-10: two summaries in a row of 32,000 tokens
+    /// of reasoning each, minutes apiece). Wherever a level is sent already, and always to an
+    /// OpenAI-compatible endpoint, which takes it as `reasoning_effort` (one that takes other
+    /// levels gets its closest; one that takes none, the request again without it). Elsewhere
+    /// the request is as before.
+    fn summary_effort(&self, req: &mut MessagesRequest) {
+        let has_level = req.output_config.as_ref().is_some_and(|c| c.get("effort").is_some());
+        if has_level || self.shared.provider.name() == "openai" {
+            let oc = req.output_config.get_or_insert_with(|| json!({}));
+            oc["effort"] = json!("low");
+        }
+    }
+
+    /// How long the next reply may think before the time-box stops it: a few times this run's
+    /// usual reply (the middle one, so one odd reply doesn't skew it), never under the floor;
+    /// with a time limit, no more than a quarter of the time left (and at least 30 seconds).
+    /// From the run's own pace, so a fast model and a slow one each get a fitting limit.
+    fn thinking_limit(&self) -> Duration {
+        let floor = self.cfg.time_box_floor;
+        let mut recent: Vec<f64> = self.reply_secs.iter().rev().take(20).copied().collect();
+        recent.sort_by(|a, b| a.total_cmp(b));
+        let usual = recent.get(recent.len() / 2).map(|s| Duration::from_secs_f64(*s));
+        let mut limit = usual.map_or(floor, |u| (u * TIME_BOX_FACTOR).max(floor));
+        if let Some(t) = &self.cfg.time_limit {
+            limit = limit.min((t.remaining() / 4).max(floor.min(Duration::from_secs(30))));
+        }
+        limit
+    }
+
+    /// Count a step for the adaptive level, and say when it changes.
+    fn effort_step(&mut self, step: crate::effort_loop::Step) {
+        let Some(l) = self.effort_loop.as_mut() else { return };
+        if let Some((from, to, why)) = l.record(step) {
+            self.system_event(
+                "nudge",
+                json!({"kind": crate::progress::Nudge::AdaptiveEffort.as_str(), "from": from, "to": to, "why": why}),
+            );
+            self.notice(NoticeLevel::Info, format!("Reasoning effort {from} → {to}: {why}."));
+        }
+    }
+
+    /// A refusal for length whose prompt fits the model's window, with room for a reply: the reply
+    /// asked for was what didn't fit. The prompt was larger than KodAct's estimate (a tool result
+    /// that tokenizes densely), or the server states only a lower bound: vLLM's "your prompt
+    /// contains at least N input tokens" is the window less the reply asked for, plus one,
+    /// whatever the prompt's size, so a budget sized to N is refused again by the same margin. The
+    /// next request asks for half the reply (at least [`MIN_REPLY`]), before anything is compacted:
+    /// path-tracing (2026-11-10) asked 28,537 tokens on a prompt "at least 71,464" in a 100,000
+    /// window, and the run ended there. True when it shrank, so the request is worth sending again.
+    fn shrink_reply(&mut self, model: &str, e: &ApiError, sent: u32) -> bool {
+        if !e.is_prompt_too_long() || sent <= MIN_REPLY {
+            return false;
+        }
+        let reported = e.reported_limits();
+        let window = reported.window.unwrap_or_else(|| kodact_api::models::model_info_or_default(model).context_window);
+        let prompt = reported.prompt.unwrap_or_else(|| self.projected_context_tokens());
+        if prompt.saturating_add(u64::from(MIN_REPLY)) > window {
+            return false;
+        }
+        let to = (sent / 2).max(MIN_REPLY);
+        self.reply_shrink = Some(self.reply_shrink.map_or(to, |s| s.min(to)));
+        self.system_event(
+            "reply_shrunk",
+            json!({"model": model, "from": sent, "to": to, "window": window, "prompt": prompt}),
+        );
+        true
     }
 
     /// A summary attempt that failed, recorded as `system/compact_failed`: why, and what the reply
@@ -1953,10 +2166,14 @@ impl Engine {
             }
             oc
         });
+        self.summary_effort(&mut req);
         // A reply's whole output budget, as for a full compaction.
-        let msg = match self.stream_inner(req, &cancel, false, false).await {
+        let msg = match self.stream_inner(req, &cancel, false, false, None).await {
             StreamOutcome::Done(m) => m,
-            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) => return Err("interrupted".into()),
+            // Summaries are never time-boxed (`None` above): the last case can't happen here.
+            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) | StreamOutcome::TimeBoxed(..) => {
+                return Err("interrupted".into())
+            }
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
                 self.record_compact_failure("partial", &reason, None);
@@ -2298,7 +2515,32 @@ impl Engine {
         }
         self.verify = Default::default();
         self.guard = Default::default();
+        self.progress = crate::progress::Progress::new(self.state.total_cost_usd);
+        self.named = crate::named::Named::from_request(&prompt_text, &self.shared.tool_ctx.project_dir);
+        self.watched = crate::named::Watched::at_start(&self.named, &self.shared.tool_ctx.project_dir);
+        self.shell_edit_told = false;
+        self.ran_commands.clear();
+        self.constraints_told = false;
+        self.passing_told = false;
+        let n = &self.cfg.nudges;
+        self.limits = if n.limit_verdicts || n.stale_deliverables {
+            crate::limits::Limits::from_request(&prompt_text)
+        } else {
+            Default::default()
+        };
+        self.unsaved = None;
+        self.stale_told = 0;
+        self.stale_end_told = false;
+        self.size_told.clear();
         self.output_cap = None;
+        self.reply_shrink = None;
+        // Each turn starts at the person's level (`high` without one) and adapts from there.
+        self.effort_loop = None;
+        self.last_thought = 0;
+        if self.cfg.reminders && !self.cfg.is_subagent && self.cfg.nudges.adaptive_effort {
+            let start = self.handle.runtime.read().unwrap().effort.clone().unwrap_or_else(|| "high".into());
+            self.effort_loop = crate::effort_loop::EffortLoop::new(&start);
+        }
         if self.verifying() {
             self.verify.fingerprint = self.worktree_fingerprint().await;
         }
@@ -2308,9 +2550,14 @@ impl Engine {
         let mut fallback: Option<String> = None;
         let mut fallbacks = self.cfg.fallback_models.clone().into_iter();
         let mut stop_hook_active = false;
-        let mut compacted_for_length = false;
+        // Compactions for length this turn, and the conversation's length right after the last.
+        let mut length_compactions = 0u32;
+        let mut compacted_len: Option<usize> = None;
         // A refusal that gave the model's real window: sent again once, sized to it.
         let mut learned_window = false;
+        let mut reply_shrinks = 0u32;
+        // Replies the thinking time-box stopped in a row.
+        let mut time_boxes = 0u32;
         let mut last_text: Option<String> = None;
         let mut continuations = 0;
         let mut reasoning_cutoffs = 0;
@@ -2349,6 +2596,7 @@ impl Engine {
                 self.maybe_compact(&model, true, &cancel, &mut turn).await;
             }
             let req = self.build_request(&model);
+            let sent = req.max_tokens;
             tracing::debug!(
                 model = %req.model,
                 messages = req.messages.len(),
@@ -2363,7 +2611,15 @@ impl Engine {
             // Watched while this stretch still has reminders to act left: past them, a reply
             // runs to its end and the turn ends as it would have.
             let watch = self.cfg.reminders && reasoning_cutoffs < MAX_REASONING_CUTOFFS;
-            let outcome = self.stream_once(req, &cancel, watch).await;
+            let think_until = (self.cfg.reminders
+                && !self.cfg.is_subagent
+                && self.cfg.nudges.thinking_time_box
+                && time_boxes < MAX_TIME_BOXES)
+                .then(|| Instant::now() + self.thinking_limit());
+            let outcome = self.stream_once(req, &cancel, watch, think_until).await;
+            if matches!(outcome, StreamOutcome::Done(_)) {
+                self.reply_secs.push(t0.elapsed().as_secs_f64());
+            }
             turn.api_ms += t0.elapsed().as_millis() as u64;
             match &outcome {
                 StreamOutcome::Done(m) => tracing::debug!(
@@ -2378,6 +2634,9 @@ impl Engine {
                 StreamOutcome::Interrupted(_) => tracing::debug!("model response interrupted"),
                 StreamOutcome::Failed(e) => tracing::debug!(error = %e, "model request failed"),
                 StreamOutcome::Repeating(r) => tracing::debug!(copies = r.copies, "model response repeating; stopped"),
+                StreamOutcome::TimeBoxed(_, d) => {
+                    tracing::debug!(secs = d.as_secs(), "model response stopped by the time-box")
+                }
             }
             let mut msg = match outcome {
                 StreamOutcome::Done(m) => m,
@@ -2395,6 +2654,40 @@ impl Engine {
                         "The reply was repeating itself: stopped, and the model was told.",
                     );
                     self.push_user(Message::user_text(r.text()), true, None, true);
+                    continue;
+                }
+                // Still all thinking past the time-box: nothing of the reply is kept, its reasoning
+                // is handed back, and it counts as thinking that led nowhere for the adaptive level.
+                StreamOutcome::TimeBoxed(reasoning, took) => {
+                    turn.api_calls += 1;
+                    time_boxes += 1;
+                    let secs = took.as_secs();
+                    let what = format!(
+                        "Your reply was stopped after {secs} seconds of reasoning, before you answered or took any \
+                         action: this step's time is up."
+                    );
+                    let (text, kept) = if reasoning.trim().is_empty() {
+                        (
+                            format!(
+                                "<system-reminder>\n{what} Act on what you have now: take the next concrete step (run a \
+                                 command, make an edit, or give your answer), then continue from its result.\n</system-reminder>"
+                            ),
+                            0,
+                        )
+                    } else {
+                        // Not kept in the conversation, whatever the provider: always handed back.
+                        self.reasoning_notes(&what, &reasoning)
+                    };
+                    self.system_event(
+                        "nudge",
+                        json!({"kind": crate::progress::Nudge::ThinkingTimeBox.as_str(), "secs": secs, "reasoning_chars": kept}),
+                    );
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!("A reply reasoned for {secs} s without acting: stopped, and its notes handed back."),
+                    );
+                    self.effort_step(crate::effort_loop::Step::AllThinking);
+                    self.push_user(Message::user_text(text), true, None, true);
                     continue;
                 }
                 StreamOutcome::Interrupted(partial) => {
@@ -2426,8 +2719,18 @@ impl Engine {
                     learned_window = true;
                     continue;
                 }
-                StreamOutcome::Failed(e) if e.is_prompt_too_long() && !compacted_for_length => {
-                    compacted_for_length = true;
+                StreamOutcome::Failed(e)
+                    if reply_shrinks < MAX_REPLY_SHRINKS && self.shrink_reply(&model, &e, sent) =>
+                {
+                    reply_shrinks += 1;
+                    continue;
+                }
+                StreamOutcome::Failed(e)
+                    if e.is_prompt_too_long()
+                        && length_compactions < MAX_LENGTH_COMPACTIONS
+                        && compacted_len.is_none_or(|n| self.state.messages.len() > n) =>
+                {
+                    length_compactions += 1;
                     self.notice(
                         NoticeLevel::Warning,
                         "The conversation no longer fits the context window; compacting.",
@@ -2436,7 +2739,11 @@ impl Engine {
                     // came back empty, the next attempt worked).
                     let compacted = self.compact_for_room(true, true, &model, &cancel, &mut turn).await;
                     match compacted {
-                        Ok(_) => continue,
+                        Ok(_) => {
+                            compacted_len = Some(self.state.messages.len());
+                            reply_shrinks = 0;
+                            continue;
+                        }
                         Err(err) => {
                             let text = format!("API Error: {e} (compaction failed: {err})");
                             self.notice(NoticeLevel::Error, text.clone());
@@ -2509,7 +2816,7 @@ impl Engine {
                         None,
                     );
                     // Still too long after compacting: the next turn would fail the same way.
-                    r.fatal = e.is_unrecoverable() || (e.is_prompt_too_long() && compacted_for_length);
+                    r.fatal = e.is_unrecoverable() || (e.is_prompt_too_long() && length_compactions > 0);
                     r.auth_failed = e.is_auth_failure();
                     return r;
                 }
@@ -2552,6 +2859,20 @@ impl Engine {
             // A reply that was all reasoning: what an act reminder hands back where it isn't kept.
             let reasoning =
                 if tool_uses.is_empty() && !reply_has_text { reasoning_of(&msg.content) } else { String::new() };
+            // How much this reply thought, for the adaptive level (about four characters a token).
+            self.last_thought = msg
+                .content
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Thinking { thinking, .. } => thinking.len() as u64 / 4,
+                    _ => 0,
+                })
+                .sum();
+            if tool_uses.is_empty() && !reply_has_text {
+                self.effort_step(crate::effort_loop::Step::AllThinking);
+            } else {
+                time_boxes = 0;
+            }
             self.push_assistant(msg);
             self.publish_turn(started, &turn);
 
@@ -2588,7 +2909,14 @@ impl Engine {
             // call is answered with an error by exec; cut-off text is continued.
             continuing = false;
             if stop_reason == Some(StopReason::MaxTokens) {
+                // Only output that needs the room gets a larger cap: text or a tool call cut off. A
+                // reply that was all reasoning is asked to act on what it has (ACT_PROMPT), and twice
+                // the room would let its next pass reason twice as long before it acts (path-tracing
+                // on a 100,000-token reasoning model, 2026-11-10: three replies of 32,000 tokens of
+                // reasoning each, minutes apiece, in a 30-minute run).
+                let cut_output = reply_has_text || !tool_uses.is_empty();
                 if self.cfg.escalate_output
+                    && cut_output
                     && self.output_cap.is_none()
                     && self.cfg.max_output_tokens < ESCALATED_OUTPUT_TOKENS
                 {
@@ -2636,6 +2964,10 @@ impl Engine {
                 // Calls that ran: a call answered without running is not work done (a goal's
                 // "turns without using a tool" count them as none).
                 turn.tool_calls += to_run.len() as u32;
+                let writes_before = self.shared.history.writes_len();
+                // Shell commands that may write: the files they name, as they are now.
+                let shell_before: Vec<Option<crate::shell_edit::Before>> =
+                    tool_uses.iter().map(|(_, name, input)| self.shell_edit_before(name, input)).collect();
                 let mut ran = crate::exec::run_tools(&self.shared, &to_run, &cancel, self.mode_str()).await.into_iter();
                 let writes_now = self.shared.history.writes_len();
                 let mut results: Vec<crate::exec::CallResult> = tool_uses
@@ -2681,6 +3013,34 @@ impl Engine {
                 if self.cfg.edit_diagnostics || self.cfg.language_servers.is_some() || self.cfg.formatters.is_some() {
                     self.diagnose_edits(&tool_uses, &mut results, &model).await;
                 }
+                self.shell_edits_parse(&tool_uses, &mut results, &shell_before).await;
+                let changed_named = self.watched.changed();
+                let named_changed = !changed_named.is_empty();
+                self.size_limits_told(&tool_uses, &mut results, &changed_named);
+                if named_changed {
+                    self.unsaved = None;
+                }
+                self.judge_limits(&tool_uses, &mut results, turn.api_calls, named_changed);
+                let made_progress = self.made_progress(&tool_uses, &results, writes_before, named_changed);
+                // Long thinking: a quarter of the reply budget, at least 2,000 tokens.
+                let long = self.last_thought >= u64::from(sent / 4).max(2_000);
+                self.effort_step(if made_progress {
+                    crate::effort_loop::Step::Progress
+                } else if long {
+                    crate::effort_loop::Step::LongNoProgress
+                } else {
+                    crate::effort_loop::Step::Other
+                });
+                if made_progress {
+                    self.progress_for_back_off();
+                }
+                for ((_, name, input), r) in tool_uses.iter().zip(&results) {
+                    if name == "Bash" && r.denial.is_none() {
+                        if let Some(c) = input.get("command").and_then(Value::as_str) {
+                            self.ran_commands.push(c.to_string());
+                        }
+                    }
+                }
                 let mut interrupted = cancel.is_cancelled();
                 for r in results {
                     if let Some(d) = r.denial {
@@ -2719,8 +3079,20 @@ impl Engine {
                     self.system_event("loop_guard", s.record());
                     self.push_user(Message::user_text(s.text()), true, None, true);
                 }
+                // Pacing by progress: a long stretch with nothing made. The loop guard speaks
+                // first; one reminder per step is enough.
+                if !interrupted {
+                    if let Some(text) = self.progress_nudge(made_progress, stuck.is_empty()) {
+                        self.push_user(Message::user_text(text), true, None, true);
+                    }
+                }
+                if !interrupted {
+                    if let Some(text) = self.stale_note(turn.api_calls, false) {
+                        self.push_user(Message::user_text(text), true, None, true);
+                    }
+                }
                 if self.cfg.reminders && !budget_warned && !interrupted {
-                    if let Some(text) = self.budget_warning(turn.api_calls) {
+                    if let Some(text) = self.budget_warning(turn.api_calls, started) {
                         budget_warned = true;
                         self.push_user(Message::user_text(text), true, None, true);
                     }
@@ -2819,6 +3191,55 @@ impl Engine {
                     todo_reminders += 1;
                     self.system_event("todo_reminder", json!({"open": open, "one_shot": true}));
                     self.push_user(Message::user_text(one_shot_todo_reminder(&open)), true, None, true);
+                    continue;
+                }
+            }
+
+            // What the request names and isn't there (`nudges.constraints`): said once a turn.
+            if self.cfg.reminders
+                && self.cfg.nudges.constraints
+                && !self.cfg.is_subagent
+                && !self.constraints_told
+                && stop_reason != Some(StopReason::Refusal)
+            {
+                self.constraints_told = true;
+                let report = crate::named::report(&self.named, &self.shared.tool_ctx.project_dir, &self.ran_commands);
+                if let Some((text, record)) = report.filter(|_| self.may_nudge(crate::progress::Nudge::Constraints)) {
+                    self.system_event("nudge", record);
+                    self.push_user(Message::user_text(text), true, None, true);
+                    continue;
+                }
+            }
+
+            // A result that met every limit was printed and never written: said once at the end.
+            if stop_reason != Some(StopReason::Refusal) {
+                if let Some(text) = self.stale_note(turn.api_calls, true) {
+                    self.push_user(Message::user_text(text), true, None, true);
+                    continue;
+                }
+            }
+
+            // A version that passed is saved and the files now fail: said once a turn. Restoring
+            // it is the model's choice (or the person's), never KodAct's.
+            if self.cfg.reminders && !self.passing_told && stop_reason != Some(StopReason::Refusal) {
+                if let Some(note) =
+                    self.passing_note().filter(|_| self.may_nudge(crate::progress::Nudge::PassingSnapshot))
+                {
+                    self.passing_told = true;
+                    let (label, ..) = self.passing.clone().unwrap_or_default();
+                    self.system_event(
+                        "nudge",
+                        json!({"kind": crate::progress::Nudge::PassingSnapshot.as_str(), "label": label}),
+                    );
+                    self.push_user(
+                        Message::user_text(format!(
+                            "<system-reminder>\n{note} If you can't fix the failure, put that version back rather \
+                             than finish on a failing one, or say why the failing one is right.\n</system-reminder>"
+                        )),
+                        true,
+                        None,
+                        true,
+                    );
                     continue;
                 }
             }
@@ -2950,31 +3371,64 @@ impl Engine {
 
     /// A heads-up when this run's turn, spending or time limit is close (GOALS pillar 5), so the model
     /// wraps up with a report instead of being cut off mid-change.
-    fn budget_warning(&self, calls: u32) -> Option<String> {
+    fn budget_warning(&self, calls: u32, started: Instant) -> Option<String> {
+        let pace = self.cfg.nudges.pace && !self.cfg.is_subagent;
         let turns_left = self.cfg.max_turns.filter(|m| *m >= 6).map(|m| m.saturating_sub(calls)).filter(|l| *l <= 3);
         let money_left = self
             .cfg
             .max_budget_usd
             .map(|b| b - self.state.total_cost_usd)
             .filter(|left| self.cfg.max_budget_usd.map(|b| *left <= b * 0.15).unwrap_or(false));
+        // With `nudges.pace`: the steps the time left holds at this turn's pace so far.
+        let steps = self
+            .cfg
+            .time_limit
+            .filter(|_| pace)
+            .and_then(|t| crate::progress::steps_left(t.remaining(), started.elapsed(), calls));
         let time_left = self
             .cfg
             .time_limit
             .map(|t| (t.remaining(), t.total))
-            .filter(|(left, total)| *left <= (*total / 5).max(Duration::from_secs(60)))
+            .filter(|(left, total)| crate::progress::time_warning_due(*left, *total, steps.map(|(n, _)| n)))
             .map(|(left, _)| left);
         let what = match (turns_left, money_left, time_left) {
             (Some(t), _, _) => {
                 format!("{t} model call{} left in this run (--max-turns)", if t == 1 { "" } else { "s" })
             }
             (None, Some(m), _) => format!("${m:.2} of the run's budget left (--max-budget-usd)"),
-            (None, None, Some(left)) => format!("{} of the run's time left (--max-time)", about(left)),
+            (None, None, Some(left)) => match steps {
+                Some((n, per)) => format!(
+                    "{} of the run's time left (--max-time); at this run's pace so far (about {} s a step), that \
+                     is about {n} more step{}",
+                    about(left),
+                    per.as_secs().max(1),
+                    if n == 1 { "" } else { "s" }
+                ),
+                None => format!("{} of the run's time left (--max-time)", about(left)),
+            },
             (None, None, None) => return None,
         };
+        // The files the request asks for that still don't exist: only what is on disk counts.
+        let missing = if pace { self.watched.still_missing() } else { vec![] };
+        let first = if missing.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " These files the request asks for don't exist yet: {}. Only what is in them when the run ends \
+                 counts: write your best version to them first, then improve it.",
+                missing.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ")
+            )
+        };
+        if pace && (steps.is_some() || !missing.is_empty()) {
+            self.system_event(
+                "nudge",
+                json!({"kind": "pace", "steps_left": steps.map(|(n, _)| n), "missing": missing}),
+            );
+        }
         Some(format!(
-            "<system-reminder>\nYou have {what}. Wrap up: if the version now in place tested worse than one you had \
-             before, put the better one back first. Then finish the most important change, check it, and end with \
-             what is done, what was verified and what remains.\n</system-reminder>"
+            "<system-reminder>\nYou have {what}.{first} Wrap up: if the version now in place tested worse than one \
+             you had before, put the better one back first. Then finish the most important change, check it, and \
+             end with what is done, what was verified and what remains.\n</system-reminder>"
         ))
     }
 
@@ -3099,10 +3553,16 @@ impl Engine {
     /// analysis of the decoder again in three cut-off replies in a row and wrote nothing. There,
     /// the reminder carries how the reasoning began and where it stopped.
     fn act_reminder(&self, plain: &str, what: &str, model: &str, reasoning: &str) -> (String, usize) {
-        let reasoning = reasoning.trim();
-        if reasoning.is_empty() || self.shared.provider.resends_reasoning(model) {
+        if reasoning.trim().is_empty() || self.shared.provider.resends_reasoning(model) {
             return (plain.to_string(), 0);
         }
+        self.reasoning_notes(what, reasoning)
+    }
+
+    /// `what` happened, with the reasoning handed back (how it began and where it stopped, when
+    /// it is long), and the ask to go on from it and act.
+    fn reasoning_notes(&self, what: &str, reasoning: &str) -> (String, usize) {
+        let reasoning = reasoning.trim();
         let n = reasoning.chars().count();
         let (shown, kept) = if n <= REASONING_HEAD + REASONING_TAIL {
             (format!("Here it is:\n\n<reasoning>\n{reasoning}\n</reasoning>"), n)
@@ -3257,8 +3717,25 @@ impl Engine {
     }
 
     /// Note checks and possible shell writes among the calls just run.
+    /// The project's check commands for this turn: the configured or detected ones, and with
+    /// `nudges.namedChecks`, the checks the person's request names (first: they asked for them).
+    fn check_commands(&self) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        if self.cfg.reminders && self.cfg.nudges.named_checks {
+            let root = &self.shared.tool_ctx.project_dir;
+            out.extend(self.named.commands.iter().filter(|c| crate::verify::named_check(c, root)).cloned());
+        }
+        for c in self.cfg.verify.iter().flat_map(|v| v.commands.iter()) {
+            if !out.contains(c) {
+                out.push(c.clone());
+            }
+        }
+        out
+    }
+
     async fn track_verification(&mut self, calls: &[(String, String, Value)], results: &[crate::exec::CallResult]) {
-        let Some(vc) = self.cfg.verify.clone() else { return };
+        let Some(mut vc) = self.cfg.verify.clone() else { return };
+        vc.commands = self.check_commands();
         let mut refresh = false;
         for ((_, name, input), r) in calls.iter().zip(results) {
             // A file read back: plain data read after its last change has been checked.
@@ -3299,6 +3776,9 @@ impl Engine {
                 self.verify.built = None;
             }
             if crate::verify::is_check(command, &vc.commands, &changed) {
+                if !r.output.is_error {
+                    self.save_passing(command).await;
+                }
                 self.verify.write_mark = r.writes_after;
                 self.verify.shell_may_have_changed = false;
                 self.verify.last_check = Some((command.to_string(), r.output.is_error));
@@ -3358,9 +3838,358 @@ impl Engine {
         })
     }
 
+    /// Did this step make progress? A file the request names changed on disk (by any tool, a
+    /// script's output included), or a check passed. When the request asks for no new file,
+    /// any file written counts too, and when it names no file at all, so does a shell command
+    /// that changed something. Helper scripts and scratch files written while the files the
+    /// request asks for don't exist yet are not progress. A failed or refused call made nothing.
+    fn made_progress(
+        &mut self,
+        calls: &[(String, String, Value)],
+        results: &[crate::exec::CallResult],
+        writes_before: usize,
+        named_changed: bool,
+    ) -> bool {
+        if named_changed {
+            return true;
+        }
+        let any_write = !self.watched.asks_for_new();
+        if any_write && self.shared.history.writes_len() > writes_before {
+            return true;
+        }
+        let configured = self.check_commands();
+        let changed = self.shared.history.writes_since(0);
+        calls.iter().zip(results).any(|((_, name, input), r)| {
+            if r.denial.is_some() || r.output.is_error {
+                return false;
+            }
+            match name.as_str() {
+                "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => any_write,
+                "Bash" => {
+                    let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
+                    crate::verify::is_check(command, &configured, &changed)
+                        || (!self.named.names_files()
+                            && !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true))
+                }
+                _ => false,
+            }
+        })
+    }
+
+    /// Shell output held against the limits the request states (`nudges.limitVerdicts`), and a
+    /// result meeting all of them noted while the files the request asks for are unchanged
+    /// (`nudges.staleDeliverables`).
+    fn judge_limits(
+        &mut self,
+        calls: &[(String, String, Value)],
+        results: &mut [crate::exec::CallResult],
+        step: u32,
+        named_changed: bool,
+    ) {
+        let (verdicts_on, stale_on) = (self.cfg.nudges.limit_verdicts, self.cfg.nudges.stale_deliverables);
+        if !self.cfg.reminders || self.cfg.is_subagent || !(verdicts_on || stale_on) || self.limits.is_empty() {
+            return;
+        }
+        let limits = std::mem::take(&mut self.limits);
+        for ((_, name, input), r) in calls.iter().zip(results.iter_mut()) {
+            if name != "Bash" || r.denial.is_some() {
+                continue;
+            }
+            let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
+            let measured = crate::limits::measurements(&r.output.text_content());
+            let judged: Vec<(crate::limits::Verdict, &crate::limits::Measured)> =
+                measured.iter().filter_map(|m| limits.judge(m, command).map(|v| (v, m))).collect();
+            if judged.is_empty() {
+                continue;
+            }
+            // A command that names a file the request asks for measured that file: nothing unsaved.
+            if stale_on
+                && self.named.names_files()
+                && !named_changed
+                && self.unsaved.is_none()
+                && !self.watched.named_in(command)
+            {
+                if let Some((v, _)) = judged.iter().find(|(v, _)| v.all_met()) {
+                    self.unsaved = Some((step, command.to_string(), v.line.clone(), v.scope.clone()));
+                }
+            }
+            if !verdicts_on || !self.may_nudge(crate::progress::Nudge::LimitVerdict) {
+                continue;
+            }
+            let scoped: Vec<(Option<String>, &crate::limits::Measured)> =
+                judged.iter().map(|(v, m)| (v.scope.clone(), *m)).collect();
+            let globals = limits.global_counts(&scoped);
+            let verdicts: Vec<crate::limits::Verdict> = judged.iter().map(|(v, _)| v.clone()).collect();
+            self.system_event(
+                "nudge",
+                json!({
+                    "kind": crate::progress::Nudge::LimitVerdict.as_str(),
+                    "lines": verdicts.len(),
+                    "met": verdicts.iter().filter(|v| v.all_met()).count(),
+                    "across": globals.iter().map(|(g, _)| g.name.clone()).collect::<Vec<_>>(),
+                }),
+            );
+            let text = crate::limits::text(&verdicts, &globals);
+            match &mut r.output.content {
+                kodact_types::ToolResultContent::Text(s) => s.push_str(&text),
+                kodact_types::ToolResultContent::Blocks(blocks) => blocks.push(ContentBlock::text(text.trim_start())),
+            }
+        }
+        self.limits = limits;
+    }
+
+    /// A file the request states a size limit for went over it in this step (`nudges.constraints`):
+    /// said with the result of the call that wrote it, while the model can still act on it, not
+    /// only before the turn ends (a run cut by its time limit never gets there). Three times a
+    /// turn per file at most.
+    fn size_limits_told(
+        &mut self,
+        calls: &[(String, String, Value)],
+        results: &mut [crate::exec::CallResult],
+        changed: &[String],
+    ) {
+        /// Notes per file a turn: one for each of the first few writes that leave it too large.
+        const MAX_PER_FILE: u32 = 3;
+        if !self.cfg.reminders || self.cfg.is_subagent || !self.cfg.nudges.constraints || changed.is_empty() {
+            return;
+        }
+        let project = self.shared.tool_ctx.project_dir.clone();
+        for (file, size, max, said) in self.named.over_limit(&project) {
+            if !changed.contains(&file) || self.size_told.get(&file).copied().unwrap_or(0) >= MAX_PER_FILE {
+                continue;
+            }
+            if !self.may_nudge(crate::progress::Nudge::SizeLimit) {
+                continue;
+            }
+            *self.size_told.entry(file.clone()).or_default() += 1;
+            self.system_event(
+                "nudge",
+                json!({"kind": crate::progress::Nudge::SizeLimit.as_str(), "file": file, "size": size, "limit": max}),
+            );
+            // The call that wrote it: a file tool on that path, else a shell command naming it,
+            // else the step's last call (a script it ran wrote the file).
+            let path = if std::path::Path::new(&file).is_absolute() {
+                std::path::PathBuf::from(&file)
+            } else {
+                project.join(&file)
+            };
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| file.clone());
+            let wrote = calls.iter().position(|(_, tool, input)| {
+                matches!(tool.as_str(), "Write" | "Edit" | "MultiEdit" | "NotebookEdit")
+                    && ["file_path", "notebook_path"].iter().filter_map(|k| input.get(*k).and_then(Value::as_str)).any(
+                        |p| {
+                            let p = std::path::Path::new(p);
+                            (if p.is_absolute() { p.to_path_buf() } else { project.join(p) }) == path
+                        },
+                    )
+            });
+            let named_by = || {
+                calls.iter().rposition(|(_, tool, input)| {
+                    tool == "Bash" && input.get("command").and_then(Value::as_str).is_some_and(|c| c.contains(&name))
+                })
+            };
+            let Some(at) = wrote.or_else(named_by).or(calls.len().checked_sub(1)) else { continue };
+            let text = format!(
+                "\n\n<system-reminder>\n`{file}` is now {size} bytes; the request says {said} ({max} bytes at most): \
+                 {} bytes over.\n</system-reminder>",
+                size - max
+            );
+            match &mut results[at].output.content {
+                kodact_types::ToolResultContent::Text(s) => s.push_str(&text),
+                kodact_types::ToolResultContent::Blocks(blocks) => blocks.push(ContentBlock::text(text.trim_start())),
+            }
+        }
+    }
+
+    /// A result met every limit for its row some steps ago and the files the request asks for
+    /// haven't changed since (`nudges.staleDeliverables`): twice a turn at most, and once more
+    /// when the model would finish.
+    fn stale_note(&mut self, step: u32, at_end: bool) -> Option<String> {
+        /// Steps after such a result before it is called unsaved: time to write it.
+        const STALE_AFTER: u32 = 3;
+        if !self.cfg.reminders || self.cfg.is_subagent || !self.cfg.nudges.stale_deliverables {
+            return None;
+        }
+        let (at, command, line, scope) = self.unsaved.clone()?;
+        let due = if at_end { !self.stale_end_told } else { self.stale_told < 2 && step >= at + STALE_AFTER };
+        if !due || !self.may_nudge(crate::progress::Nudge::StaleDeliverable) {
+            return None;
+        }
+        if at_end {
+            self.stale_end_told = true;
+        } else {
+            self.stale_told += 1;
+            // Said again only after as many more steps.
+            self.unsaved = Some((step, command.clone(), line.clone(), scope.clone()));
+        }
+        let files = self.watched.names_for(scope.as_deref());
+        self.system_event(
+            "nudge",
+            json!({
+                "kind": crate::progress::Nudge::StaleDeliverable.as_str(),
+                "steps": step.saturating_sub(at),
+                "files": files,
+                "at_end": at_end,
+            }),
+        );
+        let row = scope.map(|s| format!(" for {s}")).unwrap_or_default();
+        let files = files.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ");
+        Some(format!(
+            "<system-reminder>\n`{command}` printed a result that meets every limit the request states{row}:\n               {line}\n{files} have not changed since. If it is the best result so far, write it to the file now, so              the file holds it whatever happens next. Ignore this if the file already holds it.\n</system-reminder>"
+        ))
+    }
+
+    /// Before a shell command that may write runs: the files it names (`nudges.shellEdit`).
+    fn shell_edit_before(&self, name: &str, input: &Value) -> Option<crate::shell_edit::Before> {
+        if name != "Bash" || !self.cfg.reminders || self.cfg.is_subagent || !self.cfg.nudges.shell_edit {
+            return None;
+        }
+        if self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true)
+            || input.get("run_in_background").and_then(Value::as_bool) == Some(true)
+        {
+            return None;
+        }
+        let command = input.get("command").and_then(Value::as_str)?;
+        Some(crate::shell_edit::Before::note(command, &self.shared.tool_ctx.project_dir)).filter(|b| !b.is_empty())
+    }
+
+    /// After shell commands that changed files: a changed file that no longer parses is told
+    /// with the command's result, and the first time in a turn, that Edit suits careful changes.
+    async fn shell_edits_parse(
+        &mut self,
+        calls: &[(String, String, Value)],
+        results: &mut [crate::exec::CallResult],
+        before: &[Option<crate::shell_edit::Before>],
+    ) {
+        let root = self.shared.tool_ctx.project_dir.clone();
+        for ((_, r), b) in calls.iter().zip(results.iter_mut()).zip(before) {
+            let Some(b) = b else { continue };
+            if r.denial.is_some() {
+                continue;
+            }
+            for path in b.changed() {
+                let Some(d) = crate::diagnose::check(&path).await else { continue };
+                let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
+                let mut text = d.text(&shown);
+                if !self.shell_edit_told && self.may_nudge(crate::progress::Nudge::ShellEdit) {
+                    self.shell_edit_told = true;
+                    self.system_event(
+                        "nudge",
+                        json!({"kind": crate::progress::Nudge::ShellEdit.as_str(), "file": shown, "parser": d.parser}),
+                    );
+                    text.push_str(&crate::shell_edit::suggestion(&shown));
+                }
+                match &mut r.output.content {
+                    kodact_types::ToolResultContent::Text(s) => s.push_str(&text),
+                    kodact_types::ToolResultContent::Blocks(blocks) => {
+                        blocks.push(ContentBlock::text(text.trim_start()))
+                    }
+                }
+            }
+        }
+    }
+
+    /// After a check passed with changes since the last saved passing version: save this one
+    /// with the Checkpoint tool (`nudges.passingSnapshots`). Saving only: KodAct never
+    /// restores it by itself.
+    async fn save_passing(&mut self, command: &str) {
+        if !self.cfg.reminders || self.cfg.is_subagent || !self.cfg.nudges.passing_snapshots {
+            return;
+        }
+        let writes = self.shared.history.writes_len();
+        if writes == 0 || self.passing.as_ref().is_some_and(|(_, _, at)| *at == writes) {
+            return;
+        }
+        let Some(tool) = self.shared.tools.get("Checkpoint") else { return };
+        let ctx = &self.shared.tool_ctx;
+        let Some(label) = (1..=99)
+            .map(|n| format!("passing-{n}"))
+            .find(|l| tool.validate(&json!({"action": "save", "label": l}), ctx).is_ok())
+        else {
+            return;
+        };
+        let out = tool.call(json!({"action": "save", "label": label}), ctx).await;
+        if out.is_error {
+            return;
+        }
+        self.system_event("passing_snapshot", json!({"label": label, "command": command}));
+        self.passing = Some((label, command.to_string(), writes));
+    }
+
+    /// Where the passing version is, when the files have changed since and the last check
+    /// failed: for the model before it finishes, and for the result of a run cut by its limit.
+    fn passing_note(&self) -> Option<String> {
+        let (label, passed, at) = self.passing.as_ref()?;
+        let (failed, true) = self.verify.last_check.as_ref()? else { return None };
+        (self.shared.history.writes_len() > *at).then(|| {
+            format!(
+                "The version that passed `{passed}` is saved as checkpoint `{label}`; the files now fail `{failed}`. \
+                 `Checkpoint` with action `restore` and label `{label}` brings that version back."
+            )
+        })
+    }
+
+    /// May this nudge be given now? With `nudges.backOff`, not once it has twice been followed
+    /// by progress in this run. Giving it is noted, for the count.
+    fn may_nudge(&mut self, kind: crate::progress::Nudge) -> bool {
+        if !self.cfg.nudges.back_off {
+            return true;
+        }
+        if !self.back_off.allows(kind) {
+            return false;
+        }
+        self.back_off.nudged(kind);
+        true
+    }
+
+    /// Progress was made this step: count it for back-off, and log the nudges it silences.
+    fn progress_for_back_off(&mut self) {
+        if !self.cfg.nudges.back_off {
+            return;
+        }
+        for kind in self.back_off.progress() {
+            self.system_event("nudge_silenced", json!({"kind": kind.as_str()}));
+        }
+    }
+
+    /// The run's budgets, for the pacing nudges.
+    fn run_budget(&self) -> crate::progress::Budget {
+        crate::progress::Budget {
+            max_calls: self.cfg.max_turns,
+            time: self.cfg.time_limit.map(|t| t.total),
+            usd: self.cfg.max_budget_usd,
+        }
+    }
+
+    /// Count this step for the pacing nudges, and give one when it is due (`may_nudge`: no
+    /// other reminder was given this step).
+    fn progress_nudge(&mut self, made: bool, may_nudge: bool) -> Option<String> {
+        let n = &self.cfg.nudges;
+        if !self.cfg.reminders || self.cfg.is_subagent || !(n.progress || n.progress_early) {
+            return None;
+        }
+        let cost = self.state.total_cost_usd;
+        if made {
+            self.progress.made(cost);
+            return None;
+        }
+        self.progress.step();
+        if !may_nudge {
+            return None;
+        }
+        let budget = self.run_budget();
+        let (kind, stretch) = self.progress.due(&budget, cost, n.progress_early, n.progress)?;
+        if !self.may_nudge(kind) {
+            return None;
+        }
+        self.system_event("nudge", crate::progress::record(kind, stretch));
+        Some(crate::progress::text(kind, stretch, budget.exists()))
+    }
+
     /// The reminder to send before the turn may end, if one is due.
     async fn verification_reminder(&mut self) -> Option<String> {
-        let vc = self.cfg.verify.clone()?;
+        let mut vc = self.cfg.verify.clone()?;
+        vc.commands = self.check_commands();
         if self.cfg.is_subagent || self.verify.reminders >= vc.max_reminders {
             return None;
         }
@@ -3388,6 +4217,8 @@ impl Engine {
         }
         let reminder = match self.verification_state().await? {
             crate::verify::Verified::Unchecked { files, shell } => crate::verify::Reminder::Unchecked { files, shell },
+            // The passing-version note already said the files fail this check, and what to do.
+            crate::verify::Verified::Failed { .. } if self.passing_told => return None,
             crate::verify::Verified::Failed { command } if writes > 0 => {
                 crate::verify::Reminder::LastCheckFailed { command }
             }
@@ -3424,6 +4255,14 @@ impl Engine {
         } else {
             (subtype, stop_reason)
         };
+        // A run cut short (a limit, an error) with a passing version saved and failing files:
+        // the result says where that version is. It is reported, never put back silently.
+        if subtype != ResultSubtype::Success {
+            if let Some(note) = self.passing_note() {
+                self.notice(NoticeLevel::Warning, note.clone());
+                turn.errors.push(note);
+            }
+        }
         let structured_output = if self.cfg.json_schema.is_some() && subtype == ResultSubtype::Success {
             result.as_deref().and_then(|r| serde_json::from_str::<Value>(r.trim()).ok())
         } else {

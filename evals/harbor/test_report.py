@@ -107,7 +107,7 @@ def test_verifier_timeout_is_verifier_error(tmp_path):
 
 def make_job(tmp: Path, trials: list[tuple[str, float, int, list[dict]]]) -> report.Job:
     """A job dir: per trial its task, reward, agent seconds and the KodAct system events it emitted."""
-    job = tmp / "forgecli-subset-test"
+    job = tmp / "kodact-subset-test"
     job.mkdir(parents=True)
     (job / "config.json").write_text(json.dumps({"agents": [{"name": "kodact_agent", "model_name": "m"}]}))
     for task, reward, secs, events in trials:
@@ -210,3 +210,12 @@ def test_valgrind_that_cannot_start_in_the_verifier_is_a_verifier_error(tmp_path
     trial = make_trial(tmp_path, "custom-memory-heap-crash", "0", stdout, ran_tests=6)
     assert trial.verdict == "verifier error"
 
+
+
+def test_the_report_names_the_model_the_endpoint_served(tmp_path):
+    job = make_job(tmp_path, [("fix-git", 1.0, 600, [])])
+    meta = {"harness": "kodact", "model": "deep-thinking", "served_model": "deepseek-v4-flash", "served_window": "524288"}
+    (job.path / "fix-git__T" / "agent" / "run.json").write_text(json.dumps(meta))
+    job = report.Job(job.path)
+    text = job.report()
+    assert "served by `deepseek-v4-flash` (window 524288 tokens)" in text, text[:600]

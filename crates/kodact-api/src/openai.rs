@@ -64,6 +64,8 @@ pub struct OpenAiProvider {
     /// What this endpoint refused, per model, so later turns send what it
     /// takes first time: the keys it refused (`adapt_to_refusal`).
     refused: std::sync::Mutex<std::collections::HashMap<String, Vec<String>>>,
+    /// The reasoning levels this endpoint said it takes, per model (`effort_levels`).
+    efforts: std::sync::Mutex<std::collections::HashMap<String, crate::effort_levels::Accepted>>,
 }
 
 /// Apply what an endpoint refused before to a fresh body.
@@ -103,6 +105,24 @@ fn dropped_keys(before: &Value, after: &Value) -> Vec<String> {
 }
 
 impl OpenAiProvider {
+    /// A refusal of the reasoning level that lists what the endpoint takes: the closest level to
+    /// `wanted` goes in `body`, and the levels are remembered for `model`. False when the refusal
+    /// is about something else, or the level sent is already one it takes.
+    fn adapt_effort(&self, model: &str, wanted: Option<&str>, body: &mut Value, e: &ApiError) -> bool {
+        let (Some(wanted), ApiError::Http { status: 400 | 422, message, .. }) = (wanted, e) else { return false };
+        let Some(accepted) = crate::effort_levels::from_refusal(message) else { return false };
+        let Some(setting) = crate::effort_levels::pick(wanted, &accepted) else { return false };
+        let before = crate::effort_levels::sent(body);
+        crate::effort_levels::apply(body, setting);
+        if crate::effort_levels::sent(body) == before {
+            return false;
+        }
+        if let Ok(mut m) = self.efforts.lock() {
+            m.insert(model.to_string(), accepted);
+        }
+        true
+    }
+
     /// LiteLLM's per-model limits, at `<base>/model/info` or, for a base ending in `/v1`, at
     /// the gateway's root. Errors and other servers' pages are ignored: this only adds windows.
     async fn read_model_info(&self) {
@@ -137,7 +157,7 @@ impl OpenAiProvider {
             .read_timeout(config.timeout)
             .build()
             .map_err(|e| ApiError::network(e.to_string()))?;
-        Ok(OpenAiProvider { config, http, refused: Default::default() })
+        Ok(OpenAiProvider { config, http, refused: Default::default(), efforts: Default::default() })
     }
 }
 
@@ -211,15 +231,30 @@ pub fn to_chat_request(req: &MessagesRequest) -> Value {
     if let Some(t) = req.temperature.filter(|_| !reasoning) {
         body["temperature"] = json!(t);
     }
-    // Gemini's thinking depth, from the effort (Google's endpoint and OmniRoute
-    // both read `reasoning_effort`).
-    if gemini {
-        let effort = req.output_config.as_ref().and_then(|c| c.get("effort")).and_then(Value::as_str);
-        if let Some(level) = effort.and_then(|e| gemini_rules::thinking_level(e, &req.model)) {
-            body["reasoning_effort"] = json!(level);
-        }
+    // The reasoning level, from the effort: Gemini's own levels (Google's endpoint and
+    // OmniRoute both read `reasoning_effort`), OpenAI's for every other model (OpenAI's
+    // reasoning models, and gateways such as LiteLLM and OpenRouter that pass it on).
+    let effort = req.output_config.as_ref().and_then(|c| c.get("effort")).and_then(Value::as_str);
+    let level = if gemini {
+        effort.and_then(|e| gemini_rules::thinking_level(e, &req.model))
+    } else {
+        effort.and_then(reasoning_effort)
+    };
+    if let Some(level) = level {
+        body["reasoning_effort"] = json!(level);
     }
     body
+}
+
+/// KodAct's effort as an OpenAI `reasoning_effort`: `low`, `medium` and `high` are the levels
+/// every endpoint that takes one knows, so `xhigh` and `max` are sent as `high`.
+fn reasoning_effort(effort: &str) -> Option<&'static str> {
+    Some(match effort {
+        "minimal" | "low" => "low",
+        "medium" => "medium",
+        "high" | "xhigh" | "max" => "high",
+        _ => return None,
+    })
 }
 
 /// OpenAI's reasoning models: the o-series, GPT-5 and Codex. A gateway
@@ -896,6 +931,14 @@ impl Provider for OpenAiProvider {
         if let Some(r) = self.refused.lock().ok().and_then(|m| m.get(&request.model).cloned()) {
             apply_refused(&mut body, &r);
         }
+        // The level asked for (`--effort`), as the endpoint said it takes it.
+        let wanted = request.output_config.as_ref().and_then(|c| c.get("effort")).and_then(Value::as_str);
+        if let Some(w) = wanted {
+            let known = self.efforts.lock().ok().and_then(|m| m.get(&request.model).cloned());
+            if let Some(setting) = known.and_then(|a| crate::effort_levels::pick(w, &a)) {
+                crate::effort_levels::apply(&mut body, setting);
+            }
+        }
         let url = format!("{}/chat/completions", self.config.base_url.trim_end_matches('/'));
         let mut attempt = 0;
         // Another try with the body each refusal asks for (see `adapt_to_refusal`),
@@ -921,6 +964,11 @@ impl Provider for OpenAiProvider {
             };
             match res {
                 Ok(r) => break r,
+                // A refused level, with the levels it takes: the closest one, not none at all.
+                Err(e) if adaptations < 3 && self.adapt_effort(&request.model, wanted, &mut body, &e) => {
+                    tracing::warn!(error = %e, "the endpoint refused the reasoning level; sending the closest one it takes");
+                    adaptations += 1;
+                }
                 Err(e)
                     if adaptations < 3 && {
                         let before = body.clone();
@@ -1493,6 +1541,122 @@ mod tests {
         (format!("http://{addr}/v1"), seen)
     }
 
+    /// A gateway in front of DeepSeek V4.1 on vLLM, as one answered on 2026-11-11: named levels
+    /// low, high, xhigh and max at the top level, or a number from 1 to 100 in
+    /// `chat_template_kwargs`; anything else refused in its words. Returns its address and the
+    /// bodies it was sent.
+    async fn level_checking_gateway() -> (String, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = Vec::new();
+                let body = loop {
+                    let mut chunk = [0u8; 4096];
+                    let n = sock.read(&mut chunk).await.unwrap();
+                    buf.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&buf).to_string();
+                    if let Some(end) = text.find("\r\n\r\n") {
+                        let len: usize = text[..end]
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if buf.len() >= end + 4 + len {
+                            break serde_json::from_slice::<Value>(&buf[end + 4..end + 4 + len]).unwrap();
+                        }
+                    }
+                };
+                log.lock().unwrap().push(body.clone());
+                let named = body.get("reasoning_effort").and_then(Value::as_str);
+                let number = body.pointer("/chat_template_kwargs/reasoning_effort").and_then(Value::as_i64);
+                let ok = match (named, number) {
+                    (Some(n), None) => ["low", "high", "xhigh", "max"].contains(&n),
+                    (None, Some(v)) => (1..=100).contains(&v),
+                    (None, None) => true,
+                    _ => false,
+                };
+                let (status, reply) = if ok {
+                    (
+                        "200 OK",
+                        json!({"id": "x", "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]}),
+                    )
+                } else {
+                    let inner = json!({"error": {"message": "DeepSeek V4.1 reasoning_effort must be low, high, xhigh, max, or an integer within [1, 100] in chat_template_kwargs", "type": "BadRequestError"}});
+                    (
+                        "400 Bad Request",
+                        json!({"detail": format!("litellm.BadRequestError: Hosted_vllmException - {inner}")}),
+                    )
+                };
+                let out = reply.to_string();
+                let head = format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", out.len());
+                sock.write_all(head.as_bytes()).await.unwrap();
+                sock.write_all(out.as_bytes()).await.unwrap();
+            }
+        });
+        (format!("http://{addr}/v1"), seen)
+    }
+
+    /// `--effort medium` on DeepSeek V4.1 was refused and then dropped: the model reasoned at
+    /// its default. The refusal lists what it takes: medium goes as the middle of its 1..100
+    /// scale, remembered for the model, so the next request is right the first time; `xhigh`
+    /// goes as `xhigh` once the endpoint said it takes it.
+    #[tokio::test]
+    async fn a_refused_level_is_sent_as_the_closest_one_the_endpoint_takes() {
+        use futures::StreamExt;
+        let (base_url, seen) = level_checking_gateway().await;
+        let provider = OpenAiProvider::new(OpenAiConfig {
+            base_url,
+            api_key: None,
+            extra_headers: vec![],
+            max_retries: 0,
+            timeout: Duration::from_secs(10),
+            url_from: None,
+            key_helper: None,
+        })
+        .unwrap();
+        let req = |effort: &str| MessagesRequest {
+            model: "quick-thinking".into(),
+            max_tokens: 1000,
+            messages: vec![Message::user_text("hi")],
+            system: vec![],
+            tools: vec![],
+            tool_choice: None,
+            thinking: None,
+            temperature: None,
+            metadata: None,
+            output_config: Some(json!({"effort": effort})),
+            speed: None,
+            stream: true,
+            betas: vec![],
+        };
+        for effort in ["medium", "medium", "xhigh"] {
+            let mut events = provider.stream(req(effort), CancellationToken::new()).await.unwrap();
+            let mut acc = MessageAccumulator::default();
+            while let Some(ev) = events.next().await {
+                acc.push(&ev.unwrap()).unwrap();
+            }
+            assert_eq!(acc.finish().unwrap().content.iter().filter_map(|b| b.as_text()).collect::<String>(), "ok");
+        }
+        let levels: Vec<Value> = seen.lock().unwrap().iter().map(|b| crate::effort_levels::sent(b).unwrap()).collect();
+        assert_eq!(
+            levels,
+            [json!("medium"), json!(51), json!(51), json!("xhigh")],
+            "refused once, then the middle of the scale; then right the first time"
+        );
+        assert!(
+            seen.lock().unwrap()[1].get("reasoning_effort").is_none(),
+            "the number goes in the template kwargs only"
+        );
+    }
+
     #[tokio::test]
     async fn a_gateway_that_refuses_both_length_names_gets_neither() {
         use futures::StreamExt;
@@ -1755,10 +1919,38 @@ mod gemini_tests {
         );
         let t = turn("gemini-3-flash", tool_names(&req), &[&chunk]);
         assert_eq!(t.to_message().tool_uses().next().unwrap().1, long);
-        // Not Gemini: schemas and names as they are, no effort sent this way.
+        // Not Gemini: schemas and names as they are, the effort as OpenAI's level.
         let other = to_chat_request(&request("gpt-4o", vec![Message::user_text("hi")], req.tools.clone(), Some("max")));
         assert_eq!(other["tools"][0]["function"]["name"], long);
-        assert!(other.get("reasoning_effort").is_none());
+        assert_eq!(other["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn every_model_gets_the_reasoning_level_asked_for() {
+        let sent = |model: &str, effort: Option<&str>| {
+            to_chat_request(&request(model, vec![Message::user_text("hi")], vec![], effort))
+                .get("reasoning_effort")
+                .cloned()
+        };
+        for (effort, level) in
+            [("low", "low"), ("medium", "medium"), ("high", "high"), ("xhigh", "high"), ("max", "high")]
+        {
+            assert_eq!(sent("deep-thinking", Some(effort)), Some(json!(level)), "{effort}");
+        }
+        assert_eq!(sent("gpt-5", Some("low")), Some(json!("low")));
+        assert_eq!(sent("deep-thinking", None), None, "none asked: none sent");
+        // An endpoint that refuses it gets the request again without it.
+        let mut b = to_chat_request(&request("deep-thinking", vec![Message::user_text("hi")], vec![], Some("medium")));
+        let refused = ApiError::Http {
+            status: 400,
+            kind: "invalid_request_error".into(),
+            message: "Unrecognized request argument supplied: reasoning_effort".into(),
+            retry_after: None,
+            url: String::new(),
+            origin: None,
+        };
+        assert!(adapt_to_refusal(&mut b, &refused));
+        assert!(b.get("reasoning_effort").is_none());
     }
 
     #[test]

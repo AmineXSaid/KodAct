@@ -1,0 +1,11 @@
+{
+  "instruction": "Rename the keyword parameter `retries` of `svc.net.fetch` to `attempts`, and update every call to `fetch` in svc/ that passes it by keyword. Keep the constant `RETRIES` as it is, and keep the clients' own parameters named as they are (only `fetch`'s parameter changes). Every module must still import.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": [
+    "python",
+    "rename",
+    "shell-edit"
+  ],
+  "timeout_secs": 600
+}

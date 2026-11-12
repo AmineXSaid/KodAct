@@ -10,12 +10,17 @@
 #                         variable sets it for run.sh, run-forgecode.sh and run-ante.sh
 #   KODACT_HARBOR_DATASET  default terminal-bench@2.0
 #   KODACT_HARBOR_JOBS     tasks in parallel (default 2)
-#   KODACT_HARBOR_ARGS     extra kodact flags for every task
+#   KODACT_HARBOR_ARGS     extra kodact flags for every task (job name gets -args-<flags>)
+#   KODACT_HARBOR_PROBE    0 skips asking the endpoint which model it serves and its window
 #   KODACT_HARBOR_AUTONOMOUS  0 runs kodact without --autonomous (job name gets -noauto)
 #   KODACT_HARBOR_TIME_LIMIT  seconds for --max-time (default: the task's own limit)
 #   KODACT_HARBOR_CA_BUNDLE   extra CAs to trust in containers (job name gets -hostca)
+#   KODACT_HARBOR_HF_ENDPOINT another Hugging Face Hub address for the agent and the tests, where
+#                         a proxy blocks huggingface.co (job name gets -hfmirror)
 #   KODACT_STATIC_BIN      use this binary as is (job name gets -custombin); by default
 #                         target-static/release/kodact is rebuilt when the source changed
+#   KODACT_NUDGES          the progress nudges on in every task (job name gets -n-<list>, so an
+#                         A/B of nudges off and on is two jobs told apart by name)
 #   KODACT_*               endpoint, key and limits, passed into the containers
 # Anything after the mode goes to `harbor run` (e.g. -i 'some-task*').
 set -euo pipefail
@@ -24,7 +29,7 @@ cd "$repo"
 mode="${1:-subset}"
 shift || true
 
-if [ -z "${KODACT_OPENAI_BASE_URL:-}${KODACT_BASE_URL:-}${KODACT_API_KEY:-}${KODACT_AUTH_TOKEN:-}" ]; then
+if [ -z "${KODACT_OPENAI_BASE_URL:-}${KODACT_BASE_URL:-}${KODACT_API_KEY:-}${KODACT_AUTH_TOKEN:-}${KODACT_GEMINI_API_KEY:-}" ]; then
   echo "error: no KODACT_* endpoint or key set; source your env file first" >&2
   exit 1
 fi
@@ -58,9 +63,35 @@ ca=""
 [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_UV_CACHE:-}" ] && ca="${ca}-uvcache"
 [ -n "${KODACT_HARBOR_PIP_CACHE:-}" ] && ca="${ca}-pipcache"
+[ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ] && ca="${ca}-hfmirror"
+[ -n "${KODACT_NUDGES:-}" ] && ca="${ca}-n-$(printf '%s' "$KODACT_NUDGES" | tr -c 'A-Za-z0-9' '.')"
+[ -n "${KODACT_HARBOR_ARGS:-}" ] && ca="${ca}-args-$(printf '%s' "$KODACT_HARBOR_ARGS" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-40)"
 case "${KODACT_HARBOR_AUTONOMOUS:-1}" in 0|false|no|off) ca="${ca}-noauto" ;; esac
 model="${KODACT_HARBOR_MODEL:-deep-thinking}"
 model_tag="$(printf '%s' "${model#*/}" | tr -c 'A-Za-z0-9._-' '-')"
+# Which model the endpoint serves behind this name, and its window, asked of the server itself
+# (probe_model.py): an alias can change behind your back. Recorded in every trial's run.json and
+# the report; the window becomes KODACT_CONTEXT_WINDOW when that is unset, and a different one set
+# by hand is warned about. KODACT_HARBOR_PROBE=0 skips it.
+if [ -n "${KODACT_OPENAI_BASE_URL:-}" ] && [ "${KODACT_HARBOR_PROBE:-1}" != 0 ]; then
+  probe="$(python3 "$repo/evals/harbor/probe_model.py" "$model" 2>/dev/null || true)"
+  served="${probe%%$'\t'*}"
+  window="${probe#*$'\t'}"
+  [ "$window" = "$probe" ] && window=""
+  if [ -n "$served" ]; then
+    echo "endpoint: $model is served by $served${window:+ (window $window tokens)}"
+    export KODACT_HARBOR_SERVED_MODEL="$served"
+  fi
+  if [ -n "$window" ]; then
+    export KODACT_HARBOR_SERVED_WINDOW="$window"
+    if [ -z "${KODACT_CONTEXT_WINDOW:-}" ]; then
+      export KODACT_CONTEXT_WINDOW="$window"
+      echo "KODACT_CONTEXT_WINDOW set to $window, from the server"
+    elif [ "$KODACT_CONTEXT_WINDOW" != "$window" ]; then
+      echo "warning: KODACT_CONTEXT_WINDOW=$KODACT_CONTEXT_WINDOW, but the server says $window" >&2
+    fi
+  fi
+fi
 job="kodact-${mode}-${model_tag}-${commit}${dirty}${custom}${ca}-$(date +%Y%m%d-%H%M%S)"
 echo "job: $job"
 

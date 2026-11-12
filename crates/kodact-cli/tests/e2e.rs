@@ -98,6 +98,52 @@ async fn print_attaches_at_mentions() {
     assert!(note.starts_with("<system-reminder>") && note.contains("Ship the parser on Friday."), "{note}");
 }
 
+/// `kodact -p --no-input "prompt"` took the prompt as the flag's value ("value was not a
+/// boolean"): the flag takes a value only as `--no-input=false`.
+#[tokio::test]
+async fn no_input_does_not_take_the_prompt_as_its_value() {
+    let e = env();
+    let api = MockApi::start(vec![MockTurn::text("done."), MockTurn::text("done.")]).await;
+    let (code, out, err) = run(&e, &api, &["-p", "--no-input", "say done"], None).await;
+    assert_eq!((code, out.trim()), (0, "done."), "stderr: {err}");
+    let (code, out, err) = run(&e, &api, &["-p", "--no-input=false", "say done"], None).await;
+    assert_eq!((code, out.trim()), (0, "done."), "stderr: {err}");
+}
+
+/// Session transcripts and what else is kept under the state directory were readable by
+/// every user of the machine; only the prompt history was private.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_state_directory_is_private_to_its_owner() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = env();
+    let api = MockApi::start(vec![MockTurn::text("ok")]).await;
+    let (code, _, err) = run(&e, &api, &["-p", "remember this"], None).await;
+    assert_eq!(code, 0, "{err}");
+    let mut found = vec![];
+    let mut stack = vec![e.home.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|x| x == "jsonl") {
+                found.push(path);
+            }
+        }
+    }
+    assert!(!found.is_empty(), "a transcript was written under {}", e.home.display());
+    for transcript in found {
+        // Some folder between the home and the transcript lets no one else in.
+        let closed = transcript
+            .ancestors()
+            .skip(1)
+            .take_while(|a| a.starts_with(&e.home))
+            .any(|a| std::fs::metadata(a).unwrap().permissions().mode() & 0o077 == 0);
+        assert!(closed, "{} is reachable by other users", transcript.display());
+    }
+}
+
 #[tokio::test]
 async fn print_errors() {
     let e = env();

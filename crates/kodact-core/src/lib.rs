@@ -280,6 +280,30 @@ pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// Which progress nudges are on: `KODACT_NUDGES` (a list such as `progress,shellEdit`, or `all`,
+/// for A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
+/// measured it; `reminders: false` still turns them all off.
+pub(crate) fn nudges(settings: &LoadedSettings, warnings: &mut Vec<String>) -> kodact_engine::NudgeConfig {
+    if let Some(list) = env_nonempty("KODACT_NUDGES") {
+        let (c, unknown) = kodact_engine::NudgeConfig::from_list(&list);
+        if !unknown.is_empty() {
+            warnings.push(format!(
+                "KODACT_NUDGES: unknown {} (known: {}, all, none)",
+                unknown.join(", "),
+                kodact_engine::NudgeConfig::NAMES.join(", ")
+            ));
+        }
+        return c;
+    }
+    let mut c = kodact_engine::NudgeConfig::default();
+    for name in kodact_engine::NudgeConfig::NAMES {
+        if let Some(on) = settings.bool(&format!("/nudges/{name}")) {
+            c.set(name, on);
+        }
+    }
+    c
+}
+
 /// Whether Edit may name the lines to replace instead of retyping them: `edit.lineRanges`, or
 /// `KODACT_EDIT_LINES` (for A/B runs). Off by default until it is measured.
 pub(crate) fn line_edits(settings: &LoadedSettings) -> bool {
@@ -724,6 +748,10 @@ pub fn build_session(
     // Session identity and history.
     let store =
         SessionStore::new(opts.store_root.clone().unwrap_or_else(|| kodact_session::kodact_home().join("projects")));
+    // The default store is under the state directory: private to its owner before anything is written there.
+    if opts.store_root.is_none() && !opts.no_session_persistence {
+        let _ = kodact_config::private_state_dir();
+    }
     let mut resumed: Option<LoadedSession> = match &opts.resume {
         Resume::New => None,
         Resume::Latest => match store.latest(&cwd) {
@@ -759,7 +787,28 @@ pub fn build_session(
     };
     kodact_session::validate_session_id(&session_id)?;
     let git_branch = kodact_git::current_branch(&cwd);
-    let transcript = Arc::new(Transcript::create(&store, &cwd, &session_id, git_branch, !opts.no_session_persistence)?);
+    // A store that can't be written (a full disk, a read-only home, a file where its folder
+    // should be) used to stop KodAct from starting, with the bare OS error. The session
+    // starts unsaved and says so; a resume of a session that exists still fails as before.
+    let transcript = match Transcript::create(
+        &store,
+        &cwd,
+        &session_id,
+        git_branch.clone(),
+        !opts.no_session_persistence,
+    ) {
+        Ok(t) => t,
+        Err(kodact_session::SessionError::Io(e)) if !opts.no_session_persistence && resumed.is_none() => {
+            warnings.push(format!(
+                "This conversation is not being saved: cannot write the session store at {} ({e}). Free space or fix the \
+                 folder's permissions to save the next one; --no-session-persistence starts without this warning.",
+                store.root.display()
+            ));
+            Transcript::create(&store, &cwd, &session_id, git_branch, false)?
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let transcript = Arc::new(transcript);
     if let Some(r) = &resumed {
         if r.session_id != session_id {
             transcript.write_fork_of(r);
@@ -767,7 +816,7 @@ pub fn build_session(
     }
     if let Some(w) = &worktree {
         transcript.append_meta(json!({"worktree": {"name": w.name, "path": w.path, "mainRepo": w.main_repo}}));
-        if !opts.no_session_persistence {
+        if transcript.path().is_some() {
             store.register_project(&cwd, Some(&w.main_repo))?;
         }
     }
@@ -1077,6 +1126,7 @@ pub fn build_session(
         time_limit: opts.max_time.map(kodact_engine::TimeLimit::starting_now),
         autonomous,
         api_retry_wait: EngineConfig::default().api_retry_wait,
+        time_box_floor: EngineConfig::default().time_box_floor,
         json_schema: opts.json_schema.clone(),
         pricing,
         initial_context: (!initial.is_empty()).then(|| initial.join("\n\n")),
@@ -1091,6 +1141,7 @@ pub fn build_session(
         verify,
         escalate_output: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").is_none(),
         fast: settings.bool("/fastMode").unwrap_or(false),
+        nudges: nudges(&settings, &mut warnings),
     };
     let parts = EngineParts {
         provider: provider.clone(),

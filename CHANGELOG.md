@@ -2,6 +2,114 @@
 
 ## 0.1.0 (unreleased)
 
+### Thinking without acting, and benchmark runs that say what they ran
+- **`nudges.thinkingTimeBox`** (opt-in): a reply still all thinking past a
+  limit taken from the run's own pace (3× its usual reply, at least 2
+  minutes, at most a quarter of the time left under `--max-time`) is stopped;
+  its reasoning is handed back and the model asked for one concrete step. A
+  reply that has started its answer or an action is never cut.
+- **`adaptiveEffort` bounces back**: at `low` and still getting nowhere, the
+  level returns to yours, since thinking less didn't help either; a hard
+  problem isn't left at `low`.
+- **Summaries ask for the lowest reasoning level**, so a summary can't spend
+  its whole 32,000-token budget thinking and come back empty.
+- **Harbor**: job names show `KODACT_HARBOR_ARGS` (`-args-effort-low`), and
+  each job asks the endpoint which model it serves behind the alias and its
+  window, records both in the report, and sets `KODACT_CONTEXT_WINDOW` from it
+  when unset.
+
+### The reasoning level, as the endpoint takes it, and adapting step by step
+- **A refused level becomes the closest one the endpoint takes.** Servers say
+  which levels they take when they refuse one ("must be low, high, xhigh, max,
+  or an integer within [1, 100] in chat_template_kwargs"): KodAct sends the
+  closest, and remembers it for the model. `--effort medium` on such a server
+  used to be dropped, leaving the model at its default; it now goes as the
+  middle of its scale. Never `none` on your behalf: thinking stays on.
+- **`nudges.adaptiveEffort`** (opt-in): the level follows the thinking. A reply
+  that was all thinking, or two steps of long thinking that made no
+  progress, lower it a step; two steps of progress raise it back. Never above
+  your level, never below `low`. The server enforces it, so a model can't
+  think past it whatever it decides. Off until measured.
+- **The window from vLLM's other words**: `max_model_len=524288` (a reply
+  asked for that is larger than the whole window) and "maximum model length
+  of 524288" (a prompt that is) are learned like "maximum context length is
+  N", and the request goes again sized to fit.
+
+### Small-window reasoning models behind vLLM: runs that ended, and time lost
+Seen on a 100,000-token reasoning model behind LiteLLM and vLLM, in runs that
+ended on an error or ran out of time:
+- **A refusal for length whose prompt fits is sent again with half the
+  reply** (down to 4,096), for the conversation's requests and the summary's,
+  before anything is compacted. vLLM states the prompt as "at least" the
+  window less the reply asked for, plus one, so a request sized to that was
+  refused again by the same margin, every time.
+- **One turn compacts again each time the conversation overflows after
+  growing.** A `-p` run is one turn: the second overflow used to end it.
+- **A reply cut off while it was all reasoning gets no larger output cap.**
+  It is asked to act on what it has; the doubled cap let its next pass reason
+  twice as long first.
+
+### Reasoning level for OpenAI-compatible endpoints
+- **`--effort` reaches an OpenAI-compatible endpoint as `reasoning_effort`**,
+  for every model, one KodAct has no table entry for included. Before, only
+  Gemini models got it, and a model KodAct didn't know lost the effort
+  altogether, so a slow reasoning model behind a gateway couldn't be told to
+  think less on a time-limited task. `xhigh` and `max` are sent as `high`. An
+  endpoint that refuses the parameter gets the request again without it. No
+  effort set: nothing sent, as before.
+
+### A stated size limit, told at the write that breaks it (`nudges.constraints`)
+- A file the request limits in size ("must be <5000 bytes") that a write takes
+  over the limit is told with that write's result, with the size, the limit
+  and how far over. Before, only the end-of-turn report said so, which a run
+  cut by its time limit never reaches.
+- Size limits read better: `<5000 bytes` and `< 5000 bytes` count; "under",
+  "less than", "below" and `<` are strict (4,999 for `<5000`); and a limit
+  whose sentence names no file is the one new file's the request asks for, or
+  the one of the type the sentence names ("your c program": `gpt2.c`).
+
+### Harbor behind a proxy that blocks Hugging Face
+- **`KODACT_HARBOR_HF_ENDPOINT`** (opt-in): the tests and the agent fetch from
+  another Hub address (`HF_ENDPOINT`, with Xet off), with the CA bundle when
+  `KODACT_HARBOR_CA_BUNDLE` is set. On a network whose proxy blocks
+  huggingface.co, `reshard-c4-data` is then checked instead of failing before
+  its first test. Jobs get `-hfmirror`. A mirror is a third party: public test
+  data only, never a default.
+
+### Writing a file the session made itself
+- **Write and Edit no longer refuse a file created during the session**
+  because it wasn't read first: a file made by a shell command
+  (`cat > solver.py`) or by a script the model ran can be rewritten at once,
+  instead of costing a Read step. Files that existed when the session
+  started, and files put back by a checkpoint restore, must still be read
+  first, and any file read and then changed by something else must be read
+  again, as before. Where the file system records no creation time, the rule
+  is as strict as it was.
+
+### KodAct's own name on the wire
+- **Model API requests send `User-Agent: kodact/<version>`** (was the old
+  name, `forgecli/<version>`). A gateway or proxy that filters or logs by
+  User-Agent sees KodAct; WebFetch already sent `KodAct/<version>`.
+
+### A network drop doesn't end a script
+- **`kodact -p` retries an endpoint it hasn't reached yet**, 3 times over
+  about half a minute: a failed name lookup or a VPN reconnecting no longer
+  ends a scripted or eval run at its first call. At the prompt it is still
+  said at once, since there it is most often a URL to fix.
+
+### Measurements held against the request's limits (opt-in)
+- **`nudges.limitVerdicts`**: when the request states numeric limits (a table
+  of thresholds per file, `error_rate <= 0.01`, `at most 6 slot sizes across
+  both files`) and a command prints `key=value` numbers, the result says, line
+  by line, which limits are met and by how much the others are not. A limit
+  across all files together is said apart, since per-file counts don't show
+  the combined number. Limits, names and files all come from the request's
+  own words.
+- **`nudges.staleDeliverables`**: a printed result met every limit, and a few
+  steps later the files the request asks for still haven't changed: the
+  model is told to write it now if it is the best so far. Off by default
+  until measured.
+
 ### Failed commands explained, and built programs run
 - **`command not found` (exit 127) names what is installed instead**, by job:
   `xxd` missing → `od`; `python3` missing → `perl`; `jq` missing → none of
@@ -109,6 +217,81 @@ From `docs/VERIFICATION_COMPARISON.md`, a comparison with four other CLIs.
   impact", and the wordmark's A is pointed. The logo files in
   `design/brand` are redrawn (the name in Outfit), and kodact.exe carries
   the new icon.
+
+### Progress nudges, off until measured
+Seven nudges that follow what the model does (never the task or the model's
+name), each its own setting under `nudges` (or `KODACT_NUDGES`), all off by
+default and all off with `reminders: false` (CLI.md, "Progress nudges"):
+pacing by progress and its earlier form for budgeted runs, a parse check after
+shell edits that break a file, a report of files and commands the request names
+that aren't there, the request's own checks named by the verification loop,
+passing versions saved with Checkpoint and reported (never restored), and
+back-off for a nudge followed by progress twice. Each nudge is a `system/nudge`
+event; `kodact-eval` reports nudges, tokens and tool calls before the first
+write per run. Six eval tasks measure them.
+
+Progress means the files the request names: when it names files that don't
+exist yet, writing helper scripts is not progress, and a script that writes a
+named file is (seen on disk). `nudges.pace` gives the time-limit warning the
+steps left at the run's own pace, brings it earlier when about 5 are left, and
+names the requested files that don't exist yet. Both come from a scheduling run
+that spent 99.9% of its 29.5 minutes thinking, wrote five helper scripts, and
+first wrote its two plan files in the last five minutes.
+
+### Fixed: the pre-production pass on the terminal
+Found by driving the real binary in a pseudo-terminal and reading the screen
+(`scripts/terminal-matrix/run.py`; the report is
+`docs/PREPRODUCTION_REPORT.md`):
+- **Nothing typed, pasted or printed can command the terminal.** A paste
+  holding escape sequences cleared the screen (it could switch screens or
+  set the title), and a pasted tab left the prompt in pieces. Control
+  characters are drawn as their pictures (`␛`, `␉`); what you send is as you
+  typed it.
+- **With the sidebar open (Ctrl+B), new prompts and answers appear.** They
+  were sent and answered but never drawn until the window was resized.
+- **SIGTERM, SIGHUP and SIGINT leave the terminal usable.** `kill` left it
+  in raw mode on the alternate screen with the mouse captured. The UI now
+  ends as `/exit` does, with exit status 143, 129 or 130.
+- **A picker longer than the window scrolls.** `/model` on an endpoint that
+  lists 40 models ran off the top and lost its title and filter. PgUp,
+  PgDn, Home and End move in every picker and question.
+- **The inline display survives a resize.** A smaller window left the input
+  box, its border and the status line on one row.
+- **`?`, `/status` or `/help` on the front page show their whole answer**,
+  not its last six rows.
+- **A queued message can be taken back:** Up on an empty prompt puts the
+  newest one in the input.
+- **PgUp in a short window no longer skips rows**; the saved `theme` and
+  style apply from the first frame (`theme: none` drew colour); the status
+  line's branch follows `/cd` and branch switches; `/keybindings` lists
+  rebound keys on its two-action rows; a narrow front page no longer cuts
+  its hints mid-word; `@` completion keeps top-level files in a project
+  with a 25,000-file folder.
+- **`/model one two` is refused** instead of saved as a model named "one
+  two"; an id the endpoint doesn't list still switches, and says so.
+- **A dead MCP server shows as failed** in `/mcp` (it stayed "connected"),
+  and the tool error says `/mcp reconnect <name>`.
+- **A session store that can't be written no longer stops KodAct from
+  starting:** the conversation runs unsaved and says so.
+- A plugin's command fills `${KODACT_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_ROOT}`;
+  a 429 that ended the turn no longer says "waits and retries"; a 404 from a
+  wrong base URL points at the URL, not only at `/model`.
+
+### Changed (security)
+- **A link out of the project is outside it.** A file read through a
+  symlink that leads outside the working directories is asked about like
+  any other path outside; deny and ask rules cover the folder a link leads
+  to, and an allow rule on a folder does not cover what a link in it points
+  to elsewhere.
+- **A shell command that names a path outside the working directories is
+  asked about**, read-only ones too: `cat ~/.ssh/id_rsa` ran unasked in
+  every mode, plan and don't-ask included. Accept-edits no longer lets
+  `touch ~/.profile` through. An allow rule (`Bash(cat:*)`) still allows.
+  You will see a prompt where `ls /usr/lib` used to run.
+- **The state directory is private (0700):** session transcripts, debug
+  logs and feedback bundles were readable by other users of the machine.
+- `--no-input` takes a value only as `--no-input=false`: `kodact -p
+  --no-input "prompt"` took the prompt as the flag's value.
 
 ### Fixed
 - `/clear` (and `/reset`, `/new`) left the old conversation on screen in the

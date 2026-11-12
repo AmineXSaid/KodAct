@@ -31,6 +31,10 @@ Configuration comes from the environment of the `harbor` process:
   trust inside the task container (behind a TLS-inspecting proxy); the proxy's
   certificates alone are enough, the container's own roots are kept. This
   changes the task environment: scores are for local comparisons only.
+- `KODACT_HARBOR_HF_ENDPOINT`: another Hugging Face Hub address (a mirror, where
+  a proxy blocks huggingface.co), given to the agent here and to the tests by
+  verifier-ca.sh as `HF_ENDPOINT`. Public test data only: the mirror sees every
+  request.
 
 The model comes from `harbor run -m provider/name`; the provider part is
 dropped, so `-m openai/deep-thinking` and `-m deep-thinking` both run `kodact --model deep-thinking`.
@@ -153,6 +157,20 @@ def pip_cache_env() -> dict[str, str]:
     return {"PIP_FIND_LINKS": KEPT_PIP, "PIP_DEFAULT_TIMEOUT": "600", "PIP_RETRIES": "10"}
 
 
+def hf_env() -> dict[str, str]:
+    """With KODACT_HARBOR_HF_ENDPOINT: the agent's Hugging Face tools use that Hub address, as the
+    tests do (verifier-ca.sh), so the agent can fetch the files the tests will. With
+    KODACT_HARBOR_CA_BUNDLE, requests and curl trust the kept bundle there too. Empty otherwise.
+    """
+    endpoint = os.environ.get("KODACT_HARBOR_HF_ENDPOINT", "").strip().rstrip("/")
+    if not endpoint:
+        return {}
+    env = {"HF_ENDPOINT": endpoint, "HF_HUB_DISABLE_XET": "1"}
+    if os.environ.get("KODACT_HARBOR_CA_BUNDLE"):
+        env.update({var: KEPT_CA for var in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE")})
+    return env
+
+
 def pinned_hosts() -> list[tuple[str, str]]:
     """(ip, name) for the endpoint's host and KODACT_HARBOR_HOSTS, as this machine resolves them.
 
@@ -251,7 +269,7 @@ def task_time_limit() -> float | None:
 class KodAct(BaseInstalledAgent):
     @staticmethod
     def name() -> str:
-        return "forgecli"
+        return "kodact"
 
     def get_version_command(self) -> str | None:
         return f"{REMOTE_BIN} --version"
@@ -288,6 +306,7 @@ class KodAct(BaseInstalledAgent):
                 env[var] = container_url(env[var])
         env["KODACT_TASK"] = instruction
         env.update(pip_cache_env())
+        env.update(hf_env())
         flags = ["--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"]
         if os.environ.get("KODACT_HARBOR_AUTONOMOUS", "1").strip().lower() not in ("0", "false", "no", "off"):
             flags.append("--autonomous")
@@ -298,7 +317,16 @@ class KodAct(BaseInstalledAgent):
         if limit and "--max-time" not in extra:
             flags += ["--max-time", str(max(60, int(limit) - TIME_MARGIN))]
         flags += extra
-        meta = {"harness": "forgecli", "model": model, "flags": flags, "time_limit_s": limit, "settings": settings(env)}
+        meta = {
+            "harness": "kodact",
+            "model": model,
+            # What the endpoint said it serves behind `model`, and its window, at job start (run.sh).
+            "served_model": os.environ.get("KODACT_HARBOR_SERVED_MODEL"),
+            "served_window": os.environ.get("KODACT_HARBOR_SERVED_WINDOW"),
+            "flags": flags,
+            "time_limit_s": limit,
+            "settings": settings(env),
+        }
         command = (
             f"mkdir -p {LOG_DIR}; "
             + record_run("KODACT_TASK", meta)

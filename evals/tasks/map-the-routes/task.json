@@ -1,0 +1,15 @@
+{
+  "instruction": "Write INVENTORY.json at the project root: one JSON object mapping every URL path the app registers (through `app.registry.route`) to its handler, written as `module.function` the way the registry stores it (for example \"app.handlers.h01_orders.status\"). List every registered route and nothing that isn't registered.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "long-horizon",
+  "tags": [
+    "python",
+    "exploration",
+    "progress-nudges"
+  ],
+  "timeout_secs": 900,
+  "args": [
+    "--max-turns",
+    "60"
+  ]
+}

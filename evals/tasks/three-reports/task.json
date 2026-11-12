@@ -1,0 +1,12 @@
+{
+  "instruction": "For each of the packages billing, catalog and shipping, write reports/<package>.txt listing the functions in that package that are marked with the `@deprecated` decorator (from shared.py), one function name per line, sorted. A commented-out decorator doesn't count.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "long-horizon",
+  "tags": [
+    "python",
+    "exploration",
+    "back-off",
+    "progress-nudges"
+  ],
+  "timeout_secs": 900
+}

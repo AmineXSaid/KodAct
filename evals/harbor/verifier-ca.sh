@@ -25,3 +25,15 @@ fi
 if [ -n "${KODACT_HARBOR_CA_BUNDLE:-}${KODACT_HARBOR_UV_CACHE:-}" ]; then
   verifier_ca+=(--ve UV_HTTP_TIMEOUT=600)
 fi
+# With KODACT_HARBOR_HF_ENDPOINT (e.g. https://hf-mirror.com, for a network whose proxy blocks
+# huggingface.co), the tests' huggingface_hub and datasets fetch from that Hub address instead.
+# Xet storage is turned off so large files come through that address too, not from Hugging
+# Face's own storage hosts. Only for public test data: the mirror sees every request.
+# With KODACT_HARBOR_CA_BUNDLE, the CA variables above already point requests and curl at the
+# kept bundle; without it they are not set, as no kept bundle exists to point them at.
+if [ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ]; then
+  verifier_ca+=(--ve "HF_ENDPOINT=${KODACT_HARBOR_HF_ENDPOINT%/}" --ve HF_HUB_DISABLE_XET=1)
+  if [ -z "${KODACT_HARBOR_CA_BUNDLE:-}" ]; then
+    echo "note: KODACT_HARBOR_HF_ENDPOINT without KODACT_HARBOR_CA_BUNDLE: the tests reach the mirror with their own certificates" >&2
+  fi
+fi

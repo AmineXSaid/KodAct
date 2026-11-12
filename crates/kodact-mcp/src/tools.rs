@@ -162,6 +162,15 @@ impl Tool for McpTool {
         tokio::select! {
             r = client.call_tool(&self.info.name, input) => match r {
                 Ok(v) => convert_content(&v),
+                // The server is gone: say so everywhere (`/mcp`, the tool list) and how to bring it back.
+                Err(e @ crate::transport::McpError::Closed(_)) => {
+                    self.server.mark_lost(&e.to_string());
+                    ToolOutput::error(format!(
+                        "MCP server {0} stopped: {e}. {1} didn't run, and its tools are unavailable until the user runs \
+                         /mcp reconnect {0}.",
+                        self.server.name, self.info.name
+                    ))
+                }
                 Err(e) => ToolOutput::error(format!("MCP server {} failed to run {}: {e}", self.server.name, self.info.name)),
             },
             _ = ctx.cancel.cancelled() => {

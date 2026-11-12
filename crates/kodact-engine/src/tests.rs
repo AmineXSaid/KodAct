@@ -1585,6 +1585,9 @@ async fn a_reply_cut_off_while_reasoning_is_asked_to_act() {
     let asked = last_user_text(&h.provider.requests()[1]);
     assert!(asked.contains("still reasoning") && !asked.contains("Continue exactly"), "{asked}");
     assert!(h.transcript_text().contains(r#""subtype":"act_reminder""#));
+    // Asked to act, it gets no larger cap: twice the room would let it reason twice as long first.
+    assert_eq!(h.provider.requests()[1].max_tokens, 32_000);
+    assert!(!h.transcript_text().contains("output_limit"));
 
     // A cut-off reply with text is still continued as one answer.
     let h = Harness::new(vec![
@@ -2083,6 +2086,34 @@ async fn attended_runs_wait_out_a_rate_limit_too() {
     let r = e.submit(prompt("task")).await;
     assert_eq!((r.result.as_deref(), r.subtype), (Some("done"), ResultSubtype::Success));
     assert_eq!(h.provider.requests().len(), 2);
+}
+
+/// A network that drops before the first answer: a script (`-p`) waits it out and does the
+/// work; a session with a person at the prompt says so at once, since it is most often a
+/// wrong URL to fix.
+#[tokio::test]
+async fn a_script_waits_out_a_network_drop_before_the_first_answer() {
+    let down = || MockTurn::NetworkError { message: "could not connect: failed to lookup address information".into() };
+    let h = Harness::new(vec![down(), down(), MockTurn::text("done")]);
+    let cfg = EngineConfig { one_shot: true, api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!((r.result.as_deref(), r.subtype), (Some("done"), ResultSubtype::Success));
+    assert_eq!(h.provider.requests().len(), 3);
+    // Still unreachable after a few tries: most likely a wrong URL, said within half a minute.
+    let h = Harness::new(vec![down(), down(), down(), down(), down(), MockTurn::text("never")]);
+    let cfg = EngineConfig { one_shot: true, api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!(r.subtype, ResultSubtype::ErrorDuringExecution);
+    assert_eq!(h.provider.requests().len(), 4, "the first try and 3 retries");
+
+    let h = Harness::new(vec![down(), MockTurn::text("never")]);
+    let cfg = EngineConfig { api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!(r.subtype, ResultSubtype::ErrorDuringExecution);
+    assert_eq!(h.provider.requests().len(), 1, "said at once");
 }
 
 /// With a fallback model set, a model that stays limited hands the turn over: after a few
@@ -2843,4 +2874,803 @@ async fn an_edit_to_a_formatted_file_is_formatted_and_the_result_says_so() {
     assert!(!res[2].2 && !res[2].1.contains("reformatted"), "the second edit was formatted already: {res:?}");
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "ONE\nTWO\nFOUR\n");
     assert!(h.transcript_text().contains("\"formatted\""));
+}
+
+/// A run of varied reads with nothing made, scripted: `reads` Reads of different files, then
+/// what follows (`then`), then a final answer.
+fn exploring(h: &Harness, reads: usize, then: Vec<MockTurn>) {
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    for i in 0..reads {
+        let f = h.cwd().join(format!("module_{i}.py"));
+        std::fs::write(&f, format!("value = {i}\n")).unwrap();
+        h.provider.push(MockTurn::tool("Read", json!({"file_path": f})));
+    }
+    for t in then {
+        h.provider.push(t);
+    }
+    h.provider.push(MockTurn::text("done"));
+}
+
+fn nudges(t: &str) -> Vec<Value> {
+    t.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter(|v| v["subtype"] == "nudge").collect()
+}
+
+fn nudged_cfg(list: &str) -> EngineConfig {
+    EngineConfig { nudges: crate::progress::NudgeConfig::from_list(list).0, ..Default::default() }
+}
+
+/// Pacing by progress (#2): a long stretch of varied calls with nothing written fires once, at
+/// the count without a budget and at a fifth of the budget with one; reading then writing, the
+/// usual way of working, never does.
+#[tokio::test]
+async fn a_long_stretch_without_progress_gets_one_nudge() {
+    // No budget: at NO_BUDGET_CALLS calls, once, though the stretch goes on.
+    let h = Harness::new(vec![]);
+    exploring(&h, 22, vec![]);
+    let mut e =
+        h.engine_with(nudged_cfg("progress"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("find where the value is set")).await;
+    let reqs = h.provider.requests();
+    let at = crate::progress::NO_BUDGET_CALLS as usize;
+    assert!(!last_user_text(&reqs[at - 1]).contains("model calls have passed"), "not before");
+    let text = last_user_text(&reqs[at]);
+    assert!(text.contains(&format!("{at} model calls have passed")) && text.contains("Ignore this"), "{text}");
+    let given = nudges(&h.transcript_text());
+    assert_eq!(given.len(), 1, "one per stretch: {given:?}");
+    assert_eq!((given[0]["kind"].as_str(), given[0]["calls"].as_u64()), (Some("progress"), Some(at as u64)));
+
+    // With a budget (--max-turns 30): a fifth is 6 calls.
+    let h = Harness::new(vec![]);
+    exploring(&h, 10, vec![]);
+    let cfg = EngineConfig { max_turns: Some(30), ..nudged_cfg("progress") };
+    h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+        .submit(prompt("look"))
+        .await;
+    let given = nudges(&h.transcript_text());
+    assert_eq!(given.len(), 1, "{given:?}");
+    assert_eq!(given[0]["calls"], 6);
+
+    // Read four files, then write: normal work, no nudge, budget or not.
+    for max_turns in [None, Some(30)] {
+        let h = Harness::new(vec![]);
+        let out = h.cwd().join("out.py");
+        exploring(&h, 4, vec![MockTurn::tool("Write", json!({"file_path": out, "content": "x = 1\n"}))]);
+        let cfg = EngineConfig { max_turns, ..nudged_cfg("progress,progressEarly") };
+        h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+            .submit(prompt("write out.py"))
+            .await;
+        assert!(nudges(&h.transcript_text()).is_empty(), "{max_turns:?}");
+    }
+}
+
+/// Progress-early (#1): with a budget, before anything is made, at a tenth of it (never under
+/// MIN_CALLS calls); never without a budget; and a write starts the count again.
+#[tokio::test]
+async fn the_first_version_is_nudged_early_only_with_a_budget() {
+    let h = Harness::new(vec![]);
+    exploring(&h, 8, vec![]);
+    let cfg = EngineConfig { max_turns: Some(40), ..nudged_cfg("progressEarly") };
+    h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({})).submit(prompt("go")).await;
+    let given = nudges(&h.transcript_text());
+    assert_eq!(given.len(), 1, "{given:?}");
+    assert_eq!((given[0]["kind"].as_str(), given[0]["calls"].as_u64()), (Some("progress_early"), Some(5)));
+    assert!(h.provider.requests().iter().any(|r| last_user_text(r).contains("first version")));
+
+    // No budget: early never comes.
+    let h = Harness::new(vec![]);
+    exploring(&h, 20, vec![]);
+    h.engine_with(nudged_cfg("progressEarly"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+        .submit(prompt("go"))
+        .await;
+    assert!(nudges(&h.transcript_text()).is_empty());
+}
+
+/// Off unless turned on, and `reminders: false` turns it off even when it is on.
+#[tokio::test]
+async fn progress_nudges_are_off_by_default_and_with_reminders_off() {
+    for cfg in [EngineConfig::default(), EngineConfig { reminders: false, ..nudged_cfg("all") }] {
+        let h = Harness::new(vec![]);
+        exploring(&h, 20, vec![]);
+        let cfg = EngineConfig { max_turns: Some(40), ..cfg };
+        h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+            .submit(prompt("go"))
+            .await;
+        assert!(nudges(&h.transcript_text()).is_empty());
+    }
+}
+
+/// What counts as progress: a passing check always; a shell command that changed something
+/// only when the request names no file (then there is nothing else to make).
+#[tokio::test]
+async fn a_passing_check_and_an_unnamed_change_are_progress() {
+    let script = |h: &Harness, middle: MockTurn| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        std::fs::write(h.cwd().join("test_x.py"), "").unwrap();
+        let mut turns = vec![];
+        // Four reads, the middle call, four more: eight calls in all.
+        for i in 0..8 {
+            let f = h.cwd().join(format!("m{i}.py"));
+            std::fs::write(&f, "").unwrap();
+            turns.push(MockTurn::tool("Read", json!({"file_path": f})));
+            if i == 3 {
+                turns.push(middle.clone());
+            }
+        }
+        for t in turns {
+            h.provider.push(t);
+        }
+        h.provider.push(MockTurn::text("done"));
+    };
+    let run = |h: &Harness, request: &'static str| {
+        let cfg = EngineConfig { max_turns: Some(30), ..nudged_cfg("progress") };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        async move { e.submit(prompt(request)).await }
+    };
+    // A passing check: a test script that runs clean.
+    assert!(crate::verify::is_check("python3 test_x.py", &[], &[]));
+    let h = Harness::new(vec![]);
+    script(&h, MockTurn::tool("Bash", json!({"command": "python3 test_x.py"})));
+    run(&h, "make test_x.py pass").await;
+    assert!(nudges(&h.transcript_text()).is_empty(), "the passing check restarted the count");
+
+    // A request that names no file: a command that changed something is progress.
+    for (request, nudged) in [("start the service", false), ("start the service in run.sh", true)] {
+        let h = Harness::new(vec![]);
+        script(&h, MockTurn::tool("Bash", json!({"command": "touch started"})));
+        run(&h, request).await;
+        let calls: Vec<u64> = nudges(&h.transcript_text()).iter().filter_map(|n| n["calls"].as_u64()).collect();
+        assert_eq!(calls == [6], nudged, "{request}: {calls:?}");
+    }
+}
+
+/// Shell edits (#3): a `sed -i` that breaks a file's syntax is told with the parse error and,
+/// once a turn, the suggestion to use Edit; a clean mechanical `sed -i` gets nothing; off by
+/// default.
+#[tokio::test]
+async fn a_shell_edit_that_breaks_syntax_is_told_once() {
+    if std::process::Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let script = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        std::fs::write(h.cwd().join("app.py"), "def total(items):\n    return sum(items)\n").unwrap();
+        std::fs::write(h.cwd().join("lib.py"), "def ok():\n    return 1\n").unwrap();
+        for cmd in [
+            "sed -i 's/total/grand_total/' app.py",                  // a clean rename
+            "sed -i 's/return sum(items)/return sum(items/' app.py", // breaks it
+            "sed -i 's/return 1/return (1/' lib.py",                 // breaks another file
+        ] {
+            h.provider.push(MockTurn::tool("Bash", json!({"command": cmd})));
+        }
+        h.provider.push(MockTurn::text("done"));
+    };
+    let h = Harness::new(vec![]);
+    script(&h);
+    let mut e =
+        h.engine_with(nudged_cfg("shellEdit"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("rename total to grand_total")).await;
+    let results = tool_results(&e);
+    assert!(!results[0].1.contains("does not parse"), "a clean rename: {}", results[0].1);
+    assert!(results[1].1.contains("app.py does not parse") && results[1].1.contains("Edit tool"), "{}", results[1].1);
+    assert!(
+        results[2].1.contains("lib.py does not parse") && !results[2].1.contains("Edit tool"),
+        "once a turn: {}",
+        results[2].1
+    );
+    let given = nudges(&h.transcript_text());
+    assert_eq!(given.len(), 1, "{given:?}");
+    assert_eq!((given[0]["kind"].as_str(), given[0]["file"].as_str()), (Some("shell_edit"), Some("app.py")));
+
+    // Off by default: the same commands, no word about them.
+    let h = Harness::new(vec![]);
+    script(&h);
+    let mut e = h.engine();
+    e.submit(prompt("rename total to grand_total")).await;
+    assert!(tool_results(&e).iter().all(|r| !r.1.contains("does not parse")));
+    assert!(nudges(&h.transcript_text()).is_empty());
+}
+
+/// Constraint memory (#4): before the turn ends, what the request names and isn't there (a
+/// file, a command never run, a file over the size it states) is told once; a turn that did
+/// it all hears nothing; a prohibition names nothing.
+#[tokio::test]
+async fn what_the_request_names_and_is_missing_is_told_once_before_finishing() {
+    let request =
+        "Run `sh ./check.sh`, then write report.txt. Keep out.bin at most 10 bytes. Don't run `sh ./deploy.sh`.";
+    let setup = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        for f in ["check.sh", "deploy.sh"] {
+            std::fs::write(h.cwd().join(f), "true\n").unwrap();
+        }
+        std::fs::write(h.cwd().join("out.bin"), "x".repeat(25)).unwrap();
+    };
+    // Skips all three, then finishes twice: told once.
+    let h = Harness::new(vec![]);
+    setup(&h);
+    h.provider.push(MockTurn::text("all done"));
+    h.provider.push(MockTurn::text("really done"));
+    let mut e =
+        h.engine_with(nudged_cfg("constraints"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt(request)).await;
+    assert_eq!(r.result.as_deref(), Some("really done"));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 2, "one report, then the turn may end");
+    let text = last_user_text(&reqs[1]);
+    assert!(text.contains("`report.txt`") && text.contains("`sh ./check.sh`"), "{text}");
+    assert!(text.contains("`out.bin` at most 10 bytes; the file is 25 bytes"), "{text}");
+    assert!(!text.contains("deploy"), "a prohibition is not asked for: {text}");
+    let given = nudges(&h.transcript_text());
+    assert_eq!(given.len(), 1);
+    assert_eq!(given[0]["kind"], "constraints");
+
+    // Does it all: nothing to report.
+    let h = Harness::new(vec![]);
+    setup(&h);
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "sh ./check.sh && printf 1 > out.bin"})));
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": h.cwd().join("report.txt"), "content": "ok\n"})));
+    h.provider.push(MockTurn::text("done"));
+    let cfg = EngineConfig { verify: None, ..nudged_cfg("constraints") };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt(request)).await;
+    assert!(nudges(&h.transcript_text()).is_empty());
+    assert_eq!(h.provider.requests().len(), 3);
+}
+
+/// Named checks (#5): a check the request names joins the verification reminder when it hasn't
+/// run since the change, and KodAct never runs it itself.
+#[tokio::test]
+async fn a_named_check_is_told_not_run() {
+    let request = "`python3 run_checks.py` fails. Fix parser.py so it passes.";
+    let setup = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        // Leaves a marker if anything runs it.
+        std::fs::write(h.cwd().join("run_checks.py"), "open('RAN', 'w').write('1')\n").unwrap();
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": h.cwd().join("parser.py"), "content": "x = 1\n"})));
+        h.provider.push(MockTurn::text("fixed"));
+        h.provider.push(MockTurn::text("fixed, not run"));
+    };
+    let verify = Some(crate::verify::VerifyConfig::default());
+    for (list, named) in [("namedChecks", true), ("", false)] {
+        let h = Harness::new(vec![]);
+        setup(&h);
+        let cfg = EngineConfig { verify: verify.clone(), ..nudged_cfg(list) };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt(request)).await;
+        let reqs = h.provider.requests();
+        let reminder = last_user_text(&reqs[2]);
+        assert!(reminder.contains("no check has run since the last change"), "{reminder}");
+        assert_eq!(reminder.contains("`python3 run_checks.py`"), named, "{list}: {reminder}");
+        assert!(!h.cwd().join("RAN").exists(), "{list}: KodAct ran the check itself");
+    }
+}
+
+/// Passing snapshots (#6): a passing check saves the version with the Checkpoint tool; when
+/// the files then fail, the model is told once where that version is, and a run cut by its
+/// limit reports it. Nothing is restored by KodAct.
+#[tokio::test]
+async fn a_passing_version_is_saved_and_reported_never_restored() {
+    if std::process::Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let setup = |h: &Harness, last: Vec<MockTurn>| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        std::fs::write(h.cwd().join("test_app.py"), "from app import f\nassert f() == 2\n").unwrap();
+        let app = h.cwd().join("app.py");
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": app, "content": "def f():\n    return 2\n"})));
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "python3 test_app.py"})));
+        // A different length: Python's bytecode cache can't take it for the passing version.
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": app, "content": "def f():\n    return 30\n"})));
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "python3 test_app.py"})));
+        for t in last {
+            h.provider.push(t);
+        }
+    };
+    let cfg = |list: &str, max_turns| EngineConfig {
+        verify: Some(crate::verify::VerifyConfig::default()),
+        max_turns,
+        ..nudged_cfg(list)
+    };
+    let h = Harness::new(vec![]);
+    setup(&h, vec![MockTurn::text("done"), MockTurn::text("done anyway")]);
+    let mut e = h.engine_with(
+        cfg("passingSnapshots", None),
+        PermissionMode::BypassPermissions,
+        Arc::new(DenyPrompter),
+        json!({}),
+    );
+    let r = e.submit(prompt("make f return something better")).await;
+    assert_eq!(r.result.as_deref(), Some("done anyway"));
+    let t = h.transcript_text();
+    assert_eq!(t.matches(r#""subtype":"passing_snapshot""#).count(), 1, "saved once, after the passing check");
+    let told = last_user_text(&h.provider.requests()[5]);
+    assert!(told.contains("checkpoint `passing-1`") && told.contains("now fail `python3 test_app.py`"), "{told}");
+    assert_eq!(nudges(&t).len(), 1, "told once");
+    assert!(std::fs::read_to_string(h.cwd().join("app.py")).unwrap().contains("return 30"), "not restored");
+
+    // Cut by --max-turns after the failing check: the result says where the passing version is.
+    let h = Harness::new(vec![]);
+    setup(&h, vec![MockTurn::tool("Bash", json!({"command": "python3 test_app.py"}))]);
+    let mut e = h.engine_with(
+        cfg("passingSnapshots", Some(4)),
+        PermissionMode::BypassPermissions,
+        Arc::new(DenyPrompter),
+        json!({}),
+    );
+    let r = e.submit(prompt("make f better")).await;
+    assert_ne!(r.subtype, ResultSubtype::Success);
+    assert!(r.errors.iter().any(|e| e.contains("checkpoint `passing-1`")), "{:?}", r.errors);
+    assert!(std::fs::read_to_string(h.cwd().join("app.py")).unwrap().contains("return 30"), "not restored");
+
+    // Off: no checkpoint saved, nothing said.
+    let h = Harness::new(vec![]);
+    setup(&h, vec![MockTurn::text("done")]);
+    let mut e = h.engine_with(cfg("", None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("make f better")).await;
+    assert!(!h.transcript_text().contains("passing_snapshot"));
+}
+
+/// Back-off (#7): a model that makes progress after a nudge, twice, is not given it again in
+/// that run; what the conversation carries goes down with it. Off, the third nudge comes.
+#[tokio::test]
+async fn a_nudge_followed_by_progress_twice_is_silenced() {
+    let at = crate::progress::NO_BUDGET_CALLS as usize;
+    let script = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        for round in 0..3 {
+            for i in 0..at {
+                let f = h.cwd().join(format!("r{round}_{i}.py"));
+                std::fs::write(&f, format!("v = {i}\n")).unwrap();
+                h.provider.push(MockTurn::tool("Read", json!({"file_path": f})));
+            }
+            let out = h.cwd().join(format!("out{round}.py"));
+            h.provider.push(MockTurn::tool("Write", json!({"file_path": out, "content": "x = 1\n"})));
+        }
+        h.provider.push(MockTurn::text("done"));
+    };
+    let mut sent = vec![];
+    for list in ["progress", "progress,backOff"] {
+        let h = Harness::new(vec![]);
+        script(&h);
+        let cfg = EngineConfig { verify: None, ..nudged_cfg(list) };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("map the modules")).await;
+        let t = h.transcript_text();
+        let silenced = t.matches(r#""subtype":"nudge_silenced""#).count();
+        let given = nudges(&t).len();
+        if list.contains("backOff") {
+            assert_eq!((given, silenced), (2, 1), "{list}");
+        } else {
+            assert_eq!((given, silenced), (3, 0), "{list}");
+        }
+        sent.push(
+            h.provider.requests().iter().map(|r| serde_json::to_string(&r.messages).unwrap().len()).sum::<usize>(),
+        );
+    }
+    assert!(sent[1] < sent[0], "less sent with back-off: {sent:?}");
+}
+
+/// Progress is the files the request asks for, not helper scripts: a run that writes one
+/// experiment script after another while the named outputs don't exist is nudged; a script
+/// that writes a named output is progress, though no edit tool touched it.
+#[tokio::test]
+async fn helper_scripts_are_not_progress_while_the_named_outputs_are_missing() {
+    let request = "Read jobs.txt and write out/plan_a.txt and out/plan_b.txt.";
+    let setup = |h: &Harness, writes_output: bool| {
+        std::fs::create_dir_all(h.cwd().join("out")).unwrap();
+        std::fs::write(h.cwd().join("jobs.txt"), "1\n2\n").unwrap();
+        for i in 0..8 {
+            let f = h.cwd().join(format!("experiment_{i}.sh"));
+            h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "echo trying\n"})));
+            if i == 2 && writes_output {
+                // A script writes the deliverable: seen on disk.
+                h.provider.push(MockTurn::tool("Bash", json!({"command": "sh -c 'echo 1 > out/plan_a.txt'"})));
+            }
+        }
+        h.provider.push(MockTurn::text("done"));
+    };
+    let cfg = || EngineConfig { max_turns: Some(40), verify: None, ..nudged_cfg("progress,progressEarly") };
+    // Eight helper scripts, no output: the early nudge at a tenth of the budget (5 calls).
+    let h = Harness::new(vec![]);
+    setup(&h, false);
+    h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+        .submit(prompt(request))
+        .await;
+    let given = nudges(&h.transcript_text());
+    assert_eq!(given.len(), 1, "{given:?}");
+    assert_eq!((given[0]["kind"].as_str(), given[0]["calls"].as_u64()), (Some("progress_early"), Some(5)));
+
+    // A script writes out/plan_a.txt at the fourth call: progress, the count starts again, and
+    // the five calls after it are under a fifth of the budget.
+    let h = Harness::new(vec![]);
+    setup(&h, true);
+    h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+        .submit(prompt(request))
+        .await;
+    assert!(nudges(&h.transcript_text()).is_empty());
+}
+
+/// Pace (#2 of the scheduler post-mortem): the time warning says the steps left at the run's
+/// pace and names the files the request asks for that don't exist yet; off, it reads as before.
+#[tokio::test]
+async fn the_time_warning_names_steps_left_and_missing_deliverables() {
+    let request = "Write out/plan_a.txt and out/plan_b.txt from jobs.txt.";
+    for (list, paced) in [("pace", true), ("", false)] {
+        let h = Harness::new(vec![]);
+        std::fs::create_dir_all(h.cwd().join("out")).unwrap();
+        std::fs::write(h.cwd().join("jobs.txt"), "1\n").unwrap();
+        std::fs::write(h.cwd().join("out/plan_a.txt"), "old\n").unwrap();
+        for _ in 0..4 {
+            h.provider.push(MockTurn::tool("SafeA", json!({"tag": "look", "ms": 700})));
+        }
+        h.provider.push(MockTurn::text("done"));
+        // Half an hour, with a second more than a fifth left: the warning comes after the
+        // second 0.7 s step, when the turn has a pace.
+        let total = Duration::from_secs(30 * 60);
+        let limit = TimeLimit { started: Instant::now() - (total - total / 5 - Duration::from_secs(1)), total };
+        let cfg = EngineConfig { time_limit: Some(limit), verify: None, ..nudged_cfg(list) };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt(request)).await;
+        let warned = h
+            .provider
+            .requests()
+            .iter()
+            .map(last_user_text)
+            .find(|t| t.contains("of the run's time left"))
+            .expect("warned");
+        assert_eq!(warned.contains("more steps"), paced, "{list}: {warned}");
+        assert_eq!(warned.contains("don't exist yet: `out/plan_b.txt`"), paced, "{list}: {warned}");
+        assert!(!warned.contains("`out/plan_a.txt`"), "it exists: {warned}");
+        assert_eq!(nudges(&h.transcript_text()).iter().any(|n| n["kind"] == "pace"), paced);
+    }
+}
+
+const LIMITED: &str = "Write the plan to plan.csv. Keep cost at most 100 and wait at most 5.";
+
+/// Limit verdicts (#8a): `key=value` output is held against the limits the request states,
+/// line by line; output without matching keys gets nothing; off by default and with
+/// `reminders: false`.
+#[tokio::test]
+async fn shell_output_is_held_against_the_requests_limits() {
+    let script = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "printf 'a cost=90 wait=4\\nb cost=120 wait=4\\n'"})));
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "printf 'loss=1 acc=2\\n'"})));
+        h.provider.push(MockTurn::text("done"));
+    };
+    let h = Harness::new(vec![]);
+    script(&h);
+    let mut e = h.engine_with(
+        nudged_cfg("limitVerdicts"),
+        PermissionMode::BypassPermissions,
+        Arc::new(DenyPrompter),
+        json!({}),
+    );
+    e.submit(prompt(LIMITED)).await;
+    let results = tool_results(&e);
+    let r = &results[0].1;
+    assert!(
+        r.contains("`a cost=90 wait=4`: all 2 limits met")
+            && r.contains("`b cost=120 wait=4`: 1 of 2 not met: cost 120 > 100"),
+        "{r}"
+    );
+    assert!(!results[1].1.contains("limits"), "keys no limit names: {}", results[1].1);
+    let given = nudges(&h.transcript_text());
+    assert_eq!(given.len(), 1, "{given:?}");
+    assert_eq!(
+        (given[0]["kind"].as_str(), given[0]["lines"].as_u64(), given[0]["met"].as_u64()),
+        (Some("limit_verdict"), Some(2), Some(1))
+    );
+
+    for cfg in [EngineConfig::default(), EngineConfig { reminders: false, ..nudged_cfg("limitVerdicts") }] {
+        let h = Harness::new(vec![]);
+        script(&h);
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt(LIMITED)).await;
+        assert!(tool_results(&e).iter().all(|r| !r.1.contains("limits met")));
+        assert!(nudges(&h.transcript_text()).is_empty());
+    }
+}
+
+/// Stale deliverables (#8b): a result meeting every limit, then steps with the file the
+/// request asks for unchanged, is told after a few steps and once when the model would finish;
+/// writing the file, or measuring the file itself, says nothing.
+#[tokio::test]
+async fn a_result_meeting_every_limit_left_unwritten_is_told() {
+    let run = |sweep: &'static str, write: bool| async move {
+        let h = Harness::new(vec![]);
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        h.provider.push(MockTurn::tool("Bash", json!({"command": sweep})));
+        if write {
+            h.provider.push(MockTurn::tool("Write", json!({"file_path": h.cwd().join("plan.csv"), "content": "x"})));
+        }
+        exploring(&h, 4, vec![MockTurn::text("done")]);
+        let mut e = h.engine_with(
+            nudged_cfg("staleDeliverables"),
+            PermissionMode::BypassPermissions,
+            Arc::new(DenyPrompter),
+            json!({}),
+        );
+        e.submit(prompt(LIMITED)).await;
+        let reqs = h.provider.requests();
+        (nudges(&h.transcript_text()), reqs.iter().map(last_user_text).collect::<Vec<_>>())
+    };
+    let (given, texts) = run("printf 'cost=90 wait=4\\n'", false).await;
+    assert_eq!(given.len(), 2, "after a few steps, and at the end: {given:?}");
+    assert!(given.iter().all(|g| g["kind"] == "stale_deliverable" && g["files"] == json!(["plan.csv"])));
+    assert_eq!(given[0]["steps"].as_u64(), Some(3));
+    assert_eq!(given[1]["at_end"].as_bool(), Some(true));
+    let told = texts.iter().find(|t| t.contains("meets every limit")).expect("told");
+    assert!(
+        told.contains("cost=90 wait=4") && told.contains("`plan.csv` have not changed") && told.contains("Ignore this"),
+        "{told}"
+    );
+
+    let (given, _) = run("printf 'cost=90 wait=4\\n'", true).await;
+    assert!(given.is_empty(), "written after: {given:?}");
+    let (given, _) = run("cat plan.csv 2>/dev/null; printf 'cost=90 wait=4\\n'", false).await;
+    assert!(given.is_empty(), "the file itself measured: {given:?}");
+    let (given, _) = run("printf 'cost=190 wait=4\\n'", false).await;
+    assert!(given.is_empty(), "a limit not met: {given:?}");
+}
+
+/// Constraint memory, at write time: a write that takes a file over the size the request states
+/// for it is told with that write's result (a Write, or a shell command that names the file),
+/// not only before the turn ends; a write within the limit says nothing; off by default.
+#[tokio::test]
+async fn a_write_over_the_stated_size_is_told_with_its_result() {
+    let script = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        let f = h.cwd().join("tiny.py");
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "x".repeat(200)})));
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "head -c 300 /dev/zero | tr '\\0' x > tiny.py"})));
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "printf 'print(1)\\n' > tiny.py"})));
+        h.provider.push(MockTurn::text("done"));
+    };
+    const ASK: &str = "Write tiny.py that prints 1. Your Python script must be under 100 bytes.";
+    let h = Harness::new(vec![]);
+    script(&h);
+    let mut e =
+        h.engine_with(nudged_cfg("constraints"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt(ASK)).await;
+    let results = tool_results(&e);
+    assert!(
+        results[0].1.contains(
+            "`tiny.py` is now 200 bytes; the request says under 100 bytes (99 bytes at most): 101 bytes over"
+        ),
+        "{}",
+        results[0].1
+    );
+    assert!(results[1].1.contains("`tiny.py` is now 300 bytes"), "the shell command that named it: {}", results[1].1);
+    assert!(!results[2].1.contains("bytes over"), "within the limit: {}", results[2].1);
+    let given: Vec<Value> = nudges(&h.transcript_text()).into_iter().filter(|n| n["kind"] == "size_limit").collect();
+    assert_eq!(given.len(), 2, "{given:?}");
+    assert_eq!((given[0]["size"].as_u64(), given[0]["limit"].as_u64()), (Some(200), Some(99)));
+
+    // Off by default: the same writes, no word about their size.
+    let h = Harness::new(vec![]);
+    script(&h);
+    let mut e = h.engine();
+    e.submit(prompt(ASK)).await;
+    assert!(tool_results(&e).iter().all(|r| !r.1.contains("bytes over")));
+    assert!(nudges(&h.transcript_text()).is_empty());
+}
+
+/// path-tracing (2026-11-10, a 100,000-token model behind vLLM and LiteLLM): once the window was
+/// known, a refusal stating the prompt "at least N" (the window less the reply asked, plus one,
+/// whatever the prompt's size) sized the next request to N and was refused again by the same
+/// margin, then compacted. A refusal whose prompt fits is sent again with half the reply, and
+/// nothing is compacted.
+#[tokio::test]
+async fn a_refusal_whose_prompt_fits_is_sent_again_with_half_the_reply() {
+    let refusal = |asked: u32| {
+        let at_least = 100_000 - asked + 1;
+        MockTurn::HttpError {
+            status: 400,
+            kind: "BadRequestError".into(),
+            message: format!(
+                "litellm.ContextWindowExceededError: This model's maximum context length is 100000 tokens. However, \
+                 you requested {asked} output tokens and your prompt contains at least {at_least} input tokens, for a \
+                 total of at least 100001 tokens."
+            ),
+        }
+    };
+    let h = Harness::new(vec![
+        MockTurn::text("one").with_usage(usage(60_000)),
+        refusal(32_000), // the window, learned: sent again sized to it
+        refusal(29_999), // still too much: half
+        MockTurn::text("answered"),
+    ]);
+    let cfg = EngineConfig { model: "shrink-reply-on-refusal".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("first")).await;
+    let r = e.submit(prompt("second")).await;
+    assert_eq!(r.result.as_deref(), Some("answered"));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 4, "no summary request");
+    assert_eq!(reqs[3].max_tokens, reqs[2].max_tokens / 2, "half the reply refused");
+    let t = h.transcript_text();
+    assert!(t.contains("reply_shrunk") && !t.contains("compact_boundary"), "{t}");
+}
+
+/// A long `-p` run is one turn: the conversation that overflowed and was compacted fills the
+/// window again, and is compacted again, where the second overflow used to end the run. One that
+/// overflows again before anything was added (the compaction made no room) still ends it.
+#[tokio::test]
+async fn one_turn_compacts_again_each_time_the_conversation_overflows() {
+    let too_long = || MockTurn::HttpError {
+        status: 400,
+        kind: "invalid_request_error".into(),
+        message: "prompt is too long: 1000001 tokens > 1000000 maximum".into(),
+    };
+    let h = Harness::new(vec![
+        MockTurn::tool("Bash", json!({"command": "echo 1"})).with_usage(usage(100)),
+        too_long(),
+        MockTurn::text("<summary>first part</summary>"),
+        MockTurn::tool("Bash", json!({"command": "echo 2"})),
+        too_long(),
+        MockTurn::text("<summary>second part</summary>"),
+        MockTurn::text("done"),
+    ]);
+    let mut e =
+        h.engine_with(EngineConfig::default(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("long job")).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    assert_eq!(h.transcript_text().matches(r#""subtype":"compact_boundary""#).count(), 2);
+
+    // Refused again right after a compaction, nothing added since: no loop, the run ends.
+    let h = Harness::new(vec![
+        MockTurn::tool("Bash", json!({"command": "echo 1"})).with_usage(usage(100)),
+        too_long(),
+        MockTurn::text("<summary>part</summary>"),
+        too_long(),
+        MockTurn::text("never"),
+    ]);
+    let mut e =
+        h.engine_with(EngineConfig::default(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("long job")).await;
+    assert_eq!(r.subtype, ResultSubtype::ErrorDuringExecution);
+    assert_eq!(h.provider.requests().len(), 4, "not compacted a second time");
+}
+
+/// Adaptive effort: a reply that was all thinking lowers the next request's level, two steps of
+/// progress raise it back, never above the level set; off by default, and with `reminders: false`.
+#[tokio::test]
+async fn the_reasoning_level_follows_what_the_thinking_produced() {
+    use kodact_types::StopReason;
+    let thinking = |t: &str| ContentBlock::Thinking { thinking: t.into(), signature: String::new() };
+    let script = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        let out = h.cwd().join("out.txt");
+        h.provider.push(MockTurn::blocks(vec![thinking("a long plan, never acted on")], StopReason::MaxTokens));
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": out, "content": "first"})));
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": out, "content": "second"})));
+        h.provider.push(MockTurn::text("done"));
+    };
+    let levels = |h: &Harness| -> Vec<String> {
+        h.provider
+            .requests()
+            .iter()
+            .map(|r| r.output_config.as_ref().and_then(|c| c["effort"].as_str()).unwrap_or("-").to_string())
+            .collect()
+    };
+    const ASK: &str = "Write out.txt with the answer.";
+    let cfg = |list: &str| EngineConfig { effort: Some("high".into()), ..nudged_cfg(list) };
+
+    let h = Harness::new(vec![]);
+    script(&h);
+    let mut e =
+        h.engine_with(cfg("adaptiveEffort"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt(ASK)).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    assert_eq!(levels(&h), ["high", "medium", "medium", "high"], "down after all thinking, up after two of progress");
+    let given: Vec<Value> =
+        nudges(&h.transcript_text()).into_iter().filter(|n| n["kind"] == "adaptive_effort").collect();
+    assert_eq!(given.len(), 2, "{given:?}");
+    assert_eq!((given[0]["from"].as_str(), given[0]["to"].as_str()), (Some("high"), Some("medium")));
+    assert_eq!(given[1]["why"], "two steps in a row made progress");
+
+    // Off by default, and off with reminders off: the level set, every time.
+    for cfg in [cfg(""), EngineConfig { reminders: false, ..cfg("adaptiveEffort") }] {
+        let h = Harness::new(vec![]);
+        script(&h);
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt(ASK)).await;
+        assert!(levels(&h).iter().all(|l| l == "high"), "{:?}", levels(&h));
+        assert!(nudges(&h.transcript_text()).iter().all(|n| n["kind"] != "adaptive_effort"));
+    }
+}
+
+/// vLLM's other words for the window: a model whose window is smaller than the reply KodAct asks
+/// for refuses with "max_tokens=32000 cannot be greater than max_model_len=8192". The window is
+/// learned from it and the request goes again, sized to fit.
+#[tokio::test]
+async fn a_window_stated_as_max_model_len_is_learned() {
+    let refusal = "max_tokens=32000 cannot be greater than max_model_len=8192. Please request fewer output tokens. \
+        (parameter=max_tokens, value=32000)";
+    let h = Harness::new(vec![
+        MockTurn::HttpError { status: 400, kind: "BadRequestError".into(), message: refusal.into() },
+        MockTurn::text("answered"),
+    ]);
+    let cfg = EngineConfig { model: "learn-window-max-model-len".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("hello")).await;
+    assert_eq!(r.result.as_deref(), Some("answered"));
+    assert_eq!(kodact_api::models::model_info_or_default("learn-window-max-model-len").context_window, 8_192);
+    let reqs = h.provider.requests();
+    assert_eq!(reqs[0].max_tokens, 32_000);
+    assert!(reqs[1].max_tokens < 8_192, "sized to the window it states: {}", reqs[1].max_tokens);
+}
+
+/// The thinking time-box: a reply still all thinking past its limit is stopped, its reasoning
+/// handed back with the ask for one concrete step, and the turn goes on; a reply that has started
+/// to answer is never cut; off by default (the long reply then ends on its own, empty).
+#[tokio::test]
+async fn a_reply_that_only_thinks_past_its_limit_is_stopped_and_its_notes_kept() {
+    use kodact_types::StopReason;
+    let thinking = |t: &str| ContentBlock::Thinking { thinking: t.into(), signature: String::new() };
+    // Each event comes 200 ms after the last: the reasoning arrives at ~600 ms, the reply ends at
+    // ~1.2 s. A 700 ms limit stops it in between.
+    let slow_thinker = || {
+        MockTurn::blocks(vec![thinking("first decode the header, then")], StopReason::EndTurn)
+            .with_delay(Duration::from_millis(200))
+    };
+    let cfg = |list: &str| EngineConfig { time_box_floor: Duration::from_millis(700), ..nudged_cfg(list) };
+
+    let h = Harness::new(vec![slow_thinker(), MockTurn::text("done")]);
+    let mut e =
+        h.engine_with(cfg("thinkingTimeBox"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("solve it")).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 2);
+    let told = last_user_text(&reqs[1]);
+    assert!(told.contains("this step's time is up") && told.contains("concrete step"), "{told}");
+    let given: Vec<Value> =
+        nudges(&h.transcript_text()).into_iter().filter(|n| n["kind"] == "thinking_time_box").collect();
+    assert_eq!(given.len(), 1, "{given:?}");
+
+    // A reply that has started its answer runs to its end, however slow.
+    // Its text starts at ~200 ms; the reply ends at ~600 ms, past the 400 ms limit.
+    let h = Harness::new(vec![MockTurn::text("a slow but real answer").with_delay(Duration::from_millis(100))]);
+    let cfg_fast = EngineConfig { time_box_floor: Duration::from_millis(400), ..nudged_cfg("thinkingTimeBox") };
+    let mut e = h.engine_with(cfg_fast, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("answer")).await;
+    assert_eq!(r.result.as_deref(), Some("a slow but real answer"));
+    assert!(nudges(&h.transcript_text()).iter().all(|n| n["kind"] != "thinking_time_box"));
+
+    // Off by default: the reply thinks to its end, then the empty-reply reminder applies.
+    let h = Harness::new(vec![slow_thinker(), MockTurn::text("done")]);
+    let mut e = h.engine_with(cfg(""), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("solve it")).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    assert!(nudges(&h.transcript_text()).iter().all(|n| n["kind"] != "thinking_time_box"));
+    assert!(!last_user_text(&h.provider.requests()[1]).contains("this step's time is up"));
+}
+
+/// A summary asks for the lowest reasoning level, whatever the turn's level; the conversation's
+/// own requests keep theirs.
+#[tokio::test]
+async fn a_summary_asks_for_the_lowest_reasoning_level() {
+    let h = Harness::new(vec![
+        MockTurn::text("ok").with_usage(usage(100)),
+        MockTurn::HttpError {
+            status: 400,
+            kind: "invalid_request_error".into(),
+            message: "prompt is too long: 1000001 tokens > 1000000 maximum".into(),
+        },
+        MockTurn::text("<summary>compressed</summary>"),
+        MockTurn::text("answered after compaction"),
+    ]);
+    let cfg = EngineConfig { effort: Some("high".into()), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("one")).await;
+    let r = e.submit(prompt("two")).await;
+    assert_eq!(r.result.as_deref(), Some("answered after compaction"));
+    let levels: Vec<String> = h
+        .provider
+        .requests()
+        .iter()
+        .map(|q| q.output_config.as_ref().and_then(|c| c["effort"].as_str()).unwrap_or("-").to_string())
+        .collect();
+    assert_eq!(levels, ["high", "high", "low", "high"], "only the summary asks for low");
 }

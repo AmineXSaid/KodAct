@@ -9,6 +9,9 @@ use crate::{Tool, ToolContext};
 
 fn ctx(dir: &std::path::Path) -> ToolContext {
     let dir = dir.canonicalize().unwrap();
+    // Files a test made before its session are older than the session's start, as the person's
+    // files are; made in the same instant, they would count as made by the session.
+    std::thread::sleep(std::time::Duration::from_millis(30));
     ToolContext::new(&dir)
 }
 

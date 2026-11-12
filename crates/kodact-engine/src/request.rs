@@ -113,6 +113,9 @@ pub fn apply_cache_breakpoints(messages: &mut [Message]) {
     }
 }
 
+/// The effort levels KodAct takes (`--effort`, `effortLevel`).
+pub(crate) const EFFORT_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
 /// Runtime thinking control: `None` = the model's default, `Some(0)` = off,
 /// `Some(n)` = on (a budget for models that take one).
 pub fn thinking_params(

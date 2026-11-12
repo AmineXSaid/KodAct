@@ -105,6 +105,8 @@ impl MockApi {
                                 .to_string();
                             format!("HTTP/1.1 429 Error\r\ncontent-type: application/json\r\nretry-after: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", retry_after.as_secs(), body.len())
                         }
+                        // An unreachable endpoint: the connection closes with no answer.
+                        MockTurn::NetworkError { .. } => return,
                         MockTurn::StreamError { kind, message } => {
                             let err = serde_json::json!({"type": "error", "error": {"type": kind, "message": message}})
                                 .to_string();

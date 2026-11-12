@@ -58,6 +58,76 @@ const FRAME: Duration = Duration::from_millis(16);
 /// Prompts kept from history for this directory.
 const HISTORY_ENTRIES: usize = 500;
 
+/// Cells as they are written to the terminal: a control character in one (from pasted
+/// input, a file name, a server's name, a status command's output, anything a line was
+/// built from) is drawn as its picture. Every draw of both displays goes through here,
+/// so whatever a line's source forgot, no control character reaches the terminal.
+fn safe_cells<'a>(
+    content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+) -> Vec<(u16, u16, std::borrow::Cow<'a, ratatui::buffer::Cell>)> {
+    content
+        .map(|(x, y, cell)| {
+            if cell.symbol().chars().any(char::is_control) {
+                let mut safe = cell.clone();
+                safe.set_symbol(&text::printable(cell.symbol()));
+                (x, y, std::borrow::Cow::Owned(safe))
+            } else {
+                (x, y, std::borrow::Cow::Borrowed(cell))
+            }
+        })
+        .collect()
+}
+
+/// A backend that writes only [`safe_cells`].
+pub struct Safe<B: Backend>(pub B);
+
+impl<B: Backend> std::ops::Deref for Safe<B> {
+    type Target = B;
+    fn deref(&self) -> &B {
+        &self.0
+    }
+}
+
+impl<B: Backend> Backend for Safe<B> {
+    fn draw<'a, I>(&mut self, content: I) -> std::io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        let cells = safe_cells(content);
+        self.0.draw(cells.iter().map(|(x, y, c)| (*x, *y, c.as_ref())))
+    }
+    fn append_lines(&mut self, n: u16) -> std::io::Result<()> {
+        self.0.append_lines(n)
+    }
+    fn hide_cursor(&mut self) -> std::io::Result<()> {
+        self.0.hide_cursor()
+    }
+    fn show_cursor(&mut self) -> std::io::Result<()> {
+        self.0.show_cursor()
+    }
+    fn get_cursor_position(&mut self) -> std::io::Result<Position> {
+        self.0.get_cursor_position()
+    }
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> std::io::Result<()> {
+        self.0.set_cursor_position(position)
+    }
+    fn clear(&mut self) -> std::io::Result<()> {
+        self.0.clear()
+    }
+    fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> std::io::Result<()> {
+        self.0.clear_region(clear_type)
+    }
+    fn size(&self) -> std::io::Result<ratatui::layout::Size> {
+        self.0.size()
+    }
+    fn window_size(&mut self) -> std::io::Result<ratatui::backend::WindowSize> {
+        self.0.window_size()
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
 /// A backend that remembers where the cursor is instead of asking the terminal.
 ///
 /// ratatui asks for the cursor position whenever an inline viewport is made or
@@ -78,8 +148,8 @@ impl<B: Backend> Backend for Tracked<B> {
         I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
     {
         let mut last = None;
-        let cells: Vec<_> = content.inspect(|(x, y, _)| last = Some(Position { x: *x, y: *y })).collect();
-        self.inner.draw(cells.into_iter())?;
+        let cells = safe_cells(content.inspect(|(x, y, _)| last = Some(Position { x: *x, y: *y })));
+        self.inner.draw(cells.iter().map(|(x, y, c)| (*x, *y, c.as_ref())))?;
         if let Some(p) = last {
             self.pos.set(Some(Position { x: p.x.saturating_add(1), y: p.y }));
         }
@@ -149,14 +219,20 @@ pub struct Screen<B: Backend> {
     make: Box<dyn FnMut() -> B>,
     height: u16,
     pos: std::rc::Rc<std::cell::Cell<Option<Position>>>,
+    /// The newest lines written above the viewport, as committed: what is written
+    /// again when the window changes size.
+    tail: std::collections::VecDeque<Line<'static>>,
 }
+
+/// Lines kept to write again after a resize: more than the tallest window shows.
+const TAIL_LINES: usize = 400;
 
 impl<B: Backend> Screen<B> {
     pub fn new(mut make: Box<dyn FnMut() -> B>, height: u16) -> std::io::Result<Self> {
         let pos = std::rc::Rc::new(std::cell::Cell::new(None));
         let backend = Tracked { inner: make(), pos: pos.clone() };
         let terminal = Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Inline(height) })?;
-        Ok(Screen { terminal, make, height, pos })
+        Ok(Screen { terminal, make, height, pos, tail: Default::default() })
     }
 
     pub fn height(&self) -> u16 {
@@ -189,6 +265,29 @@ impl<B: Backend> Screen<B> {
     /// scrollback and sent the cursor home. The position is known, so the terminal
     /// isn't asked for it (see [`Tracked`]).
     pub fn restart(&mut self, wipe: impl FnOnce() -> std::io::Result<()>) -> std::io::Result<()> {
+        self.tail.clear();
+        self.start_at_top(wipe)
+    }
+
+    /// The window changed size. Where the terminal moved the earlier rows is its own
+    /// affair (rows pushed into the scrollback, lines rewrapped), and it can't be asked
+    /// (see [`Tracked`]), so the remembered cursor position is wrong: drawn from it, the
+    /// live region landed past the window's last row, every row on top of the next.
+    /// So the window (not its scrollback) is cleared by `wipe`, the viewport starts
+    /// again at the top, and the newest lines that fit above it are written again.
+    pub fn resized(&mut self, wipe: impl FnOnce() -> std::io::Result<()>) -> std::io::Result<()> {
+        self.start_at_top(wipe)?;
+        let (width, rows) = (self.width(), self.rows());
+        // A viewport taller than the new window would hide its own last rows.
+        self.height = self.height.min(rows.saturating_sub(1)).max(1);
+        let room = rows.saturating_sub(self.height) as usize;
+        let lines: Vec<Line<'static>> = self.tail.iter().cloned().collect();
+        let wrapped = text::wrap(app::lay_out(lines, width), width);
+        let newest = wrapped[wrapped.len().saturating_sub(room)..].to_vec();
+        self.write_above(newest)
+    }
+
+    fn start_at_top(&mut self, wipe: impl FnOnce() -> std::io::Result<()>) -> std::io::Result<()> {
         wipe()?;
         self.pos.set(Some(Position { x: 0, y: 0 }));
         let backend = Tracked { inner: (self.make)(), pos: self.pos.clone() };
@@ -198,7 +297,15 @@ impl<B: Backend> Screen<B> {
 
     /// Write finished lines into scrollback, above the viewport.
     pub fn commit(&mut self, lines: Vec<Line<'static>>) -> std::io::Result<()> {
+        self.tail.extend(lines.iter().cloned());
+        while self.tail.len() > TAIL_LINES {
+            self.tail.pop_front();
+        }
         let rows = text::wrap(app::lay_out(lines, self.width()), self.width());
+        self.write_above(rows)
+    }
+
+    fn write_above(&mut self, rows: Vec<Line<'static>>) -> std::io::Result<()> {
         for chunk in rows.chunks(COMMIT_CHUNK) {
             let chunk = chunk.to_vec();
             self.terminal.insert_before(chunk.len() as u16, |buf| Paragraph::new(chunk).render(buf.area, buf))?;
@@ -268,7 +375,7 @@ fn indented(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
 /// The full-screen UI: the whole window, and the transcript it keeps itself
 /// (wrapped once per width, as lines arrive).
 pub struct Full<B: Backend> {
-    terminal: Terminal<B>,
+    terminal: Terminal<Safe<B>>,
     /// Finished lines, as committed.
     transcript: Vec<Line<'static>>,
     /// The transcript wrapped to `wrapped_w`.
@@ -277,14 +384,25 @@ pub struct Full<B: Backend> {
     /// Rows up from the transcript's end.
     pub scroll: usize,
     max_scroll: usize,
+    /// Transcript rows in view at the last draw (0 when the whole transcript fits).
+    in_view: usize,
     /// What the front page shows about the session.
     info: front::FrontInfo,
 }
 
 impl<B: Backend> Full<B> {
     pub fn new(backend: B, info: front::FrontInfo) -> std::io::Result<Self> {
-        let terminal = Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Fullscreen })?;
-        Ok(Full { terminal, transcript: vec![], wrapped: vec![], wrapped_w: 0, scroll: 0, max_scroll: 0, info })
+        let terminal = Terminal::with_options(Safe(backend), TerminalOptions { viewport: Viewport::Fullscreen })?;
+        Ok(Full {
+            terminal,
+            transcript: vec![],
+            wrapped: vec![],
+            wrapped_w: 0,
+            scroll: 0,
+            max_scroll: 0,
+            in_view: 0,
+            info,
+        })
     }
 
     /// The width text is laid out in: the window less its gutters.
@@ -298,13 +416,18 @@ impl<B: Backend> Full<B> {
     }
 
     /// Finished lines join the transcript. A view scrolled up stays where it is.
+    ///
+    /// The new lines are wrapped to the width the transcript is drawn at (`wrapped_w`,
+    /// set by the last draw), not the window's: with the sidebar open the two differ,
+    /// and lines wrapped for the window were never added to what is drawn, so a prompt
+    /// and its answer did not appear until the window was resized.
     pub fn commit(&mut self, lines: Vec<Line<'static>>) {
-        let w = self.width();
-        let rows = indented(lines.clone(), w);
-        if self.scroll > 0 {
-            self.scroll += rows.len();
-        }
-        if w == self.wrapped_w {
+        // Before the first draw there is no width yet: that draw wraps everything.
+        if self.wrapped_w > 0 {
+            let rows = indented(lines.clone(), self.wrapped_w);
+            if self.scroll > 0 {
+                self.scroll += rows.len();
+            }
             self.wrapped.extend(rows);
         }
         self.transcript.extend(lines);
@@ -318,6 +441,15 @@ impl<B: Backend> Full<B> {
         self.scroll = 0;
         self.max_scroll = 0;
         self.info.recent = recent;
+    }
+
+    /// Rows PgUp and PgDn move by: half the window, but never more than the transcript
+    /// rows in view less one. In a short window the live region leaves only a few rows
+    /// for the transcript, and a half-window page skipped lines no key could bring back.
+    pub fn page(&self) -> isize {
+        let half = (self.rows() as usize / 2).max(1);
+        let page = if self.in_view > 0 { half.min(self.in_view.saturating_sub(1).max(1)) } else { half };
+        page as isize
     }
 
     /// Scroll by `rows` (up when positive), within the transcript.
@@ -341,6 +473,7 @@ impl<B: Backend> Full<B> {
         let page = front::front_page(&app.theme, app.look, &self.info, width as usize);
         let (view, max) = render::full_view(app, width, size.height, &self.wrapped, &page, self.scroll);
         self.max_scroll = max;
+        self.in_view = if max > 0 { self.wrapped.len() - max } else { 0 };
         self.scroll = self.scroll.min(max);
         self.terminal.draw(|f| {
             let full = f.area();
@@ -454,6 +587,57 @@ fn setup(full: bool) -> std::io::Result<Guard> {
     Ok(guard)
 }
 
+/// The signals that ask the program to end: SIGTERM (`kill`), SIGHUP (the terminal or the
+/// SSH connection went away) and SIGINT sent from outside (Ctrl+C is a key here, not a
+/// signal, while the terminal is in raw mode).
+///
+/// Left to their default they killed the process where it stood: the terminal stayed in
+/// raw mode on the alternate screen with the mouse captured, and the session never
+/// closed its hooks or MCP servers. Caught, they end the UI the way `/exit` does.
+struct StopSignals {
+    #[cfg(unix)]
+    signals: Vec<(i32, tokio::signal::unix::Signal)>,
+}
+
+impl StopSignals {
+    fn new() -> StopSignals {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let kinds = [(15, SignalKind::terminate()), (1, SignalKind::hangup()), (2, SignalKind::interrupt())];
+            StopSignals { signals: kinds.into_iter().filter_map(|(n, k)| signal(k).ok().map(|s| (n, s))).collect() }
+        }
+        #[cfg(not(unix))]
+        StopSignals {}
+    }
+
+    /// The number of the next signal to arrive.
+    async fn recv(&mut self) -> i32 {
+        #[cfg(unix)]
+        {
+            if self.signals.is_empty() {
+                return std::future::pending().await;
+            }
+            let waits = self.signals.iter_mut().map(|(n, s)| {
+                let n = *n;
+                Box::pin(async move {
+                    s.recv().await;
+                    n
+                })
+            });
+            futures::future::select_all(waits).await.0
+        }
+        #[cfg(not(unix))]
+        std::future::pending().await
+    }
+}
+
+/// The exit status after a signal ended the UI: 128 plus its number, as a shell reports
+/// a signalled program (130 for SIGINT, as CLI.md documents for Ctrl-C).
+fn signal_status(signal: i32) -> i32 {
+    128 + signal
+}
+
 // ---- prompt history ----
 
 pub fn history_path() -> PathBuf {
@@ -478,6 +662,9 @@ pub fn load_history(path: &Path, cwd: &str) -> Vec<String> {
 /// Add a prompt to the history file (created with mode 0600).
 pub fn append_history(path: &Path, cwd: &str, text: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
+        if dir == kodact_config::state_dir() {
+            let _ = kodact_config::private_state_dir();
+        }
         std::fs::create_dir_all(dir)?;
     }
     let mut o = std::fs::OpenOptions::new();
@@ -495,12 +682,19 @@ pub fn append_history(path: &Path, cwd: &str, text: &str) -> std::io::Result<()>
 
 /// Most paths offered for `@` completion.
 const MAX_FILES: usize = 20_000;
+/// Most entries looked at to choose them.
+const MAX_WALKED: usize = 400_000;
 
 /// The project's files and directories (relative, `/`-separated; directories end in `/`),
 /// skipping what `.gitignore` and hidden-file rules skip.
+///
+/// A project with more than [`MAX_FILES`] keeps the shallowest ones: the walk goes folder
+/// by folder, so cutting it at the first 20,000 lost every file after one large folder
+/// (a top-level `my notes.md` after a `gen/` of 25,000), and those are the ones people
+/// name. A file left out can still be attached by typing its path.
 pub fn project_files(root: &Path) -> Vec<String> {
-    let mut out = vec![];
-    for e in ignore::WalkBuilder::new(root).build().flatten() {
+    let mut out: Vec<(usize, String)> = vec![];
+    for e in ignore::WalkBuilder::new(root).build().flatten().take(MAX_WALKED) {
         let Ok(rel) = e.path().strip_prefix(root) else { continue };
         if rel.as_os_str().is_empty() {
             continue;
@@ -509,12 +703,14 @@ pub fn project_files(root: &Path) -> Vec<String> {
         if e.file_type().is_some_and(|t| t.is_dir()) {
             p.push('/');
         }
-        out.push(p);
-        if out.len() >= MAX_FILES {
-            break;
-        }
+        out.push((e.depth(), p));
     }
-    out
+    if out.len() > MAX_FILES {
+        // Stable: within a depth the walk's order stays.
+        out.sort_by_key(|(depth, _)| *depth);
+        out.truncate(MAX_FILES);
+    }
+    out.into_iter().map(|(_, p)| p).collect()
 }
 
 fn walk_files(root: String, ui: mpsc::UnboundedSender<UiEvent>) {
@@ -524,6 +720,24 @@ fn walk_files(root: String, ui: mpsc::UnboundedSender<UiEvent>) {
 }
 
 // ---- the loop ----
+
+/// The app as it starts, already in the saved colours (`theme`) and style (`tuiStyle`).
+///
+/// The session task announces both too, but only once it runs: an app built without
+/// them drew its first frame, and wrote the inline banner into the scrollback for good,
+/// in the default colours. With `theme: none` that put colour on a terminal set to
+/// show none.
+fn starting_app(theme: Option<&str>, style: Option<&str>, color_ok: bool, history: Vec<String>) -> App {
+    let mut app = App::new(text::Theme::named("auto", color_ok, palette::Depth::detect()), history);
+    // The same events the session sends, so a later `/theme` behaves as it always did.
+    if let Some(t) = theme {
+        app.on_event(UiEvent::Theme(t.to_string()));
+    }
+    if let Some(s) = style {
+        app.on_event(UiEvent::Look(s.to_string()));
+    }
+    app
+}
 
 /// The interactive UI: until `/exit`, Ctrl-D or Ctrl-C twice.
 pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
@@ -543,10 +757,16 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
     };
     let live = driver.live();
     let cwd = driver.info.cwd.display().to_string();
-    let persist = !o.no_session_persistence;
+    // No resume hint for a conversation that could not be saved.
+    let persist = !o.no_session_persistence && driver.engine.transcript().path().is_some();
     let hist_path = history_path();
-    // The `theme` setting arrives from the session first thing.
-    let mut app = App::new(theme, load_history(&hist_path, &cwd));
+    let mut app = starting_app(
+        driver.info.settings.str("/theme"),
+        driver.info.settings.str("/tuiStyle"),
+        crate::term::get().color,
+        load_history(&hist_path, &cwd),
+    );
+    let theme = app.theme;
     // Bad entries in keybindings.json are warnings, never a failure.
     let (keymap, key_warnings) = keys::Keymap::load();
     app.keymap = keymap;
@@ -627,6 +847,8 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
     let mut last_draw = Instant::now() - FRAME;
     let mut had_dialog = false;
     let mut exiting = false;
+    let mut stop = StopSignals::new();
+    let mut stopped_by = None;
     loop {
         // The conversation was replaced (/clear, /resume, /rewind): the screen starts
         // over before the conversation as it is now is written.
@@ -718,12 +940,24 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                     && matches!(k.code, KeyCode::PageUp | KeyCode::PageDown)
                     && matches!(screen, Display::Full(_)) => {
                     if let Display::Full(f) = &mut screen {
-                        let page = (f.rows() as isize / 2).max(1);
+                        let page = f.page();
                         f.scroll_by(if k.code == KeyCode::PageUp { page } else { -page });
                     }
                     app.dirty = true;
                 }
-                Some(Ok(Event::Resize(..))) => app.dirty = true,
+                Some(Ok(Event::Resize(..))) => {
+                    if let Display::Inline(s) = &mut screen {
+                        s.resized(|| {
+                            crossterm::execute!(
+                                std::io::stdout(),
+                                crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+                                crossterm::cursor::MoveTo(0, 0)
+                            )
+                        })
+                        .map_err(io_fail)?;
+                    }
+                    app.dirty = true;
+                }
                 Some(Ok(ev)) => {
                     for a in app.on_term_event(ev) {
                         match a {
@@ -765,6 +999,12 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                 }
                 None => break,
             },
+            signal = stop.recv() => {
+                // The turn in flight is stopped as Esc stops it, so the session can close.
+                live.handle().interrupt();
+                stopped_by = Some(signal);
+                break;
+            }
             _ = tick.tick(), if app.busy || hint || render::sidebar_moving(&app) => app.dirty = true,
             _ = tokio::time::sleep(frame_wait), if app.dirty && !frame_wait.is_zero() => {}
         }
@@ -798,9 +1038,10 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
     // The session ends its own way (hooks, MCP); don't wait for it forever.
     let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
     if persist {
-        eprintln!("Resume this conversation with: kodact --resume {}", live.session_id());
+        // Not `eprintln!`: after a hangup there is no terminal, and a failed print must not panic.
+        let _ = writeln!(std::io::stderr(), "Resume this conversation with: kodact --resume {}", live.session_id());
     }
-    Ok(crate::exit::OK)
+    Ok(stopped_by.map(signal_status).unwrap_or(crate::exit::OK))
 }
 
 /// How many tools each MCP server brings, for the sidebar: the session's tools named
@@ -855,6 +1096,27 @@ mod tests {
         assert_eq!(endpoint_label(None, Some(Backend::OpenAi)), "an OpenAI-compatible endpoint");
     }
     use ratatui::backend::TestBackend;
+
+    /// `theme: none` in settings still drew the first frame and the inline banner in colour:
+    /// the app was built in the default colours and learned the setting an event later.
+    #[test]
+    fn the_app_starts_in_the_saved_colours_and_style() {
+        let a = starting_app(Some("none"), Some("ledger"), true, vec![]);
+        assert!(!a.theme.color, "theme none: no colour from the first frame");
+        assert_eq!(a.look, look::Look::Ledger);
+        let banner = brand::welcome(&a.theme, &brand::Welcome { recent: &[] }, 100, 30);
+        assert!(
+            banner.iter().flat_map(|l| &l.spans).all(|s| s.style.fg.is_none() && s.style.bg.is_none()),
+            "the banner written at start has no colour"
+        );
+        let mut a = a;
+        a.on_event(UiEvent::Theme("dark".into()));
+        assert!(a.theme.color, "/theme dark brings colour back");
+        assert!(starting_app(Some("light"), None, true, vec![]).theme.light);
+        let a = starting_app(None, Some("no-such-style"), true, vec![]);
+        assert!(a.theme.color && a.look == look::Look::default());
+        assert!(!starting_app(Some("dark"), None, false, vec![]).theme.color, "NO_COLOR still wins");
+    }
 
     /// A terminal that answers the cursor-position query only once, like a
     /// real one whose stdin the event reader has taken over.
@@ -918,6 +1180,266 @@ mod tests {
         s.set_height(3).expect("and shrinking back");
         s.commit(vec![Line::from("answer")]).unwrap();
         assert_eq!(asked.get(), 1, "only the first viewport asked");
+    }
+
+    /// A paste holding `ESC [ 2 J` cleared the screen, and one with tabs left the input in
+    /// pieces: the prompt's text was written to the terminal as it was. Whatever a line is
+    /// built from, neither display writes a control character.
+    #[test]
+    fn no_control_character_reaches_the_terminal() {
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
+        let hostile = "before \u{1b}[2J\u{1b}]0;title\u{7} a\tb \u{1b}[?1049l \u{9b}31m \u{7f} after";
+        let cells =
+            |b: &TestBackend| -> String { b.buffer().content().iter().map(|c| c.symbol().to_string()).collect() };
+        let check = |what: &str, drawn: String| {
+            assert!(!drawn.chars().any(char::is_control), "{what}: a control character was drawn: {drawn:?}");
+            assert!(drawn.contains("before") && drawn.contains("after"), "{what}: the text around them shows");
+            assert!(
+                drawn.contains("\u{241b}[2J") && drawn.contains("a\u{2409}b"),
+                "{what}: as their pictures: {drawn:?}"
+            );
+        };
+
+        // Full screen: pasted into the prompt, and in a line a source failed to clean.
+        let mut a = app::App::new(theme, vec![]);
+        a.front = false;
+        a.on_term_event(Event::Paste(hostile.into()));
+        assert_eq!(a.editor.text(), hostile, "what was pasted is kept as it is");
+        let mut f = Full::new(TestBackend::new(120, 20), front::FrontInfo::default()).unwrap();
+        f.draw(&a).unwrap();
+        check("the prompt, full screen", cells(f.terminal.backend()));
+        a.status_text = Some(hostile.into());
+        f.draw(&a).unwrap();
+        check("a status command's output", cells(f.terminal.backend()));
+
+        // Inline: the live region and what is written above it.
+        let mut s = Screen::new(Box::new(|| TestBackend::new(120, 12)), 3).unwrap();
+        let view = render::live_view(&a, 120, 11);
+        s.set_height(view.lines.len() as u16).unwrap();
+        s.draw(&view).unwrap();
+        check("the prompt, inline", cells(s.backend()));
+        let mut s = Screen::new(Box::new(|| TestBackend::new(120, 12)), 1).unwrap();
+        s.terminal
+            .insert_before(1, |buf| Paragraph::new(Line::from(hostile.to_string())).render(buf.area, buf))
+            .unwrap();
+        check("a line written above the viewport", cells(s.backend()));
+
+        // The cursor is where the next character lands: counted on what is drawn.
+        let mut a = app::App::new(theme, vec![]);
+        a.on_term_event(Event::Paste("a\tb\u{1b}c".into()));
+        let view = render::live_view(&a, 80, 10);
+        let row =
+            view.lines.iter().map(text::plain).find(|l| l.contains("a\u{2409}b\u{241b}c")).expect("the input row");
+        let (x, _) = view.cursor.expect("a cursor");
+        assert_eq!(x as usize, text::width(&row[..row.find('c').unwrap() + 1]), "{row:?}");
+    }
+
+    /// `@my` offered nothing for a top-level `my notes.md` in a project whose `gen/` folder
+    /// held 25,000 files: the walk stopped at its first 20,000 paths, all inside `gen/`.
+    #[test]
+    fn a_large_folder_does_not_push_shallow_files_out_of_at_completion() {
+        let d = tempfile::tempdir().unwrap();
+        for dir in 0..210 {
+            let p = d.path().join("gen").join(format!("d{dir:03}"));
+            std::fs::create_dir_all(&p).unwrap();
+            for f in 0..100 {
+                std::fs::write(p.join(format!("f{f:02}.txt")), "").unwrap();
+            }
+        }
+        std::fs::write(d.path().join("my notes.md"), "").unwrap();
+        std::fs::create_dir_all(d.path().join("src")).unwrap();
+        std::fs::write(d.path().join("src/zz_last.rs"), "").unwrap();
+        let files = project_files(d.path());
+        assert_eq!(files.len(), MAX_FILES, "still capped");
+        for shallow in ["my notes.md", "src/", "src/zz_last.rs", "gen/", "gen/d209/"] {
+            assert!(files.iter().any(|f| f == shallow), "{shallow} is offered");
+        }
+        // A small project is listed whole.
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("a/b")).unwrap();
+        std::fs::write(d.path().join("a/b/deep.txt"), "").unwrap();
+        std::fs::write(d.path().join("top.txt"), "").unwrap();
+        let mut all = project_files(d.path());
+        all.sort();
+        assert_eq!(all, ["a/", "a/b/", "a/b/deep.txt", "top.txt"]);
+    }
+
+    /// With the sidebar open (Ctrl+B on a wide window), a prompt and its answer were sent
+    /// and answered but never drawn: new lines were wrapped for the window's width and
+    /// dropped, because the transcript is drawn at the narrower width beside the sidebar.
+    #[test]
+    fn new_lines_show_with_the_sidebar_open() {
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
+        let mut a = app::App::new(theme, vec![]);
+        a.front = false;
+        let mut f = Full::new(TestBackend::new(160, 30), front::FrontInfo::default()).unwrap();
+        f.commit(vec![Line::from("before the sidebar")]);
+        f.draw(&a).unwrap();
+        a.sidebar = true;
+        f.draw(&a).unwrap();
+        f.commit(vec![Line::from("typed with the sidebar open"), Line::from("x".repeat(300))]);
+        f.draw(&a).unwrap();
+        let shown = rows(f.terminal.backend());
+        assert!(shown.iter().any(|r| r.contains("typed with the sidebar open")), "{shown:#?}");
+        let side = shown.iter().find_map(|r| r.find('╭')).expect("the sidebar's panes");
+        let long: Vec<&String> = shown.iter().filter(|r| r.contains("xxxxxxxx")).collect();
+        assert!(
+            long.len() >= 3 && long.iter().all(|r| r.trim_end().rfind('x').unwrap() < side),
+            "wrapped beside it: {shown:#?}"
+        );
+        // Scrolled up, the view stays on the same lines as more arrive.
+        f.commit((0..60).map(|i| Line::from(format!("filler {i}"))).collect());
+        f.draw(&a).unwrap();
+        f.scroll_by(10);
+        f.draw(&a).unwrap();
+        let before = rows(f.terminal.backend());
+        f.commit(vec![Line::from("arrives while scrolled up"), Line::from("and another")]);
+        f.draw(&a).unwrap();
+        let after = rows(f.terminal.backend());
+        assert_eq!(before[..10], after[..10], "the view stays put");
+        // And closing the sidebar draws everything at the window's width again.
+        a.sidebar = false;
+        f.scroll = 0;
+        f.draw(&a).unwrap();
+        assert!(rows(f.terminal.backend()).iter().any(|r| r.contains("and another")));
+    }
+
+    /// In a 40x12 window PgUp moved six rows while four rows of the transcript were in
+    /// view: two rows in every six could not be read. Paging never skips a row.
+    #[test]
+    fn paging_never_skips_a_row_in_a_short_window() {
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
+        let mut a = app::App::new(theme, vec![]);
+        a.front = false;
+        for (cols, lines) in [(40u16, 12u16), (60, 20), (110, 36), (200, 50)] {
+            let mut f = Full::new(TestBackend::new(cols, lines), front::FrontInfo::default()).unwrap();
+            f.commit((1..=300).map(|i| Line::from(format!("row {i:03}"))).collect());
+            f.draw(&a).unwrap();
+            let mut seen = std::collections::BTreeSet::new();
+            for _ in 0..400 {
+                for r in rows(f.terminal.backend()) {
+                    if let Some(n) = r.trim().strip_prefix("row ").and_then(|n| n.parse::<u32>().ok()) {
+                        seen.insert(n);
+                    }
+                }
+                f.scroll_by(f.page());
+                f.draw(&a).unwrap();
+            }
+            let missing: Vec<u32> = (1..=300).filter(|n| !seen.contains(n)).collect();
+            assert!(missing.is_empty(), "{cols}x{lines}: PgUp skipped rows {missing:?}");
+            assert!(f.page() >= 1 && f.page() <= (lines as isize / 2).max(1), "{cols}x{lines}: {}", f.page());
+        }
+        // A tall window still pages by half of itself.
+        let mut f = Full::new(TestBackend::new(110, 36), front::FrontInfo::default()).unwrap();
+        f.commit((1..=300).map(|i| Line::from(format!("row {i:03}"))).collect());
+        f.draw(&a).unwrap();
+        assert_eq!(f.page(), 18);
+    }
+
+    #[test]
+    fn a_signal_ends_the_ui_with_the_shells_status_for_it() {
+        assert_eq!([signal_status(2), signal_status(15), signal_status(1)], [130, 143, 129]);
+    }
+
+    /// SIGTERM used to kill the process where it stood, the terminal left in raw mode on
+    /// the alternate screen. The signals are caught, so the loop can end as `/exit` does.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_signals_are_caught_not_fatal() {
+        let mut stop = StopSignals::new();
+        assert_eq!(stop.signals.len(), 3, "SIGTERM, SIGHUP and SIGINT have handlers");
+        // SIGHUP to this process: with the handler in place it arrives as a value.
+        let me = std::process::id().to_string();
+        assert!(std::process::Command::new("kill").args(["-HUP", &me]).status().unwrap().success());
+        let got = tokio::time::timeout(Duration::from_secs(5), stop.recv()).await.expect("the signal is delivered");
+        assert_eq!(got, 1);
+    }
+
+    /// A terminal whose window can change size under the UI.
+    #[derive(Clone)]
+    struct Window(std::rc::Rc<std::cell::RefCell<TestBackend>>);
+
+    impl Backend for Window {
+        fn draw<'a, I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>>(&mut self, c: I) -> std::io::Result<()> {
+            self.0.borrow_mut().draw(c)
+        }
+        fn append_lines(&mut self, n: u16) -> std::io::Result<()> {
+            self.0.borrow_mut().append_lines(n)
+        }
+        fn hide_cursor(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn show_cursor(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn get_cursor_position(&mut self) -> std::io::Result<Position> {
+            self.0.borrow_mut().get_cursor_position()
+        }
+        fn set_cursor_position<P: Into<Position>>(&mut self, p: P) -> std::io::Result<()> {
+            self.0.borrow_mut().set_cursor_position(p)
+        }
+        fn clear(&mut self) -> std::io::Result<()> {
+            self.0.borrow_mut().clear()
+        }
+        fn clear_region(&mut self, t: ratatui::backend::ClearType) -> std::io::Result<()> {
+            self.0.borrow_mut().clear_region(t)
+        }
+        fn size(&self) -> std::io::Result<ratatui::layout::Size> {
+            self.0.borrow().size()
+        }
+        fn window_size(&mut self) -> std::io::Result<ratatui::backend::WindowSize> {
+            self.0.borrow_mut().window_size()
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Inline, a window made smaller left the live region drawn from a cursor row that no
+    /// longer existed: the input box, its border and the status line all on the last row.
+    /// After a resize the whole live region is on screen, under the newest lines.
+    #[test]
+    fn the_inline_viewport_is_whole_after_the_window_changes_size() {
+        let window = Window(std::rc::Rc::new(std::cell::RefCell::new(TestBackend::new(80, 30))));
+        let w = window.clone();
+        let mut s = Screen::new(Box::new(move || w.clone()), 4).unwrap();
+        s.commit((1..=40).map(|i| Line::from(format!("answer line {i}"))).collect()).unwrap();
+        let view = LiveView {
+            lines: ["top of the box", "> typed", "bottom of the box", "the status line"].map(Line::from).to_vec(),
+            cursor: Some((7, 1)),
+        };
+        s.draw(&view).unwrap();
+        let screen = |w: &Window| rows(&w.0.borrow());
+        assert_eq!(screen(&window)[29], "the status line", "at the bottom of the tall window");
+
+        for (cols, lines) in [(40, 12), (30, 6), (120, 40), (40, 12)] {
+            window.0.borrow_mut().resize(cols, lines);
+            s.resized(|| window.0.borrow_mut().clear()).unwrap();
+            s.draw(&view).unwrap();
+            let now = screen(&window);
+            let at = |text: &str| now.iter().position(|r| r == text).unwrap_or_else(|| panic!("{text:?} in {now:#?}"));
+            let top = at("top of the box");
+            assert_eq!(
+                [at("> typed"), at("bottom of the box"), at("the status line")],
+                [top + 1, top + 2, top + 3],
+                "the live region is whole at {cols}x{lines}: {now:#?}"
+            );
+            // The newest lines are above it again, in order, none twice.
+            assert_eq!(now[top - 1], "answer line 40", "{now:#?}");
+            let shown: Vec<&String> = now.iter().filter(|r| r.starts_with("answer line")).collect();
+            assert_eq!(shown.len(), top.min(40), "{now:#?}");
+            assert_eq!(window.0.borrow_mut().get_cursor_position().unwrap(), Position { x: 7, y: top as u16 + 1 });
+        }
+
+        // A viewport taller than the new window gives up rows instead of hiding its last ones.
+        s.set_height(20).unwrap();
+        window.0.borrow_mut().resize(40, 8);
+        s.resized(|| window.0.borrow_mut().clear()).unwrap();
+        assert!(s.height() < 8);
+        // /clear forgets the lines: a resize after it writes none of the old conversation.
+        s.restart(|| window.0.borrow_mut().clear()).unwrap();
+        s.resized(|| window.0.borrow_mut().clear()).unwrap();
+        assert!(!screen(&window).iter().any(|r| r.starts_with("answer line")));
     }
 
     /// `/clear` in the inline UI: the viewport starts again at the top of the cleared

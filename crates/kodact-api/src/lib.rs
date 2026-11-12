@@ -7,6 +7,7 @@
 
 pub mod accumulate;
 pub mod auth;
+pub mod effort_levels;
 pub mod gemini;
 pub mod gemini_rules;
 pub mod limit;
@@ -274,6 +275,10 @@ impl ApiError {
             "reduce the length",
             "too large for the model",
             "available context size", // llama.cpp
+            // vLLM: "max_tokens=32000 cannot be greater than max_model_len=8192", and "the
+            // decoder prompt (length 600000) is longer than the maximum model length of 524288".
+            "max_model_len",
+            "maximum model length",
         ];
         match self {
             ApiError::Http { status: 400 | 413 | 422, kind, message, .. } => {
@@ -309,6 +314,8 @@ impl ApiError {
             ("available context size (", "token"),
             ("context window of ", "token"),
             (" tokens > ", "maximum"),
+            ("max_model_len=", ""),
+            ("maximum model length of ", ""),
         ])
         .filter(|w| (1_000..=1_000_000_000).contains(w));
         let prompt = pick(&[
@@ -316,6 +323,7 @@ impl ApiError {
             ("your messages resulted in ", "token"),
             ("request (", "token"),
             ("prompt is too long: ", "token"),
+            ("decoder prompt (length ", ")"),
         ]);
         ReportedLimits { window, prompt }
     }
@@ -472,6 +480,18 @@ mod outage_tests {
         assert_eq!(
             http(400, messages).reported_limits(),
             ReportedLimits { window: Some(1_000_000), prompt: Some(1_000_001) }
+        );
+        // vLLM's other words: a reply asked for that is larger than the whole window (as DeepSeek V4
+        // Flash answered on 2026-11-11), and a prompt that is.
+        let reply_too_large = r#"{"detail":"litellm.BadRequestError: Hosted_vllmException - {\"error\":{\"message\":\"max_tokens=100000000 cannot be greater than max_model_len=524288. Please request fewer output tokens. (parameter=max_tokens, value=100000000)\"}}. Received Model Group=deepseek-v4-flash"}"#;
+        assert_eq!(
+            http(400, reply_too_large).reported_limits(),
+            ReportedLimits { window: Some(524_288), prompt: None }
+        );
+        let prompt_too_large = "The decoder prompt (length 600000) is longer than the maximum model length of 524288. Make sure that `max_model_len` is no smaller than the number of text tokens.";
+        assert_eq!(
+            http(400, prompt_too_large).reported_limits(),
+            ReportedLimits { window: Some(524_288), prompt: Some(600_000) }
         );
         let huge = "This model's maximum context length is 10,000,000 tokens. However, your messages resulted in 10,000,500 tokens.";
         assert_eq!(http(400, huge).reported_limits().window, Some(10_000_000));

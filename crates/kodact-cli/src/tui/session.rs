@@ -64,6 +64,7 @@ pub fn status(d: &Driver) -> StatusView {
         model,
         mode,
         cwd: d.info.cwd.display().to_string(),
+        branch: kodact_git::current_branch(&d.info.cwd).unwrap_or_default(),
         cost: d.engine.state.total_cost_usd,
         cost_unknown,
         context_pct,
@@ -631,6 +632,39 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The status line named the branch the session started on for as long as it ran:
+    /// after `/cd` to a folder outside git it still said `main`, and a branch switched
+    /// under it never showed. Each status snapshot reads the branch where the session is.
+    #[tokio::test]
+    async fn the_status_names_the_branch_where_the_session_is_now() {
+        let mut t = start(|_| {});
+        let proj = t._dir.path().join("proj").canonicalize().unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git").args(args).current_dir(&proj).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q", "-b", "first"]);
+        git(&["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "start"]);
+        let branch = |evs: &[UiEvent]| {
+            evs.iter().rev().find_map(|e| match e {
+                UiEvent::Status(s) => Some(s.branch.clone()),
+                _ => None,
+            })
+        };
+        until_idle(&mut t.ui).await;
+        t.to.send(ToSession::Input("/status".into())).unwrap();
+        assert_eq!(branch(&until_idle(&mut t.ui).await).as_deref(), Some("first"));
+        git(&["checkout", "-q", "-b", "second"]);
+        t.to.send(ToSession::Input("/status".into())).unwrap();
+        assert_eq!(branch(&until_idle(&mut t.ui).await).as_deref(), Some("second"), "a branch switched under it");
+        let outside = t._dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        t.to.send(ToSession::Input(format!("/cd {}", outside.display()))).unwrap();
+        assert_eq!(branch(&until_idle(&mut t.ui).await).as_deref(), Some(""), "outside git there is no branch");
+        t.to.send(ToSession::Exit).unwrap();
+        t.task.await.unwrap();
     }
 
     /// `/clear` left the old conversation on screen, and `/resume` and `/rewind` never

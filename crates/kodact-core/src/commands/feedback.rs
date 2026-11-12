@@ -76,6 +76,7 @@ pub(super) fn run(d: &Driver, args: &str) -> Exec {
     let description = kodact_config::redact_text(args.trim());
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let short = &d.info.session_id[..8.min(d.info.session_id.len())];
+    let _ = kodact_config::private_state_dir();
     let dir: PathBuf = kodact_config::state_dir().join("feedback").join(format!("{stamp}-{short}"));
     let write = || -> std::io::Result<Vec<&'static str>> {
         private_dir(&dir)?;

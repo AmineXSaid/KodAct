@@ -521,6 +521,35 @@ with `{"text", "cwd"}`:
 | Space in a multi-select question | Toggle the option |
 | Ctrl+L | Redraw |
 | Ctrl+B | Show or hide the sidebar (full screen, 140+ columns) |
+| PgUp / PgDn, Home / End in a dialog | Move the selection by ten rows, to the first or the last |
+| Up on an empty prompt, with a message queued | Take the newest queued message back into the input |
+
+**What the terminal is never sent.** A control character in a cell (from
+pasted input, a file name, a status command's output, anything a line was
+built from) is drawn as its picture (`text::shown`: `␛`, `␉`). Both displays
+write through `safe_cells` (`mod.rs`), so no source can forget. The input
+counts its rows and its cursor on what is drawn.
+
+**Dialogs fit the window.** A picker or question with more options than the
+window holds keeps its title, filter and keys and scrolls the options around
+the selected one (`12-30 of 42`); a question too tall even so gives up the
+first rows of what it asks about, never its choices.
+
+**The front page gives way to an answer.** Up to six transcript rows show
+under the front page (a warning at start, `/clear`'s answer). A longer
+answer (`?`, `/status`, `/help`) takes the page's place, whole and
+scrollable.
+
+**Resize, inline.** The terminal moves the rows above the viewport as it
+likes and can't be asked where (`Tracked`), so on a resize the window (not
+its scrollback) is cleared, the viewport starts again at the top and the
+newest lines that fit are written again (`Screen::resized`). Known limit: in
+a short window (12 rows) the live region shrinks when a turn ends and leaves
+blank rows under the input; the answer's end is then a scroll away.
+
+**Signals.** SIGTERM, SIGHUP and SIGINT end the loop as `/exit` does (the
+terminal restored, the session closed, the resume hint printed) with exit
+status 128 plus the signal (`StopSignals`).
 
 Pasted text (bracketed paste) is inserted as typed, newlines included.
 
@@ -711,6 +740,15 @@ The screens:
      calls stay out of the scrollback), answered by the app itself like
      `/keybindings`. `/tui` and `/scroll-speed` are out: KodAct has one UI,
      and the terminal scrolls its own scrollback.
+
+## The pre-production matrix
+
+`scripts/terminal-matrix/run.py` drives the real binary in a pseudo-terminal
+against a local stub endpoint and checks the screen, the files and the
+session store after each action, in both displays: every built-in command
+and alias in every form, the keys, a turn from start to finish, long
+sessions, the world around it and safety. `docs/PREPRODUCTION_TEST.md` is
+its brief, `docs/PREPRODUCTION_REPORT.md` the last run.
 
 ## Manual checks
 

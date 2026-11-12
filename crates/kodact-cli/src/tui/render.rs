@@ -384,16 +384,6 @@ fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
     }
     rows.push(Line::default());
     let selected = app.dialog_selected();
-    for (i, (label, desc)) in app.dialog_options().into_iter().enumerate() {
-        let mark = if i == selected { "❯ " } else { "  " };
-        let st = if i == selected { t.selected() } else { Style::default() };
-        let mut spans = vec![Span::styled(format!("{mark}{}. {label}", i + 1), st)];
-        if !desc.is_empty() {
-            spans.push(Span::styled(format!("  {desc}"), t.dim()));
-        }
-        rows.push(Line::from(spans));
-    }
-    rows.push(Line::default());
     let options = app.dialog_options();
     let permission = options.first().is_some_and(|(_, k)| k == "y");
     // The keys the rows show, and no others.
@@ -406,12 +396,70 @@ fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
     } else {
         format!("Enter or {} to answer · Esc to deny", keys.join("·"))
     };
-    rows.push(Line::from(Span::styled(hint, t.dim())));
     let title = if permission {
         Line::from(vec![Span::styled("◆ ", t.accent()), Span::styled(title, t.bold())])
     } else {
         Line::from(Span::styled(title, t.bold()))
     };
+    let option = |i: usize, one_row: Option<usize>| {
+        let (label, desc) = &options[i];
+        let mark = if i == selected { "❯ " } else { "  " };
+        let st = if i == selected { t.selected() } else { Style::default() };
+        let head = format!("{mark}{}. {label}", i + 1);
+        match one_row {
+            // Cut to one row, so the rows shown can be counted.
+            Some(width) => {
+                let head = fit(&head, width);
+                let left = width.saturating_sub(text_width(&head) + 2);
+                let mut spans = vec![Span::styled(head, st)];
+                if !desc.is_empty() && left >= 4 {
+                    spans.push(Span::styled(format!("  {}", fit(desc, left)), t.dim()));
+                }
+                Line::from(spans)
+            }
+            None => {
+                let mut spans = vec![Span::styled(head, st)];
+                if !desc.is_empty() {
+                    spans.push(Span::styled(format!("  {desc}"), t.dim()));
+                }
+                Line::from(spans)
+            }
+        }
+    };
+    let whole = |head: &[Line<'static>], shown: Vec<Line<'static>>, foot: Option<String>| {
+        let mut all = head.to_vec();
+        all.extend(shown);
+        all.push(Line::default());
+        all.push(Line::from(Span::styled(foot.unwrap_or_else(|| hint.clone()), t.dim())));
+        framed(app, title.clone(), all, w)
+    };
+    let all = whole(&rows, (0..options.len()).map(|i| option(i, None)).collect(), None);
+    if all.len() <= room || options.is_empty() {
+        return all;
+    }
+    // More than the window holds (an endpoint that lists a hundred models, a small
+    // window): the title, the filter and the keys stay, and the options scroll in what
+    // is left, around the selected one. Before, the box ran off the top of the window
+    // and took its title, its filter and its first rows with it.
+    let inner = if app.look == super::look::Look::Bare { w } else { w.saturating_sub(4) }.max(8);
+    let mut head = rows;
+    loop {
+        let fixed = whole(&head, vec![], None).len();
+        let fit_rows = room.saturating_sub(fixed);
+        if fit_rows >= options.len().min(3) || head.len() <= 1 {
+            let n = fit_rows.clamp(1, options.len());
+            let first = selected.saturating_sub(n / 2).min(options.len() - n);
+            let foot = format!("{}-{} of {} · ↑↓ PgUp PgDn · {hint}", first + 1, first + n, options.len());
+            return whole(&head, (first..first + n).map(|i| option(i, Some(inner))).collect(), Some(fit(&foot, inner)));
+        }
+        // Still too tall: what is asked about gives up its first rows, never the choices.
+        head.remove(0);
+    }
+}
+
+/// A question's rows in the style's frame.
+fn framed(app: &App, title: Line<'static>, rows: Vec<Line<'static>>, w: usize) -> Vec<Line<'static>> {
+    let t = app.theme;
     use super::look::Look;
     match app.look {
         // Lime corner marks around the question, no full frame.
@@ -439,6 +487,10 @@ fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
     }
 }
 
+/// Transcript rows the front page shows under itself before the conversation's layout
+/// takes over.
+const FRONT_NOTES: usize = 6;
+
 /// The input box's rows and the cursor's (column, row) inside them.
 fn input(app: &App, w: usize) -> (Vec<Line<'static>>, (u16, u16)) {
     let t = app.theme;
@@ -464,7 +516,9 @@ fn input(app: &App, w: usize) -> (Vec<Line<'static>>, (u16, u16)) {
     let mut rows = vec![];
     let mut cursor = (2u16, 0u16);
     for (li, line) in app.editor.text().split('\n').enumerate() {
-        let chars: Vec<char> = line.chars().collect();
+        // Control characters (a pasted tab or escape) are drawn as their pictures, one
+        // cell each, so the rows and the cursor are counted on what is drawn.
+        let chars: Vec<char> = line.chars().map(text::shown).collect();
         let ranges = char_rows(&chars, text_w);
         for (ri, (a, b)) in ranges.iter().enumerate() {
             if li == cur_line {
@@ -490,6 +544,8 @@ fn hints(app: &App, room: usize) -> Vec<Span<'static>> {
     let keys: &[(&str, &str)] = if app.dialog.is_some() {
         // The dialog says its own keys.
         &[]
+    } else if app.busy && !app.queued.is_empty() && app.editor.is_empty() {
+        &[("esc", "stop"), ("↑", "take the queued message back")]
     } else if app.busy {
         &[("esc", "stop"), ("enter", "queue a message")]
     } else if !app.menu().is_empty() || !app.file_menu().is_empty() {
@@ -1163,13 +1219,19 @@ pub fn full_view_at(
     now: Instant,
 ) -> (LiveView, usize) {
     let h = (height as usize).max(1);
-    if app.front && app.dialog.is_none() && !app.busy {
+    // The front page has room for a note or two under it (a warning at start, the answer
+    // to /clear). An answer longer than that takes the page's place: `?` or /status on
+    // the front page showed only its last six rows, or none on a short window.
+    'front: {
+        if !(app.front && app.dialog.is_none() && !app.busy) || rows.len() > FRONT_NOTES {
+            break 'front;
+        }
         let fb = FrontBox { left: page.box_left, w: page.box_w, under: page.under };
         let live = live_view_inner(app, width, height, now, Some(fb));
         let mut input = live.lines;
         let status = input.pop().unwrap_or_default();
         let room = h.saturating_sub(1);
-        let notes: Vec<Line<'static>> = rows.iter().rev().take(6).rev().cloned().collect();
+        let notes: Vec<Line<'static>> = rows.to_vec();
         let mut out: Vec<Line<'static>> = page.header.clone();
         let box_at;
         if page.dock {
@@ -1178,6 +1240,9 @@ pub fn full_view_at(
             if !notes.is_empty() {
                 out.push(Line::default());
                 out.extend(notes);
+            }
+            if out.len() > room.saturating_sub(input.len()) && !rows.is_empty() {
+                break 'front;
             }
             out.truncate(room.saturating_sub(input.len()));
             out.resize(room.saturating_sub(input.len()), Line::default());
@@ -1195,7 +1260,10 @@ pub fn full_view_at(
             if mid.len() + page.below.len() + page.header.len() <= room {
                 mid.extend(page.below.iter().cloned());
             }
-            if !notes.is_empty() && page.header.len() + mid.len() + 1 + notes.len() <= room {
+            if !notes.is_empty() {
+                if page.header.len() + mid.len() + 1 + notes.len() > room {
+                    break 'front;
+                }
                 mid.push(Line::default());
                 mid.extend(notes);
             }
@@ -2268,6 +2336,65 @@ mod tests {
         assert_eq!(rows[3], "  src/main.rs");
     }
 
+    /// A picker with more rows than the window (an endpoint listing 40 models) ran off the
+    /// top: its title, its filter and its first rows were gone, and nothing paged. Now the
+    /// title, filter and keys stay and the rows scroll around the selected one, in every
+    /// style and at every size.
+    #[test]
+    fn a_dialog_longer_than_the_window_scrolls_its_options() {
+        use kodact_core::commands::picker::{Choice, Pick, Picker};
+        let key = |a: &mut App, code| a.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+        for look in crate::tui::look::Look::ALL {
+            for (cols, lines) in [(110u16, 36u16), (80, 24), (60, 20), (40, 12)] {
+                let mut a = app(false);
+                a.look = look;
+                a.on_event(UiEvent::Picker(Picker {
+                    title: "Select a model".into(),
+                    choices: (1..=42)
+                        .map(|i| Choice {
+                            label: format!("model-{i:02}"),
+                            detail: "a description long enough to wrap in a narrow window".into(),
+                            pick: Pick::Run(String::new()),
+                            current: i == 1,
+                        })
+                        .collect(),
+                }));
+                let shown = |a: &App| draw(&live_view(a, cols, lines - 1), cols).0;
+                let what = format!("{look:?} {cols}x{lines}");
+                let rows = shown(&a);
+                assert!(rows.len() < lines as usize, "{what}: the picker fits the window: {} rows", rows.len());
+                let text = rows.join("\n");
+                assert!(text.contains("Select a model") && text.contains("type to filter"), "{what}: {text}");
+                assert!(text.contains("❯ 1. model-01") && text.contains("of 42"), "{what}: {text}");
+                assert!(!text.contains("42. model-42"), "{what}: the last row is not shown yet: {text}");
+                // PageDown and End move through the list; the selected row is always shown.
+                key(&mut a, KeyCode::PageDown);
+                assert!(shown(&a).join("\n").contains("❯ 11. model-11"), "{what}: {:#?}", shown(&a));
+                key(&mut a, KeyCode::End);
+                let text = shown(&a).join("\n");
+                assert!(text.contains("❯ 42. model-42") && text.contains("Select a model"), "{what}: {text}");
+                assert!(shown(&a).len() < lines as usize, "{what}");
+                key(&mut a, KeyCode::PageUp);
+                assert!(shown(&a).join("\n").contains("❯ 32. model-32"), "{what}");
+                key(&mut a, KeyCode::Home);
+                assert!(shown(&a).join("\n").contains("❯ 1. model-01"), "{what}");
+            }
+        }
+        // A short list is drawn as before: every row whole, no counter.
+        let mut a = app(false);
+        a.on_event(UiEvent::Picker(Picker {
+            title: "Select a model".into(),
+            choices: vec![Choice {
+                label: "Opus".into(),
+                detail: "big".into(),
+                pick: Pick::Run(String::new()),
+                current: false,
+            }],
+        }));
+        let text = draw(&live_view(&a, 80, 23), 80).0.join("\n");
+        assert!(text.contains("1. Opus  big") && !text.contains(" of 1"), "{text}");
+    }
+
     fn diff_screen() -> kodact_core::commands::screens::Screen {
         let mut unified = String::from("diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,30 @@\n-fn old() {}\n");
         for i in 0..30 {
@@ -2501,6 +2628,48 @@ mod tests {
         assert_eq!(full.fg, t.accent().fg, "full is the colour itself");
         let sixteen = crate::tui::text::Theme { depth: palette::Depth::Ansi16, ..t };
         assert_eq!(breathing(&sixteen, t.accent(), Duration::ZERO), t.accent());
+    }
+
+    /// `?` (or /status, /help) on the front page showed the last six rows of its answer
+    /// under the page, or none in a short window. An answer longer than a note takes the
+    /// page's place, whole and scrollable; a short one stays under the page.
+    #[test]
+    fn an_answer_on_the_front_page_is_shown_whole() {
+        let mut a = app(false);
+        a.front = true;
+        let page = |dock| FrontPage {
+            above: vec![Line::from("WORDMARK"), Line::default(), Line::from("tagline"), Line::default()],
+            box_left: 10,
+            box_w: 80,
+            under: true,
+            dock,
+            ..Default::default()
+        };
+        let answer: Vec<Line<'static>> = (1..=18).map(|i| Line::from(format!("key row {i}"))).collect();
+        for dock in [false, true] {
+            for (cols, lines) in [(100u16, 30u16), (60, 20), (40, 12)] {
+                let (v, max) = full_view(&a, cols, lines, &answer, &page(dock), 0);
+                let (rows, _) = draw(&v, cols);
+                let what = format!("dock {dock}, {cols}x{lines}: {rows:#?}");
+                assert!(rows.iter().any(|r| r == "key row 18"), "the answer's end shows: {what}");
+                let shown = rows.iter().filter(|r| r.starts_with("key row")).count();
+                assert_eq!(shown + max, 18, "every row is shown or a scroll away: {what}");
+                assert!(!rows.iter().any(|r| r == "WORDMARK"), "the page gave way: {what}");
+                assert!(rows.iter().any(|r| r.contains('❯')), "the input is in view: {what}");
+                let (v, _) = full_view(&a, cols, lines, &answer, &page(dock), max);
+                assert!(draw(&v, cols).0.iter().any(|r| r == "key row 1"), "scrolled up, its start shows: {what}");
+            }
+            // A note or two stays under the page.
+            let (v, _) = full_view(&a, 100, 30, &answer[..2], &page(dock), 0);
+            let (rows, _) = draw(&v, 100);
+            assert!(rows.iter().any(|r| r == "WORDMARK") && rows.iter().any(|r| r.trim() == "key row 2"), "{rows:#?}");
+            // Too short a window for the page and the note: the note wins.
+            let (v, max) = full_view(&a, 100, 9, &answer[..4], &page(dock), 0);
+            let (rows, _) = draw(&v, 100);
+            let shown = rows.iter().filter(|r| r.starts_with("key row")).count();
+            assert!(rows.iter().any(|r| r == "key row 4") && shown + max == 4, "{rows:#?}");
+            assert!(!rows.iter().any(|r| r == "WORDMARK"), "{rows:#?}");
+        }
     }
 
     #[test]

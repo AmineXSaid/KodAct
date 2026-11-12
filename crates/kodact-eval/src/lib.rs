@@ -175,6 +175,15 @@ pub struct RunRecord {
     /// Replies that were all reasoning, each answered with a reminder to act (`act_reminder`).
     #[serde(default)]
     pub act_reminders: u64,
+    /// Progress nudges given (`system/nudge`), by kind.
+    #[serde(default)]
+    pub nudges: std::collections::BTreeMap<String, u64>,
+    /// Tokens the run's requests used: input (cache reads and writes included) and output.
+    #[serde(default)]
+    pub tokens: u64,
+    /// Tool calls made before the first file was written with an edit tool (`None`: none was).
+    #[serde(default)]
+    pub calls_to_first_write: Option<u64>,
     /// Edits whose result said the file no longer parses (`diagnostics`).
     #[serde(default)]
     pub edit_diagnostics: u64,
@@ -222,6 +231,13 @@ pub struct Summary {
     /// Replies that were all reasoning per run: each took up to a whole output budget for nothing.
     #[serde(default)]
     pub act_reminders_per_run: f64,
+    #[serde(default)]
+    pub nudges_per_run: f64,
+    #[serde(default)]
+    pub mean_tokens: f64,
+    /// Over the runs that wrote a file.
+    #[serde(default)]
+    pub mean_calls_to_first_write: Option<f64>,
     /// Edits per run that left a file unparseable and were told so with their result.
     #[serde(default)]
     pub edit_diagnostics_per_run: f64,
@@ -266,6 +282,12 @@ pub fn summarize(runs: &[RunRecord]) -> Summary {
         verify_reminders_per_run: runs.iter().map(|r| r.verify_reminders as f64).sum::<f64>() / n,
         loop_guards_per_run: runs.iter().map(|r| r.loop_guards as f64).sum::<f64>() / n,
         act_reminders_per_run: runs.iter().map(|r| r.act_reminders as f64).sum::<f64>() / n,
+        nudges_per_run: runs.iter().map(|r| r.nudges.values().sum::<u64>() as f64).sum::<f64>() / n,
+        mean_tokens: runs.iter().map(|r| r.tokens as f64).sum::<f64>() / n,
+        mean_calls_to_first_write: {
+            let w: Vec<f64> = runs.iter().filter_map(|r| r.calls_to_first_write).map(|c| c as f64).collect();
+            (!w.is_empty()).then(|| w.iter().sum::<f64>() / w.len() as f64)
+        },
         edit_diagnostics_per_run: runs.iter().map(|r| r.edit_diagnostics as f64).sum::<f64>() / n,
         compactions_per_run: runs.iter().map(|r| r.compactions as f64).sum::<f64>() / n,
         compact_failures_per_run: runs.iter().map(|r| r.compact_failures as f64).sum::<f64>() / n,
@@ -383,6 +405,9 @@ pub struct StreamFacts {
     pub verify_reminders: u64,
     pub loop_guards: u64,
     pub act_reminders: u64,
+    pub nudges: std::collections::BTreeMap<String, u64>,
+    pub tokens: u64,
+    pub calls_to_first_write: Option<u64>,
     pub edit_diagnostics: u64,
     pub compactions: u64,
     pub compact_failures: u64,
@@ -402,6 +427,11 @@ pub fn parse_stream(lines: &[Value]) -> StreamFacts {
                 for b in v["message"]["content"].as_array().into_iter().flatten() {
                     if b["type"] == "tool_use" {
                         f.tool_calls += 1;
+                        let writes =
+                            matches!(b["name"].as_str(), Some("Write" | "Edit" | "MultiEdit" | "NotebookEdit"));
+                        if writes && f.calls_to_first_write.is_none() {
+                            f.calls_to_first_write = Some(f.tool_calls);
+                        }
                     }
                 }
             }
@@ -415,6 +445,9 @@ pub fn parse_stream(lines: &[Value]) -> StreamFacts {
             Some("system") if v["subtype"] == "verification" => f.verify_reminders += 1,
             Some("system") if v["subtype"] == "loop_guard" => f.loop_guards += 1,
             Some("system") if v["subtype"] == "act_reminder" => f.act_reminders += 1,
+            Some("system") if v["subtype"] == "nudge" => {
+                *f.nudges.entry(v["kind"].as_str().unwrap_or("unknown").to_string()).or_insert(0) += 1;
+            }
             Some("system") if v["subtype"] == "diagnostics" => f.edit_diagnostics += 1,
             Some("system") if v["subtype"] == "compact_boundary" => f.compactions += 1,
             Some("system") if v["subtype"] == "compact_failed" => f.compact_failures += 1,
@@ -422,6 +455,11 @@ pub fn parse_stream(lines: &[Value]) -> StreamFacts {
             Some("system") if v["subtype"] == "model_fallback" || v["subtype"] == "api_retry" => f.api_error = true,
             Some("result") => {
                 f.saw_result = true;
+                let u = &v["usage"];
+                f.tokens += ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
+                    .iter()
+                    .filter_map(|k| u[k].as_u64())
+                    .sum::<u64>();
                 f.cost_usd = v["total_cost_usd"].as_f64().unwrap_or(0.0);
                 f.turns = v["num_turns"].as_u64().unwrap_or(0);
                 f.is_error = v["is_error"].as_bool().unwrap_or(true);
@@ -588,6 +626,9 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         verify_reminders: facts.verify_reminders,
         loop_guards: facts.loop_guards,
         act_reminders: facts.act_reminders,
+        nudges: facts.nudges,
+        tokens: facts.tokens,
+        calls_to_first_write: facts.calls_to_first_write,
         edit_diagnostics: facts.edit_diagnostics,
         compactions: facts.compactions,
         compact_failures: facts.compact_failures,
@@ -607,7 +648,8 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
     let jobs: Vec<(usize, u32)> = (0..tasks.len()).flat_map(|t| (1..=opts.repeat).map(move |r| (t, r))).collect();
     let mut runs: Vec<RunRecord> = stream::iter(jobs)
         .map(|(t, r)| async move {
-            match run_task(&tasks[t], r, opts).await {
+            eprintln!("kodact-eval: start {} run {r}", tasks[t].spec.id);
+            let rec = match run_task(&tasks[t], r, opts).await {
                 Ok(rec) => rec,
                 Err(e) => RunRecord {
                     task: tasks[t].spec.id.clone(),
@@ -624,6 +666,9 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
                     verify_reminders: 0,
                     loop_guards: 0,
                     act_reminders: 0,
+                    nudges: Default::default(),
+                    tokens: 0,
+                    calls_to_first_write: None,
                     edit_diagnostics: 0,
                     compactions: 0,
                     compact_failures: 0,
@@ -635,7 +680,24 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
                     check_output: format!("harness error: {e:#}"),
                     workspace: PathBuf::new(),
                 },
-            }
+            };
+            // One line per finished run: a long suite shows where it is.
+            eprintln!(
+                "kodact-eval: {} run {r}: {} in {:.0}s, {} turns, {} tool calls, ${:.4}",
+                rec.task,
+                if rec.passed {
+                    "PASS"
+                } else if rec.had_error {
+                    "ERROR"
+                } else {
+                    "FAIL"
+                },
+                rec.wall_secs,
+                rec.turns,
+                rec.tool_calls,
+                rec.cost_usd
+            );
+            rec
         })
         .buffer_unordered(opts.jobs.max(1))
         .collect()
@@ -675,6 +737,7 @@ pub fn render_markdown(r: &Report) -> String {
          | Wall time per task | {:.1}s |\n| Recovery rate | {} |\n| False-finish rate | {} |\n| Invalid-call rate | {} |\n\
          | Verification reminders per task | {:.2} |\n| Loop warnings per task | {:.2} |\n\
          | Reasoning-only replies per task | {:.2} |\n| Edits told they broke the syntax, per task | {:.2} |\n\
+         | Progress nudges per task | {:.2} |\n| Tokens per task | {:.0} |\n| Tool calls before the first write | {} |\n\
          | Compactions per task | {:.2} |\n\
          | Failed summaries per task | {:.2} |\n\n",
         r.label,
@@ -692,6 +755,9 @@ pub fn render_markdown(r: &Report) -> String {
         s.loop_guards_per_run,
         s.act_reminders_per_run,
         s.edit_diagnostics_per_run,
+        s.nudges_per_run,
+        s.mean_tokens,
+        s.mean_calls_to_first_write.map(|c| format!("{c:.1}")).unwrap_or_else(|| "–".into()),
         s.compactions_per_run,
         s.compact_failures_per_run,
     );
@@ -705,10 +771,10 @@ pub fn render_markdown(r: &Report) -> String {
             s.mean_turns
         ));
     }
-    out.push_str("\n## Runs\n\n| Task | Run | Pass | False finish | Turns | Cost | Tool errors | Time | Reminders (verify/loop/act) | Compactions (done/failed/note) | Changes |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+    out.push_str("\n## Runs\n\n| Task | Run | Pass | False finish | Turns | Cost | Tool errors | Time | Reminders (verify/loop/act) | Nudges | Tokens | Compactions (done/failed/note) | Changes |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for x in &r.runs {
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | ${:.4} | {}/{} | {:.1}s | {}/{}/{} | {}/{}/{} | {} |\n",
+            "| {} | {} | {} | {} | {} | ${:.4} | {}/{} | {:.1}s | {}/{}/{} | {} | {} | {}/{}/{} | {} |\n",
             x.task,
             x.run,
             if x.passed { "yes" } else { "no" },
@@ -721,6 +787,12 @@ pub fn render_markdown(r: &Report) -> String {
             x.verify_reminders,
             x.loop_guards,
             x.act_reminders,
+            if x.nudges.is_empty() {
+                String::new()
+            } else {
+                x.nudges.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", ")
+            },
+            x.tokens,
             x.compactions,
             x.compact_failures,
             x.compact_fallbacks,
@@ -796,6 +868,26 @@ pub fn render_compare(a: &Report, b: &Report) -> String {
         &delta(x.act_reminders_per_run, y.act_reminders_per_run, false),
     ));
     out.push_str(&row(
+        "Progress nudges per task",
+        format!("{:.2}", x.nudges_per_run),
+        format!("{:.2}", y.nudges_per_run),
+        &delta(x.nudges_per_run, y.nudges_per_run, false),
+    ));
+    out.push_str(&row(
+        "Tokens per task",
+        format!("{:.0}", x.mean_tokens),
+        format!("{:.0}", y.mean_tokens),
+        &delta(x.mean_tokens, y.mean_tokens, false),
+    ));
+    if let (Some(a), Some(b)) = (x.mean_calls_to_first_write, y.mean_calls_to_first_write) {
+        out.push_str(&row(
+            "Tool calls before the first write",
+            format!("{a:.1}"),
+            format!("{b:.1}"),
+            &delta(a, b, false),
+        ));
+    }
+    out.push_str(&row(
         "Compactions per task",
         format!("{:.2}", x.compactions_per_run),
         format!("{:.2}", y.compactions_per_run),
@@ -847,6 +939,33 @@ mod tests {
         assert_eq!((tool_uses(&main), tool_uses(&sub), tool_uses(&json!({"type": "result"}))), (2, 0, 0));
     }
 
+    /// Nudges by kind, the tokens of every turn's result, and the calls before the first write.
+    #[test]
+    fn nudges_tokens_and_the_first_write_are_counted() {
+        let lines = [
+            json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}, {"type": "tool_use", "name": "Grep"}]}}),
+            json!({"type": "system", "subtype": "nudge", "kind": "progress_early", "calls": 5}),
+            json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write"}]}}),
+            json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit"}]}}),
+            json!({"type": "system", "subtype": "nudge", "kind": "progress"}),
+            json!({"type": "system", "subtype": "nudge", "kind": "progress"}),
+            json!({"type": "result", "is_error": false, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 5}}),
+            json!({"type": "result", "is_error": false, "usage": {"input_tokens": 50, "output_tokens": 10}}),
+        ];
+        let f = parse_stream(&lines);
+        assert_eq!(f.nudges.get("progress"), Some(&2));
+        assert_eq!(f.nudges.get("progress_early"), Some(&1));
+        assert_eq!((f.tokens, f.calls_to_first_write), (185, Some(3)));
+        let f = parse_stream(&lines[..2]);
+        assert_eq!(f.calls_to_first_write, None);
+        let mut a = rec(true, false, false, 0.1);
+        a.nudges.insert("progress".into(), 3);
+        a.calls_to_first_write = Some(4);
+        let b = rec(true, false, false, 0.1);
+        let s = summarize(&[a, b]);
+        assert_eq!((s.nudges_per_run, s.mean_calls_to_first_write), (1.5, Some(4.0)));
+    }
+
     fn rec(passed: bool, had_error: bool, false_finish: bool, cost: f64) -> RunRecord {
         RunRecord {
             task: "t".into(),
@@ -863,6 +982,9 @@ mod tests {
             verify_reminders: 0,
             loop_guards: 0,
             act_reminders: 0,
+            nudges: Default::default(),
+            tokens: 0,
+            calls_to_first_write: None,
             edit_diagnostics: 0,
             compactions: 0,
             compact_failures: 0,

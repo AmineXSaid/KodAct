@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Follow a Harbor job's agent conversations live, as readable text.
 
-    python3 evals/harbor/watch.py                 # the newest job under jobs/
+    python3 evals/harbor/watch.py                 # the newest job under jobs/, and each newer one
+                                                  # as it starts (a loop of jobs, one after another)
     python3 evals/harbor/watch.py jobs/<job-name> # a given job
     python3 evals/harbor/watch.py --from-start    # replay what's there, then follow
     python3 evals/harbor/watch.py --thinking      # also show the model's reasoning
@@ -12,7 +13,9 @@ model says, one short line per tool call, failed tool calls, and how the run
 ended, and so is Pi's event stream (pi.jsonl, read through pi_stream.py). Any
 other *.jsonl / *.stdout.txt / *.stderr.txt in a task's agent/ folder (Ante,
 Forge Code, ...) is shown line by line as plain text. A task's
-reward is shown when its verifier writes it.
+reward is shown when its verifier writes it; a trial that starts, and one that
+ends in a Harbor error (a container that doesn't start, tests that time out),
+are shown too, with whether the agent ran.
 
 A step appears when the model finishes it (a reasoning model can be quiet for
 minutes). Ctrl-C stops watching; the run itself isn't affected.
@@ -20,6 +23,8 @@ minutes). Ctrl-C stops watching; the run itself isn't affected.
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -213,9 +218,97 @@ def newest_job() -> Path:
     return max(jobs, key=lambda p: p.stat().st_mtime)
 
 
+# The agent's logs as KodAct writes them in the container (see kodact_agent.py).
+LIVE_LOGS = ["kodact.jsonl", "kodact.stderr.txt"]
+DOCKER = shutil.which("docker")
+_containers: dict[Path, str | None] = {}
+
+
+def container(trial: Path) -> str | None:
+    """The running container of a trial: Harbor names its compose project `<trial>__env`
+    (lower case) and the task's container is the service `main`."""
+    if trial not in _containers or _containers[trial] is None:
+        project = re.sub(r"[^a-z0-9_-]", "-", f"{trial.name}__env".lower())
+        try:
+            out = subprocess.run(
+                [DOCKER, "ps", "-q", "--filter", f"label=com.docker.compose.project={project}",
+                 "--filter", "label=com.docker.compose.service=main"],
+                capture_output=True, text=True, timeout=10,
+            ).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            out = []
+        _containers[trial] = out[0] if out else None
+    return _containers[trial]
+
+
+def read_from(log: Path, offset: int) -> bytes | None:
+    """What a log has past `offset`, or None when there is nothing new or it can't be read.
+    While a trial runs, Harbor's bind-mounted logs belong to the container's user and this
+    machine's can't read them, so they are read from inside the container."""
+    try:
+        if log.stat().st_size <= offset:
+            return None
+        with log.open("rb") as f:
+            f.seek(offset)
+            return f.read()
+    except PermissionError:
+        pass
+    except FileNotFoundError:
+        if not DOCKER:
+            return None
+    trial = log.parent.parent
+    if not DOCKER or (trial / "result.json").exists() or not (cid := container(trial)):
+        return None
+    try:
+        r = subprocess.run(
+            [DOCKER, "exec", cid, "sh", "-c", f'tail -c +{offset + 1} "/logs/agent/{log.name}" 2>/dev/null'],
+            capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        _containers[trial] = None  # gone, or not yet up: look it up again next time
+    return r.stdout or None
+
+
+def size_of(log: Path) -> int:
+    """A log's size now, from here or from the trial's container."""
+    try:
+        return log.stat().st_size
+    except OSError:
+        data = read_from(log, 0)
+        return len(data) if data else 0
+
+
+def trial_error(trial: Path) -> str:
+    """How a trial ended in a Harbor error, from its exception.txt: the error's last line."""
+    try:
+        lines = [ln.strip() for ln in (trial / "exception.txt").read_text(errors="replace").splitlines() if ln.strip()]
+    except OSError:
+        return ""
+    # The last line that names an error (`harbor.trial.errors.XError: ...`); text after it
+    # (the agent's captured stdout or stderr) is not the error.
+    errors = [ln for ln in lines if re.match(r"^[\w.]*(Error|Exception)\b(:|$)", ln)]
+    if not errors:
+        return ""
+    last = errors[-1]
+    name = last.split(":", 1)[0].rsplit(".", 1)[-1]
+    ran = any((trial / "agent").glob("*.jsonl"))
+    where = {
+        "EnvironmentStartTimeoutError": "the container didn't start; the agent never ran",
+        "VerifierTimeoutError": "the tests ran out of time; nothing was scored",
+        "NonZeroAgentExitCodeError": "the agent exited with an error",
+    }.get(name, "the agent ran" if ran else "the agent never ran")
+    detail = last.split(":", 1)[1].strip() if ":" in last else ""
+    # "Command failed (exit 1): <the whole agent command>": the exit status is what tells.
+    detail = re.sub(r"^(Command failed \(exit \d+\)):.*", r"\1", detail)
+    return f"{RED}{BOLD}✘ Harbor: {name}{RESET} · {where}" + (f" · {short(detail, 100)}" if detail else "")
+
+
 def main() -> None:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     from_start = "--from-start" in sys.argv
+    follow_newest = not args
     job = Path(args[0]) if args else newest_job()
     print(f"watching {job}  (Ctrl-C to stop)\n")
     offsets: dict[Path, int] = {}
@@ -223,6 +316,8 @@ def main() -> None:
     pending: dict[Path, str] = {}
     pi_streams: dict[Path, PiStream] = {}
     rewarded: set[Path] = set()
+    started: set[Path] = set()
+    failed: set[Path] = set()
     first_scan = True
 
     def show(task: str, text: str) -> None:
@@ -230,20 +325,40 @@ def main() -> None:
         print(f"{color}[{task}]{RESET} {text}", flush=True)
 
     while True:
+        # Without a job named: a newer job (the next of a loop) is followed from its start.
+        if follow_newest and (newer := newest_job()) != job and newer.stat().st_mtime > job.stat().st_mtime:
+            job = newer
+            print(f"\n{BOLD}=== next job: {job}{RESET}\n", flush=True)
+            for state in (offsets, pending, pi_streams):
+                state.clear()
+            rewarded.clear()
+            started.clear()
+            failed.clear()
+            from_start = True
+        for trial in sorted(p for p in job.glob("*__*") if p.is_dir()):
+            task = trial.name.split("__")[0]
+            if trial not in started:
+                started.add(trial)
+                if not first_scan or from_start:
+                    show(task, f"{DIM}trial {trial.name} started{RESET}")
+            if trial not in failed and (text := trial_error(trial)):
+                failed.add(trial)
+                show(task, text)
         found = {p for pat in PATTERNS for p in job.glob(f"*/agent/{pat}")}
+        # A running trial's logs, readable here or not: read from its container if need be.
+        if DOCKER:
+            found |= {t / "agent" / n for t in started if not (t / "result.json").exists() for n in LIVE_LOGS}
         # A task's stderr after its other logs: an error usually ends what came before it.
         logs = sorted(found, key=lambda p: (p.parent.parent.name, p.name.endswith(".stderr.txt"), p.name))
         for log in logs:
             if log not in offsets:
                 # Logs there at start are followed from their end; a task that starts later, from its beginning.
-                offsets[log] = 0 if from_start or not first_scan else log.stat().st_size
-            size = log.stat().st_size
-            if size <= offsets[log]:
+                offsets[log] = 0 if from_start or not first_scan else size_of(log)
+            new = read_from(log, offsets[log])
+            if not new:
                 continue
-            with log.open(errors="replace") as f:
-                f.seek(offsets[log])
-                chunk = pending.pop(log, "") + f.read()
-                offsets[log] = f.tell()
+            offsets[log] += len(new)
+            chunk = pending.pop(log, "") + new.decode(errors="replace")
             lines = chunk.split("\n")
             if log.suffix == ".jsonl":
                 if lines[-1]:

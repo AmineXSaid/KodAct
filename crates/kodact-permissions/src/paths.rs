@@ -49,6 +49,32 @@ pub fn windows_form(s: &str) -> Option<String> {
 
 /// `path` equals `dir` or lies below it (both already normalised). Windows
 /// paths compare without regard to case or separator, as the filesystem does.
+/// Where a normalised path really leads: symbolic links followed in the part of it
+/// that exists, the rest (a file about to be created) kept as written.
+///
+/// [`normalize`] reads a path as text. A link inside the project that points outside it
+/// (`project/link -> ~/.ssh`) is, as text, inside the project: a read through it was
+/// allowed without the question every other path outside gets, and a deny rule on the
+/// folder it points to did not see it.
+pub fn real(path: &Path) -> PathBuf {
+    let mut rest = vec![];
+    let mut at = path;
+    loop {
+        if let Ok(found) = std::fs::canonicalize(at) {
+            // Windows: canonical paths come back in the verbatim form.
+            let found = if cfg!(windows) { normalize(&found, Path::new("")) } else { found };
+            return rest.iter().rev().fold(found, |p, part| p.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                at = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 pub fn is_within(path: &Path, dir: &Path) -> bool {
     is_within_on(cfg!(windows), path, dir)
 }

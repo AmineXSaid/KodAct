@@ -414,6 +414,41 @@ const NOT_CHECKS: &[&str] = &[
     ":",
 ];
 
+/// Words in a script's name that say it changes something outside the project, or destroys:
+/// such a script named in a request is work to do, not a check.
+const NOT_CHECK_SCRIPTS: [&str; 10] =
+    ["deploy", "publish", "release", "install", "push", "upload", "migrate", "drop", "delete", "clean"];
+
+/// A command the person's request names that the verification loop may treat as one of the
+/// project's checks: what [`is_check`] recognizes, or a script in the project run directly or
+/// by an interpreter (`./verify.sh`, `python3 run_checks.py`) whose name doesn't say it
+/// deploys, publishes or deletes. KodAct only names it to the model; it never runs it.
+pub(crate) fn named_check(command: &str, root: &Path) -> bool {
+    if is_check(command, &[], &[]) {
+        return true;
+    }
+    let parts = kodact_permissions::split_compound(command);
+    let Some(part) = parts.first() else { return false };
+    let all = words(part);
+    let w = skip_wrappers(&all);
+    let Some(first) = w.first() else { return false };
+    let prog = program(first);
+    if not_a_check(prog) {
+        return false;
+    }
+    let script = if first.contains('/') {
+        Some(first.as_str())
+    } else if INTERPRETERS.contains(&prog) || is_shell(prog) {
+        w.get(1).map(String::as_str).filter(|a| !a.starts_with('-'))
+    } else {
+        None
+    };
+    script.is_some_and(|s| {
+        let name = program(s).to_ascii_lowercase();
+        root.join(s).is_file() && !NOT_CHECK_SCRIPTS.iter().any(|v| name.contains(v))
+    })
+}
+
 fn not_a_check(program: &str) -> bool {
     NOT_CHECKS.contains(&program) || (program.starts_with("sha") && program.ends_with("sum"))
 }
@@ -954,6 +989,22 @@ mod tests {
         assert!(runs_artifact("cd /app && ./bin/app --help", "bin/app"));
         assert!(!runs_artifact("wc -c image.c && head -3 image.c", "image"));
         assert!(!runs_artifact("ls -l image", "image"));
+    }
+
+    #[test]
+    fn a_named_command_is_a_check_when_it_checks() {
+        let d = tempfile::tempdir().unwrap();
+        for f in ["run_checks.py", "verify.sh", "deploy.sh", "clean_db.py"] {
+            std::fs::write(d.path().join(f), "").unwrap();
+        }
+        for yes in ["python3 run_checks.py", "./verify.sh --fast", "sh verify.sh", "cargo test", "pytest -q"] {
+            assert!(named_check(yes, d.path()), "{yes}");
+        }
+        for no in
+            ["./deploy.sh", "python3 clean_db.py", "git push", "python3 missing.py", "ls", "python3 -c 'print(1)'"]
+        {
+            assert!(!named_check(no, d.path()), "{no}");
+        }
     }
 
     #[test]

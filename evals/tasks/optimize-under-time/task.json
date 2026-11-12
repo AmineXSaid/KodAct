@@ -1,0 +1,16 @@
+{
+  "instruction": "`python3 test_primes.py` fails. Fix `primes_below` in primes.py so the test passes, then make it fast: primes below 2,000,000 must take under 2 seconds. The test must pass when you finish.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "long-horizon",
+  "tags": [
+    "python",
+    "optimize",
+    "time-limit",
+    "passing-snapshots"
+  ],
+  "timeout_secs": 600,
+  "args": [
+    "--max-time",
+    "240"
+  ]
+}

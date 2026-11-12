@@ -305,6 +305,13 @@ impl Driver {
         failure
     }
 
+    /// Does the endpoint list `id`? `None` when its list isn't known (not asked yet,
+    /// the listing failed) or it lists nothing.
+    pub fn endpoint_lists(&self, id: &str) -> Option<bool> {
+        let list = self.models.as_ref().filter(|l| !l.is_empty())?;
+        Some(list.iter().any(|m| m == id))
+    }
+
     /// The models to choose from: the endpoint's list (after [`Driver::load_models`]),
     /// with the current model first when the list leaves it out.
     pub fn model_choices(&self) -> Vec<String> {

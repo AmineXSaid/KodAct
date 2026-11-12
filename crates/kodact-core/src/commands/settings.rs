@@ -161,11 +161,21 @@ pub(super) async fn model(d: &mut Driver, args: &str) -> Exec {
         let failure = d.load_models().await;
         return ok(model_list(d, failure));
     }
+    // A model id is one word. More than one is a slip (`/model gpt 4o`), and taking it
+    // made every later request fail, in this session and, saved as the default, the next.
+    if args.split_whitespace().count() > 1 {
+        return err(format!("A model id is one word, without spaces: \"{args}\" isn't one. /model lists the models."));
+    }
     let id = kodact_api::resolve_model(args);
-    let notes = match apply_model(d, &id) {
+    let mut notes = match apply_model(d, &id) {
         Ok(n) => n,
         Err(e) => return err(e),
     };
+    // Still switched: a gateway may serve names it doesn't list. But say so before the
+    // first request fails.
+    if d.endpoint_lists(&id) == Some(false) {
+        notes.push(format!("Your endpoint doesn't list {id}; if requests fail, /model shows the ones it does."));
+    }
     let saved = save_default(d, Scope::User, &["model"], Some(json!(args)));
     ok(join(&[format!("Set model to {id}."), notes.join(" "), saved]))
 }

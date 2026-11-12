@@ -16,7 +16,7 @@ a note in `CHANGELOG.md`.
 | Color | Color is on when stdout and stderr are terminals and `TERM` isn't `dumb`. `NO_COLOR` (non-empty) turns it off, and `FORCE_COLOR` / `CLICOLOR_FORCE` turn it on. `--color auto\|always\|never` overrides all of these. Machine output is never colored. |
 | Quiet and verbose | `-q/--quiet`: errors only on stderr. `--verbose`: adds informational diagnostics. Both affect stderr only, never stdout. `-d/--debug` and `--debug-file <path>` turn on debug logs. |
 | No terminal UI | `--no-tui` (or `KODACT_TUI=0`): interactive mode uses the line-based prompt. |
-| No input | `--no-input` (or `KODACT_NO_INPUT=1`): KodAct never waits for a person. Permission prompts are denied, and interactive mode refuses to start. |
+| No input | `--no-input` (or `KODACT_NO_INPUT=1`): KodAct never waits for a person. Permission prompts are denied, and interactive mode refuses to start. The flag takes a value only with `=` (`--no-input=false`), so a prompt after it is the prompt. |
 | Confirmations | KodAct has no `--yes`. Tool permissions are granted only by `--permission-mode`, `--allowedTools` or settings rules, never by a blanket yes. |
 | Secrets | Values whose key looks secret (`*key*`, `*token*`, `*secret*`, `*password*`, `*auth*`, ...) and values that look like credentials (`sk-…`, `Bearer …`) are printed as `<redacted>` in `config` output and diagnostics. |
 
@@ -30,6 +30,7 @@ a note in `CHANGELOG.md`.
 | `3` | Configuration or credentials are missing or invalid: no API key, a key the endpoint refuses (HTTP 401 or 403, also mid-run), an invalid endpoint URL, a key helper that fails, an unreadable `--settings`, a session that doesn't exist, or an unknown model with a budget. Also `doctor` when it finds a problem. |
 | `4` | A limit ended the run: `--max-turns` or `--max-budget-usd`. |
 | `130` | Interrupted by Ctrl-C (SIGINT). The current turn's result is still written. |
+| `129`, `143` | The terminal UI was ended by SIGHUP or SIGTERM (128 plus the signal, as a shell reports it). The UI closes as `/exit` does: the terminal is restored, the conversation is saved and the resume hint is printed. |
 
 ## Commands
 
@@ -67,6 +68,12 @@ model, context used, cost). Design and key table: `docs/TUI.md`.
 | Tab | Complete the highlighted command or `@` path |
 | Ctrl+R | Search earlier prompts; Ctrl+R again for older ones, Esc to cancel |
 | Ctrl+L | Redraw |
+| PgUp / PgDn, Home / End | In a picker or question: move by ten rows, to the first or last. A list longer than the window scrolls around the selected row |
+| Up (empty prompt, a message queued) | Take the newest queued message back into the input |
+
+Control characters in what you type or paste (a tab, an escape) are drawn as
+their pictures (`␉`, `␛`) and sent as they are: nothing typed, pasted or
+printed is written to the terminal as a command to it.
 
 `/model`, `/resume`, `/rewind`, `/output-style` and `/permissions` without
 an argument open a picker (type to filter, Enter to choose). Each choice runs
@@ -252,6 +259,21 @@ check that the URL and key work.
 - A key is never sent to the other kind of endpoint. With an OpenAI-compatible
   endpoint and only `KODACT_API_KEY` set, KodAct warns at startup, and a 401
   names `KODACT_OPENAI_API_KEY`.
+- The effort (`--effort`, `effortLevel`, `/effort`) reaches an OpenAI-compatible
+  endpoint as `reasoning_effort`, for any model, the ones KodAct has no entry
+  for included: `low`, `medium` and `high` as they are, `xhigh` and `max` as
+  `high` (the highest level every such endpoint takes). Gemini models get
+  their own levels. With no effort set, none is sent and the model reasons as
+  its endpoint decides. An endpoint that refuses the level and says which it
+  takes ("must be low, high, xhigh, max, or an integer within [1, 100] in
+  chat_template_kwargs") gets the closest one instead, remembered for the
+  model: a level it takes as it is; else, on a number scale, the matching
+  point (`medium` is the middle); else the closest level below, or the lowest
+  above. A level that switches thinking off (`none`) is never picked for you.
+  One that refuses it without saying gets the request again without it, and
+  KodAct stops sending it to that model. A
+  gateway may also take it and ignore it: compare a reply's output tokens or
+  time with and without `--effort low` to see whether yours honors it.
 - The OpenAI-compatible endpoint may need no key (a local server): KodAct
   starts without one, silently for `localhost` and private addresses, with a
   warning otherwise. The Messages API always needs one.
@@ -404,11 +426,17 @@ the context window to compact in time, and prices to show costs.
   window, use `modelLimits`. A LiteLLM gateway that lists no window in its
   model list is also asked at `/model/info` (`model_info.max_input_tokens`).
   And when the endpoint refuses a request as too long and states its window
-  ("maximum context length is 100000 tokens"), KodAct uses that window from
+  ("maximum context length is 100000 tokens", or vLLM's `max_model_len=524288`
+  and "maximum model length of 524288"), KodAct uses that window from
   then on, the same as a listed one, and sends the request again sized to fit;
-  it compacts only when the prompt itself doesn't fit. So a model's window is
-  learned whatever its size, with no setting. `evals/context-window/` tests
-  this end to end.
+  it compacts only when the prompt itself doesn't fit. A later refusal whose
+  prompt still fits (the server counted more than KodAct's estimate, or, like
+  vLLM, states only "at least" a size that is the window less the reply asked
+  for) is sent again asking for half the reply, down to 4,096 tokens, before
+  anything is compacted (`system/reply_shrunk`). One turn compacts again each
+  time the conversation overflows after growing, so a long `-p` run on a small
+  window goes on. So a model's window is learned whatever its size, with no
+  setting. `evals/context-window/` tests this end to end.
 - `modelPricing`: `{"<model id>": {"input": 0.3, "output": 1.2}}`, USD per
   million tokens.
 - Without these, KodAct assumes 1,000,000 tokens of context (so a large model is
@@ -422,7 +450,7 @@ the context window to compact in time, and prices to show costs.
 | Kind | Default | Override |
 | --- | --- | --- |
 | Config (settings, `KODACT.md`, agents, commands) | `$XDG_CONFIG_HOME/kodact`, else `~/.config/kodact` (Linux), `~/Library/Application Support/kodact` (macOS), `%APPDATA%\kodact` (Windows) | `KODACT_HOME` |
-| State (sessions, file history) | `$XDG_STATE_HOME/kodact`, else the platform state or local-data directory | `KODACT_HOME/state` |
+| State (sessions, file history, debug logs, feedback bundles, prompt history) | `$XDG_STATE_HOME/kodact`, else the platform state or local-data directory. Kept to its owner (mode 0700 on Unix). If it can't be written, the session starts unsaved and says so | `KODACT_HOME/state` |
 | Cache | `$XDG_CACHE_HOME/kodact`, else the platform cache directory | `KODACT_HOME/cache` |
 | Project | `.kodact/` in the project, plus `KODACT.md` files from the root down to the cwd (a directory's `AGENTS.md` when it has no `KODACT.md`). Agents (and later commands, skills and output styles) are also read from the vendor-neutral `.agents/<kind>/`, below `.kodact/<kind>/` in precedence | — |
 
@@ -450,6 +478,7 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_SHELL` | The shell commands run in: a full path, or a name on PATH (bash, sh, zsh, pwsh, powershell). Also read from the settings `env` block. See "Shells" below |
 | `KODACT_VERIFY` | `0` turns the verification loop off |
 | `KODACT_REMINDERS` | `0` turns KodAct's own reminders to the model off (on by default; see `reminders`) |
+| `KODACT_NUDGES` | Progress nudges for this run, instead of the `nudges` settings: a list such as `progress,shellEdit`, or `all`, or `none` (see "Progress nudges") |
 | `KODACT_DISABLE_CRON` | `1` turns scheduled prompts off (`/loop`, `CronCreate`, ...) |
 | `MCP_TIMEOUT`, `MCP_TOOL_TIMEOUT` | MCP connect and call timeouts, in milliseconds (30 s, 10 min) |
 | `KODACT_NO_INPUT` | Same as `--no-input` |
@@ -477,7 +506,7 @@ them all. The built-ins so far:
 | `/mcp [reconnect\|enable\|disable <server\|all>]` | Each MCP server's status. `reconnect` restarts a server from the config it started with; `disable` stops it, hides its tools and prompts, and saves that in `.kodact/settings.local.json` (`disabledMcpjsonServers`); `enable` reverses it. Tools a server didn't offer when the session started join after `/reload-plugins`. `--mcp-config` and plugin servers change for the session only |
 | `/tasks [stop <id>]` (`/bashes`) | Background shells, scheduled tasks and subtasks; `stop` ends one |
 | `/subtask <task>` | Hands the task to a background agent that starts from this conversation; you keep going. Its report reaches the model with your next prompt (and is shown when it finishes). In `-p`, KodAct waits for it, then runs one more turn with the report |
-| `/model [model]` | Shows the current model and the models your endpoint lists (`GET {baseUrl}/models` on an OpenAI-compatible endpoint; the default backend lists none), or switches to the given model id |
+| `/model [model]` | Shows the current model and the models your endpoint lists (`GET {baseUrl}/models` on an OpenAI-compatible endpoint; the default backend lists none), or switches to the given model id. An id is one word; one the endpoint doesn't list still switches (a gateway may serve it) and says so |
 | `/effort [low\|medium\|high\|xhigh\|max\|auto]` | Shows or sets reasoning effort; `max` lasts for the session only |
 | `/fast [on\|off]` | Fast mode, on models that offer it |
 | `/config [key=value ...] [--scope user\|project\|local]` (`/settings`) | Shows the settings KodAct can change, or changes them; `key=` restores the default; `/config --help` lists the keys |
@@ -639,7 +668,30 @@ listed in the system prompt's environment section.
 | `verification.languageServerWaitMs` | `3000` | How long an edit waits for the server's answer |
 | `verification.format` | `false` | `true` runs a file through its formatter after an edit and says what moved, when the file was already in that formatter's style before the edit (a new file: only with a formatter named below). Built-in, each used when installed: `rustfmt`, `ruff format` or `black`, `gofmt`, `prettier`, `clang-format` |
 | `verification.formatters` | built-in | Extension to a command that formats stdin to stdout, used instead of the built-in one: `{"py": ["black", "-q", "-"]}`. `{file}` in an argument is the file's path; an empty list turns an extension off |
+| `nudges.progress`, `.progressEarly`, `.shellEdit`, `.constraints`, `.namedChecks`, `.passingSnapshots`, `.backOff`, `.pace`, `.limitVerdicts`, `.staleDeliverables`, `.adaptiveEffort`, `.thinkingTimeBox` | `false` | The progress nudges (below), each on its own |
 | `edit.lineRanges` | `false` | `true` (or `KODACT_EDIT_LINES=1`) lets Edit name the lines to replace (`start_line`, `end_line`, `anchor`) instead of retyping them as `old_string`. The anchor is the text of the first line: an edit whose line numbers moved since the file was read is refused with the lines as they are now |
+
+**Progress nudges** (`nudges.<name>: true`, or `KODACT_NUDGES`). Each follows
+what the model does, never what the task is or which model runs it, and each is
+**off until an eval task has measured it** (`evals/README.md`). `reminders:
+false` turns them all off. Each one given is a `system/nudge` event, which
+`kodact-eval` counts per run. They only ever tell the model; none runs a
+command or restores a file.
+
+| Nudge | When | What the model is told |
+| --- | --- | --- |
+| `progress` | No progress for a fifth of the run's budget (`--max-turns`, `--max-time` or `--max-budget-usd`) and at least 5 model calls; without a budget, 15 calls. Progress is a file the request names changing on disk (by any tool, a script's output too) or a check passing. When the request names files that don't exist yet, those are what it asks for, and helper scripts written meanwhile are not progress; when every file it names exists, any file written counts; when it names none, a shell command that changed something does. Once per stretch | To make the change if it has what it needs, or answer with what it has; to ignore this if its next step is a change |
+| `progressEarly` | With a budget only: nothing made yet in the turn, a tenth of the budget gone and at least 5 calls | To make a first version now and improve it after, or go on looking if it must |
+| `shellEdit` | A shell command changed a file it names (`sed -i`, a redirect) and the file no longer parses. A clean shell edit gets nothing | The parse error with the command's result; once a turn, that the Edit tool suits careful changes |
+| `constraints` | Before the turn ends, once: the request names a file that doesn't exist, a command (in backticks) that didn't run, or a size limit a named file exceeds. A sentence that says not to do something names nothing; one asking to delete a file doesn't count it missing. A size limit is also told at the step whose write takes the file over it (a Write or Edit on it, a shell command naming it, or a script it ran), up to 3 times a file in a turn; a run cut by its time limit never reaches the end of the turn. A limit stated without a file ("your program must be <5000 bytes") is the one new file's the request asks for, or the one of the type the sentence names | What is missing, and to do it or say why not. At the write: `` `gpt2.c` is now 6005 bytes; the request says <5000 bytes (4999 bytes at most): 1006 bytes over `` |
+| `namedChecks` | A command the request names that is a check (`python3 run_checks.py`) joins the verification loop's list of checks | The verification reminder names it when it hasn't run since the last change. KodAct never runs it |
+| `passingSnapshots` | A check passed after changes: the files are saved with the Checkpoint tool (`passing-1`, ...). If the files then fail the last check, before the turn ends | Where the passing version is and how to restore it. A run cut by its limit reports it in its result. KodAct never restores it |
+| `pace` | With `--max-time`, the wrap-up warning (a fifth of the time left) also comes when only 5 steps are left at the turn's pace so far | The steps left at that pace (`about 60 s a step, about 5 more steps`), and the files the request asks for that don't exist yet: to write its best version to them first |
+| `limitVerdicts` | The request states numeric limits (a table whose cells or introducing sentence say "at most", "≤", "at least"…, or a sentence such as `latency_ms ≤ 250` or `at most 6 distinct sizes across both files`) and a shell command prints `key=value` numbers whose keys name them. A table row (a file, a bucket) applies to a line when its own words are in the command, the heading above the line, or the line | With the command's result: each line met or not, by how much (`cost 120 > 100`). For a limit across all files together, that per-file counts don't show the combined number |
+| `staleDeliverables` | A command printed a line meeting every limit stated for it, 3 steps have passed, and none of the files the request names changed since. A command that names one of those files measured the file itself and counts for nothing. Twice a turn at most, and once when the model would finish | The line and the files: to write the result now if it is the best so far, or ignore this if the file already holds it |
+| `adaptiveEffort` | Every step. The level each request asks for follows the thinking: a reply that was all thinking lowers it one step at once; two steps of long thinking (a quarter of the reply budget, at least 2,000 tokens) whose actions made no progress lower it one step; two steps in a row with progress raise it one step. At `low` and still nowhere, it goes back to the level set (thinking less didn't help either), then doesn't step down for 4 steps; after two such bounces it stays at the level set. Never above the level set (`--effort`, `high` without one), never below `low` | Nothing: the server holds the model to the level. The person sees "Reasoning effort high → medium: …" |
+| `thinkingTimeBox` | A reply still all thinking (no answer text, no tool call started) past its limit: 3× this run's usual reply time, at least 2 minutes; with `--max-time`, at most a quarter of the time left (and at least 30 s). A reply that has started its answer or an action is never cut. At most 2 in a row | The reply is stopped (the server stops generating), its reasoning handed back, how it began and where it stopped: "this step's time is up", take one concrete step. With `adaptiveEffort`, it counts as a reply that was all thinking |
+| `backOff` | Applies to all of the above | A nudge followed by progress twice is not given again in the run (`system/nudge_silenced`) |
 
 **Language-server diagnostics** (`verification.languageServer: true`): after
 an Edit, MultiEdit or Write of a file that parses, KodAct gives the file's new
@@ -768,6 +820,17 @@ operating system, not a rule, limits what it can touch.
 - deny rules still deny;
 - paths outside the working directories still ask.
 
+**What counts as outside** (with or without the sandbox):
+- a path is judged as written and by where it really leads: a symbolic link
+  in the project that points outside it is outside. Deny and ask rules cover
+  the folder a link leads to; an allow rule on a folder does not cover what
+  a link in it points to elsewhere;
+- a shell command that names a path outside (`cat /etc/hosts`, `ls ~/x`,
+  `head ../other/file`, a link that leads out) is asked about, read-only
+  commands included, and refused in `dontAsk` mode and in `-p`. An allow
+  rule on the command (`Bash(cat:*)`) allows it. The standard streams
+  (`2>/dev/null`) are not paths.
+
 **Backends:**
 - Linux: bubblewrap (`bwrap`). Install it with your package manager.
 - macOS: `sandbox-exec` with a generated Seatbelt profile. This backend is
@@ -825,6 +888,12 @@ is not done.
 **Retries:** only failures before any streamed output are retried, at most
 `KODACT_MAX_RETRIES` times, with exponential backoff. They cover HTTP 408, 409,
 429 and 5xx (honouring `retry-after`) and connection failures.
+
+An endpoint that can't be reached before it has answered once is most often a
+wrong URL: at the prompt it is said at once. A `-p` run tries 3 more times
+(about half a minute), so a network that drops for a moment (a failed name
+lookup, a VPN reconnecting) doesn't end a script or an eval run; an
+`--autonomous` run retries as for any connection failure.
 
 Two answers are not retried, because trying again sooner fails the same way:
 - **a spent quota**: a 402, or a 429 or 403 that says so (`insufficient_quota`,

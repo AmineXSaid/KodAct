@@ -418,31 +418,49 @@ fn frame(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
         }
         // A first run: one thing to try, and where the project's instructions go.
         None => {
-            below.push(Line::default());
-            below.push(at(
-                col,
-                Line::from(vec![
-                    Span::styled("Try ", t.subtle()),
-                    Span::styled("\"explain this project\"", t.dim()),
-                    Span::styled("  ·  ", t.subtle()),
-                    Span::styled("/init", t.accent()),
-                    Span::styled(" writes KODACT.md for it", t.subtle()),
-                ]),
-            ));
+            // Each suggestion shows whole or not at all: a window too narrow for both
+            // keeps the first, never half of the second.
+            let mut tip = vec![Span::styled("Try ", t.subtle()), Span::styled("\"explain this project\"", t.dim())];
+            let init = [
+                Span::styled("  ·  ", t.subtle()),
+                Span::styled("/init", t.accent()),
+                Span::styled(" writes KODACT.md for it", t.subtle()),
+            ];
+            let w = |spans: &[Span]| spans.iter().map(|s| width(&s.content)).sum::<usize>();
+            if w(&tip) + w(&init) <= room {
+                tip.extend(init);
+            }
+            if w(&tip) <= room {
+                below.push(Line::default());
+                below.push(at(col, Line::from(tip)));
+            }
         }
     }
     let failed: Vec<&str> = info.mcp.iter().filter(|(_, s)| s == "failed").map(|(n, _)| n.as_str()).collect();
     if !failed.is_empty() {
-        below.push(Line::default());
-        below.push(at(
-            col,
-            Line::from(vec![
+        let names = failed.join(", ");
+        // The whole line needs 24 columns besides the names; a narrower panel says less,
+        // and one too narrow for a name says nothing rather than half a line.
+        let spans = if room >= 24 + 3 {
+            vec![
                 Span::styled("● ", t.warning()),
-                Span::styled(fit(&failed.join(", "), room.saturating_sub(24)), t.dim()),
+                Span::styled(fit(&names, room - 24), t.dim()),
                 Span::styled(" didn't start  ·  ", t.subtle()),
                 Span::styled("/mcp", t.accent()),
-            ]),
-        ));
+            ]
+        } else if room >= 12 {
+            vec![
+                Span::styled("● ", t.warning()),
+                Span::styled(fit(&names, room - 9), t.dim()),
+                Span::styled(" failed", t.subtle()),
+            ]
+        } else {
+            vec![]
+        };
+        if !spans.is_empty() {
+            below.push(Line::default());
+            below.push(at(col, Line::from(spans)));
+        }
     }
     // The panel names the model and where it runs.
     FrontPage { above, below, box_left: m, box_w: fw, under: true, ..Default::default() }
@@ -744,6 +762,16 @@ mod tests {
         assert_eq!(art(&front_page(&DARK, Look::Frame, &first, 140)), 4, "four rows on a first run");
         assert_eq!(art(&front_page(&DARK, Look::Frame, &info(), 140)), 4, "and after");
         assert!(front_page(&DARK, Look::Frame, &first, 140).above.iter().all(|l| line_w(l) <= 140));
+        // A first run's suggestions fit the panel's text column at every width: the second
+        // one was cut mid-word ("/init writes KODA") by the window's edge at 60 columns.
+        for cols in [200usize, 106, 76, 56, 36, 24] {
+            let p = front_page(&DARK, Look::Frame, &first, cols);
+            for l in plain(&p.below) {
+                assert!(width(&l) <= p.box_left + p.box_w, "{cols}: {l:?} runs past the panel");
+                let whole = ["project\"", "for it", "/mcp", " failed"].iter().any(|end| l.ends_with(end));
+                assert!(l.trim().is_empty() || whole, "{cols}: cut: {l:?}");
+            }
+        }
         let first_below = plain(&front_page(&DARK, Look::Frame, &first, 120).below).join("\n");
         assert!(first_below.contains("/init writes KODACT.md"), "a first run says what to try: {first_below}");
         // The panel is never narrower than the name over it.

@@ -34,12 +34,18 @@ pub struct CommandInfo {
     pub description: String,
 }
 
+/// Options a dialog's selection moves by on PageUp and PageDown.
+const DIALOG_PAGE: usize = 10;
+
 /// What the status line shows.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StatusView {
     pub model: String,
     pub mode: String,
     pub cwd: String,
+    /// The git branch checked out in `cwd` now (empty outside a repository). Read with
+    /// each snapshot: the session changes directory (`/cd`) and branches change under it.
+    pub branch: String,
     pub cost: f64,
     /// Some usage came from a model without a known price: `cost` is a lower bound.
     pub cost_unknown: bool,
@@ -150,16 +156,29 @@ pub fn human_api_error(text: &str, model: &str, endpoint: &str) -> Option<(Strin
         (Some(c), true) => format!("HTTP {c}"),
         (None, _) => rest.split(':').next().unwrap_or(rest).trim().to_string(),
     };
-    let (head, next) = if lower.contains("model not found")
+    let names_model = lower.contains("model not found")
         || lower.contains("does not exist")
         || lower.contains("unknown model")
-        || status == Some(404)
-    {
+        || (status == Some(404) && lower.contains("model"));
+    let (head, next) = if names_model {
         (format!("{model} isn't available on {host}"), format!("/model to choose another · {detail}"))
+    } else if status == Some(404) {
+        // A 404 that says nothing of a model is as likely the address: a base URL with a
+        // wrong path answers this way, and "/model" would send the person the wrong way.
+        (
+            format!("{host} has nothing at that address, or no model {model}"),
+            format!("check KODACT_OPENAI_BASE_URL (it usually ends in /v1), or /model · {detail}"),
+        )
     } else if matches!(status, Some(401) | Some(403)) {
         (format!("{host} didn't accept the key"), format!("check KODACT_OPENAI_API_KEY or KODACT_API_KEY · {detail}"))
     } else if status == Some(429) {
-        (format!("{host} is limiting requests"), format!("KodAct waits and retries · {detail}"))
+        // Only a failure still being retried says so; the last one says it is over.
+        let next = if retry.is_some() {
+            format!("KodAct waits and retries · {detail}")
+        } else {
+            format!("KodAct retried and it still refused: try again in a moment · {detail}")
+        };
+        (format!("{host} is limiting requests"), next)
     } else if status.is_some_and(|c| c >= 500) {
         (format!("{host} had an error"), format!("try again in a moment · {detail}"))
     } else if lower.contains("could not connect")
@@ -377,26 +396,28 @@ pub struct Search {
 }
 
 /// The keyboard shortcuts (`?` on an empty prompt, `/keybindings`).
-pub const KEYS: &[(&str, &str, Option<&str>)] = &[
-    ("Enter", "Send (queued while a turn runs)", Some("submit")),
-    ("Shift+Enter, Alt+Enter, Ctrl+J, \\ Enter", "New line", Some("newline")),
-    ("Esc", "Interrupt the turn; close a menu; cancel a dialog", Some("cancel")),
-    ("Esc Esc", "On an empty prompt: rewind (/rewind)", None),
-    ("Ctrl+C", "Clear the input; interrupt; twice on an empty prompt: exit", Some("interrupt")),
-    ("Ctrl+D", "Exit (empty prompt)", Some("exit")),
-    ("Shift+Tab", "Cycle the permission mode: default, accept edits, plan", Some("cycleMode")),
-    ("Up / Down", "Move between lines; earlier prompts", None),
-    ("Ctrl+R", "Search earlier prompts", Some("historySearch")),
-    ("Tab", "Complete a / command or an @ path", Some("complete")),
-    ("@", "Mention a file (a menu of project paths)", None),
-    ("!", "At the start: run a shell command", None),
-    ("/", "At the start: a command (the menu lists them)", None),
-    ("Ctrl+A / Ctrl+E, Home / End", "Start / end of line", None),
-    ("Ctrl+W, Alt+Backspace", "Delete the word before the cursor", Some("deleteWord")),
-    ("Ctrl+U / Ctrl+K", "Delete to the start / end of the line", None),
-    ("Alt+B / Alt+F, Ctrl+Left / Ctrl+Right", "Word left / right", None),
-    ("Ctrl+L", "Redraw the screen", Some("redraw")),
-    ("Ctrl+B", "Show or hide the sidebar (full screen, 140+ columns)", Some("toggleSidebar")),
+/// Each row: its default keys, what they do, and the actions it covers (a row may
+/// cover two, as "start / end of line" does).
+pub const KEYS: &[(&str, &str, &[&str])] = &[
+    ("Enter", "Send (queued while a turn runs)", &["submit"]),
+    ("Shift+Enter, Alt+Enter, Ctrl+J, \\ Enter", "New line", &["newline"]),
+    ("Esc", "Interrupt the turn; close a menu; cancel a dialog", &["cancel"]),
+    ("Esc Esc", "On an empty prompt: rewind (/rewind)", &[]),
+    ("Ctrl+C", "Clear the input; interrupt; twice on an empty prompt: exit", &["interrupt"]),
+    ("Ctrl+D", "Exit (empty prompt)", &["exit"]),
+    ("Shift+Tab", "Cycle the permission mode: default, accept edits, plan", &["cycleMode"]),
+    ("Up / Down", "Move between lines; earlier prompts", &[]),
+    ("Ctrl+R", "Search earlier prompts", &["historySearch"]),
+    ("Tab", "Complete a / command or an @ path", &["complete"]),
+    ("@", "Mention a file (a menu of project paths)", &[]),
+    ("!", "At the start: run a shell command", &[]),
+    ("/", "At the start: a command (the menu lists them)", &[]),
+    ("Ctrl+A / Ctrl+E, Home / End", "Start / end of line", &["lineStart", "lineEnd"]),
+    ("Ctrl+W, Alt+Backspace", "Delete the word before the cursor", &["deleteWord"]),
+    ("Ctrl+U / Ctrl+K", "Delete to the start / end of the line", &["killToStart", "killToEnd"]),
+    ("Alt+B / Alt+F, Ctrl+Left / Ctrl+Right", "Word left / right", &["wordLeft", "wordRight"]),
+    ("Ctrl+L", "Redraw the screen", &["redraw"]),
+    ("Ctrl+B", "Show or hide the sidebar (full screen, 140+ columns)", &["toggleSidebar"]),
 ];
 
 /// The shortcuts in effect, one per line: the defaults, or with `keybindings.json`
@@ -404,10 +425,14 @@ pub const KEYS: &[(&str, &str, Option<&str>)] = &[
 pub fn keys_text(keymap: &super::keys::Keymap) -> String {
     let rows: Vec<(String, String)> = KEYS
         .iter()
-        .map(|(k, what, action)| {
-            let keys = match action {
-                Some(a) if !keymap.is_default() => keymap.keys_for(a).join(", "),
-                _ => k.to_string(),
+        .map(|(k, what, actions)| {
+            // With bindings of the user's, every action of the row shows the keys it has
+            // now. A row of two actions used to keep its default text, so a key bound to
+            // "lineStart" or "wordLeft" was missing from the table that lists the keys.
+            let keys = if actions.is_empty() || keymap.is_default() {
+                k.to_string()
+            } else {
+                actions.iter().map(|a| keymap.keys_for(a).join(", ")).collect::<Vec<_>>().join(" / ")
             };
             (keys, what.to_string())
         })
@@ -1468,6 +1493,7 @@ impl App {
                 if s.model != self.status.model {
                     self.model_down = false;
                 }
+                self.branch = s.branch.clone();
                 self.status = s;
             }
             UiEvent::Commands(c) => self.commands = c,
@@ -2169,6 +2195,10 @@ impl App {
             match key.code {
                 KeyCode::Up => d.selected = d.selected.checked_sub(1).unwrap_or(n.saturating_sub(1)),
                 KeyCode::Down | KeyCode::Tab => d.selected = (d.selected + 1) % n.max(1),
+                KeyCode::PageUp => d.selected = d.selected.saturating_sub(DIALOG_PAGE),
+                KeyCode::PageDown => d.selected = (d.selected + DIALOG_PAGE).min(n.saturating_sub(1)),
+                KeyCode::Home => d.selected = 0,
+                KeyCode::End => d.selected = n.saturating_sub(1),
                 KeyCode::Enter if n > 0 => {
                     let i = d.selected.min(n - 1);
                     return self.choose(i);
@@ -2225,6 +2255,11 @@ impl App {
         match key.code {
             KeyCode::Up => d.selected = d.selected.checked_sub(1).unwrap_or(n.saturating_sub(1)),
             KeyCode::Down | KeyCode::Tab => d.selected = (d.selected + 1) % n.max(1),
+            // A long list (an endpoint's models, a folder's conversations) by the page.
+            KeyCode::PageUp => d.selected = d.selected.saturating_sub(DIALOG_PAGE),
+            KeyCode::PageDown => d.selected = (d.selected + DIALOG_PAGE).min(n.saturating_sub(1)),
+            KeyCode::Home => d.selected = 0,
+            KeyCode::End => d.selected = n.saturating_sub(1),
             KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
                 let i = c as usize - '1' as usize;
                 if i < n {
@@ -2775,6 +2810,14 @@ impl App {
                 self.menu_selected = (self.menu_selected + 1) % menu_len;
                 return vec![];
             }
+            // A message waiting behind the turn can be taken back: Up on an empty prompt
+            // puts the newest one in the input, to change or to drop (Ctrl+U). Before,
+            // a queued message could only be sent.
+            KeyCode::Up if self.editor.is_empty() && !self.queued.is_empty() => {
+                if let Some(text) = self.queued.pop_back() {
+                    self.editor.set(&text);
+                }
+            }
             KeyCode::Up => {
                 self.editor.up();
             }
@@ -2984,6 +3027,20 @@ mod tests {
         assert_eq!(a.next_queued(), None, "still busy");
         a.on_event(UiEvent::Idle);
         assert_eq!(a.next_queued().as_deref(), Some("next"));
+        // Queued messages can be taken back, newest first, and are then not sent.
+        a.busy = true;
+        for m in ["first queued", "second queued"] {
+            typed(&mut a, m);
+            a.on_key(key(KeyCode::Enter));
+        }
+        assert_eq!(a.queued.len(), 2);
+        a.on_key(key(KeyCode::Up));
+        assert_eq!((a.editor.text(), a.queued.len()), ("second queued".to_string(), 1), "Up takes the newest back");
+        a.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        a.busy = false;
+        assert_eq!(a.next_queued().as_deref(), Some("first queued"));
+        a.busy = false;
+        assert_eq!(a.next_queued(), None, "the withdrawn one is never sent");
         // A trailing backslash, Shift+Enter or Ctrl+J start a new line instead.
         a.on_event(UiEvent::Idle);
         typed(&mut a, "one\\");
@@ -3038,6 +3095,20 @@ mod tests {
         let table = keys_text(&a.keymap);
         assert!(table.contains("enter, ctrl+s") && table.contains("Unbound: ctrl+r."), "{table}");
         assert!(keys_text(&Default::default()).starts_with("Enter "), "the defaults read as before");
+        // A row that covers two actions lists each one's keys, the user's among them.
+        let (k, w) = crate::tui::keys::Keymap::parse(r#"{"f9": "lineStart", "alt+w": "wordLeft", "f12": "killToEnd"}"#);
+        assert!(w.is_empty(), "{w:?}");
+        let table = keys_text(&k);
+        let row = |what: &str| {
+            table.lines().find(|l| l.ends_with(what)).unwrap_or_else(|| panic!("{what}: {table}")).to_string()
+        };
+        assert!(row("Start / end of line").starts_with("ctrl+a, home, f9 / ctrl+e, end"), "{table}");
+        assert!(row("Word left / right").starts_with("alt+b, ctrl+left, alt+w / alt+f, ctrl+right"), "{table}");
+        assert!(row("Delete to the start / end of the line").starts_with("ctrl+u / ctrl+k, f12"), "{table}");
+        assert!(KEYS
+            .iter()
+            .flat_map(|(_, _, a)| a.iter())
+            .all(|a| crate::tui::keys::ACTIONS.iter().any(|(n, _, _)| n == a)));
     }
 
     #[test]
@@ -3244,6 +3315,36 @@ mod tests {
                 "  /model to choose another · HTTP 400: Model not found"
             ]
         );
+    }
+
+    /// A 429 that ended the turn said "KodAct waits and retries" with nothing waiting, and
+    /// a 404 from a wrong base URL said the model wasn't available and pointed at /model.
+    #[test]
+    fn an_api_error_says_what_is_true_now() {
+        let over =
+            human_api_error("API Error: HTTP 429 from http://gw.example.com/v1/chat/completions", "m", "gw").unwrap();
+        assert!(over.1.contains("still refused") && !over.1.contains("waits and retries"), "{over:?}");
+        let waiting = human_api_error(
+            "API Error: HTTP 429 from http://gw.example.com/v1/x. Retrying in 6s (attempt 2).",
+            "m",
+            "gw",
+        )
+        .unwrap();
+        assert!(waiting.1.contains("waits and retries") && waiting.0.contains("retrying in 6s"), "{waiting:?}");
+        let (head, next) = human_api_error(
+            r#"API Error: HTTP 404 from http://gw.example.com/v1/nowhere/chat/completions: {"error": {"message": "no such path"}}"#,
+            "m",
+            "gw",
+        )
+        .unwrap();
+        assert!(head.contains("nothing at that address") && next.contains("KODACT_OPENAI_BASE_URL"), "{head} / {next}");
+        let (head, _) = human_api_error(
+            r#"API Error: HTTP 404 from http://gw.example.com/v1/chat/completions: {"error": {"message": "The model `m` does not exist."}}"#,
+            "m",
+            "gw",
+        )
+        .unwrap();
+        assert_eq!(head, "m isn't available on gw.example.com");
     }
 
     #[test]
