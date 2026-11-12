@@ -658,7 +658,7 @@ listed in the system prompt's environment section.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `reminders` | `true` | KodAct's own reminders to the model: the verification reminder, the loop guard, the act, attempt, next-step and todo reminders, the budget and time wrap-up, and the warning about background commands. Off, the model works on its own between tool results, and only what you and the CLI did is told to it (plan mode, a mode switch, attached files, a subtask's result). `false` (or `KODACT_REMINDERS=0`) turns them all off. |
+| `reminders` | `true` | KodAct's own reminders to the model: the verification reminder, the loop guard, the act, attempt, next-step and todo reminders, the budget and time wrap-up, and the warning about background commands. Off, the model works on its own between tool results, and only what you and the CLI did is told to it (plan mode, a mode switch, attached files, a subtask's result). `false` (or `KODACT_REMINDERS=0`) turns them all off. The ones due as a turn would end (no attempt yet, a step announced and not made, open todos, the constraint report, an unsaved result, a passing version, unchecked changes) go together in one message: one model call, not one each. |
 | `verification.enabled` | `true` | `false` turns the loop off (as does `KODACT_VERIFY=0`) |
 | `verification.commands` | detected | The project's check commands |
 | `verification.maxReminders` | `1` | Reminders per user turn |

@@ -19,6 +19,11 @@
   progress only later wasn't needed, and twice silences it. Notes that carry
   a fact (a missing file, an unrun check, a limit passed) never back off.
   Before, any progress after any nudge counted toward silencing it.
+- **One message at the end of a turn**: the notes due as a turn would end
+  (open todos, the constraint report, an unsaved result, a passing version,
+  unchecked changes, no attempt yet) go together in one message, one model
+  call, instead of one call each. The unsaved-result note also loses the
+  stray runs of spaces in its text.
 
 ### Watching a Harbor run, as a chat
 - **`evals/harbor/watch.py` shows a job from its start and then live**, with no

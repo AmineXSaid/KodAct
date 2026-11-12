@@ -3144,6 +3144,39 @@ async fn a_named_check_is_told_not_run() {
     }
 }
 
+/// The notes due as a turn would end go in one message, one model call (docs/goal.md, rule 8):
+/// open todos, what the request names and isn't there, and unchecked changes, each counted
+/// and logged on its own. Before, each cost a call of its own.
+#[tokio::test]
+async fn the_notes_due_at_the_end_of_a_turn_go_in_one_message() {
+    let h = Harness::new(vec![]);
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    std::fs::write(h.cwd().join("test_app.py"), "import app\n").unwrap();
+    h.provider.push(MockTurn::tool("TodoWrite", json!({"todos": [todo("write the report", "pending")]})));
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": h.cwd().join("app.py"), "content": "x = 1\n"})));
+    h.provider.push(MockTurn::text("Fixed app.py."));
+    h.provider.push(MockTurn::text("Done, the report comes later."));
+    let cfg = EngineConfig {
+        one_shot: true,
+        verify: Some(crate::verify::VerifyConfig::default()),
+        ..nudged_cfg("constraints")
+    };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("Fix app.py and write report.md.")).await;
+    assert_eq!(r.result.as_deref(), Some("Done, the report comes later."));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 4, "one call for the three notes");
+    let told = last_user_text(&reqs[3]);
+    assert!(told.contains("- [pending] write the report"), "the todos: {told}");
+    assert!(told.contains("`report.md`"), "the missing file: {told}");
+    assert!(told.contains("no check has run since the last change"), "the unchecked change: {told}");
+    let t = h.transcript_text();
+    for subtype in ["todo_reminder", "verification"] {
+        assert!(t.contains(&format!(r#""subtype":"{subtype}""#)), "{subtype} logged");
+    }
+    assert!(t.contains(r#""kind":"constraints""#), "the constraint report logged");
+}
+
 /// Passing snapshots (#6): a passing check saves the version with the Checkpoint tool; when
 /// the files then fail, the model is told once where that version is, and a run cut by its
 /// limit reports it. Nothing is restored by KodAct.

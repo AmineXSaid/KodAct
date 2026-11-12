@@ -3143,39 +3143,38 @@ impl Engine {
                 }
             }
 
+            // The notes due as the turn would end go in one message: one model call, not one
+            // each (docs/goal.md, rule 8). Each is still counted, and logged, on its own.
+            let refused = stop_reason == Some(StopReason::Refusal);
+            let mut notes: Vec<String> = vec![];
+
             // Unattended runs (GOALS pillar 5): no finishing without an attempt.
             if self.cfg.reminders
                 && self.cfg.autonomous
                 && !self.cfg.is_subagent
                 && !attempt_reminded
                 && turn.tool_calls == 0
-                && stop_reason != Some(StopReason::Refusal)
+                && !refused
             {
                 attempt_reminded = true;
                 self.system_event("attempt_reminder", json!({}));
-                self.push_user(Message::user_text(ATTEMPT_REMINDER), true, None, true);
-                continue;
+                notes.push(ATTEMPT_REMINDER.to_string());
             }
 
             // Unattended runs: a reply that announces its next step ("Let me check...") and makes
-            // no tool call would end the run with that step undone.
-            if self.cfg.reminders
-                && self.cfg.autonomous
-                && !self.cfg.is_subagent
-                && stop_reason != Some(StopReason::Refusal)
-            {
+            // no tool call would end the run with that step undone. Else, open todos.
+            if self.cfg.reminders && self.cfg.autonomous && !self.cfg.is_subagent && !refused {
                 if let (Some(line), true) = (next_step.as_deref(), next_step_reminders < FINISH_REMINDERS) {
                     next_step_reminders += 1;
                     self.system_event("next_step_reminder", json!({"line": line}));
-                    self.push_user(Message::user_text(next_step_reminder(line)), true, None, true);
-                    continue;
-                }
-                let open = self.unfinished_todos();
-                if !open.is_empty() && todo_reminders < FINISH_REMINDERS {
-                    todo_reminders += 1;
-                    self.system_event("todo_reminder", json!({"open": open}));
-                    self.push_user(Message::user_text(todo_reminder(&open)), true, None, true);
-                    continue;
+                    notes.push(next_step_reminder(line));
+                } else {
+                    let open = self.unfinished_todos();
+                    if !open.is_empty() && todo_reminders < FINISH_REMINDERS {
+                        todo_reminders += 1;
+                        self.system_event("todo_reminder", json!({"open": open}));
+                        notes.push(todo_reminder(&open));
+                    }
                 }
             }
 
@@ -3186,14 +3185,13 @@ impl Engine {
                 && !self.cfg.is_subagent
                 && self.cfg.reminders
                 && todo_reminders == 0
-                && stop_reason != Some(StopReason::Refusal)
+                && !refused
             {
                 let open = self.unfinished_todos();
                 if !open.is_empty() {
                     todo_reminders += 1;
                     self.system_event("todo_reminder", json!({"open": open, "one_shot": true}));
-                    self.push_user(Message::user_text(one_shot_todo_reminder(&open)), true, None, true);
-                    continue;
+                    notes.push(one_shot_todo_reminder(&open));
                 }
             }
 
@@ -3202,28 +3200,26 @@ impl Engine {
                 && self.cfg.nudges.constraints
                 && !self.cfg.is_subagent
                 && !self.constraints_told
-                && stop_reason != Some(StopReason::Refusal)
+                && !refused
             {
                 self.constraints_told = true;
                 let report = crate::named::report(&self.named, &self.shared.tool_ctx.project_dir, &self.ran_commands);
                 if let Some((text, record)) = report.filter(|_| self.may_nudge(crate::progress::Nudge::Constraints)) {
                     self.system_event("nudge", record);
-                    self.push_user(Message::user_text(text), true, None, true);
-                    continue;
+                    notes.push(text);
                 }
             }
 
             // A result that met every limit was printed and never written: said once at the end.
-            if stop_reason != Some(StopReason::Refusal) {
+            if !refused {
                 if let Some(text) = self.stale_note(turn.api_calls, true) {
-                    self.push_user(Message::user_text(text), true, None, true);
-                    continue;
+                    notes.push(text);
                 }
             }
 
             // A version that passed is saved and the files now fail: said once a turn. Restoring
             // it is the model's choice (or the person's), never KodAct's.
-            if self.cfg.reminders && !self.passing_told && stop_reason != Some(StopReason::Refusal) {
+            if self.cfg.reminders && !self.passing_told && !refused {
                 if let Some(note) =
                     self.passing_note().filter(|_| self.may_nudge(crate::progress::Nudge::PassingSnapshot))
                 {
@@ -3233,25 +3229,24 @@ impl Engine {
                         "nudge",
                         json!({"kind": crate::progress::Nudge::PassingSnapshot.as_str(), "label": label}),
                     );
-                    self.push_user(
-                        Message::user_text(format!(
-                            "<system-reminder>\n{note} If you can't fix the failure, put that version back rather \
-                             than finish on a failing one, or say why the failing one is right.\n</system-reminder>"
-                        )),
-                        true,
-                        None,
-                        true,
-                    );
-                    continue;
+                    notes.push(format!(
+                        "<system-reminder>\n{note} If you can't fix the failure, put that version back rather than \
+                         finish on a failing one, or say why the failing one is right.\n</system-reminder>"
+                    ));
                 }
             }
 
-            // Verification loop (GOALS pillar 3): no finishing on unchecked changes.
-            if self.cfg.reminders && stop_reason != Some(StopReason::Refusal) {
+            // Verification loop (GOALS pillar 3): no finishing on unchecked changes. After the
+            // passing-version note, which already says the files fail.
+            if self.cfg.reminders && !refused {
                 if let Some(text) = self.verification_reminder().await {
-                    self.push_user(Message::user_text(text), true, None, true);
-                    continue;
+                    notes.push(text);
                 }
+            }
+
+            if !notes.is_empty() {
+                self.push_user(Message::user_text(notes.join("\n\n")), true, None, true);
+                continue;
             }
 
             // A reply that ended with no text and no tool call answers nothing, whatever ended it: ask
@@ -4037,7 +4032,9 @@ impl Engine {
         let row = scope.map(|s| format!(" for {s}")).unwrap_or_default();
         let files = files.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ");
         Some(format!(
-            "<system-reminder>\n`{command}` printed a result that meets every limit the request states{row}:\n               {line}\n{files} have not changed since. If it is the best result so far, write it to the file now, so              the file holds it whatever happens next. Ignore this if the file already holds it.\n</system-reminder>"
+            "<system-reminder>\n`{command}` printed a result that meets every limit the request states{row}:\n    {line}\n\
+             {files} have not changed since. If it is the best result so far, write it to the file now, so the \
+             file holds it whatever happens next. Ignore this if the file already holds it.\n</system-reminder>"
         ))
     }
 
