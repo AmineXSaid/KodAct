@@ -3742,3 +3742,30 @@ async fn a_summary_asks_for_the_lowest_reasoning_level() {
         .collect();
     assert_eq!(levels, ["high", "high", "low", "high"], "only the summary asks for low");
 }
+
+/// Passing snapshots: one is kept, the newest. Each later passing version replaces the one
+/// before it, so a long session leaves one checkpoint, not one per passing check.
+#[tokio::test]
+async fn only_the_newest_passing_version_is_kept() {
+    if std::process::Command::new("python3").arg("--version").output().is_err() {
+        return;
+    }
+    let h = Harness::new(vec![]);
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    std::fs::write(h.cwd().join("test_app.py"), "from app import f\nassert f() > 0\n").unwrap();
+    let app = h.cwd().join("app.py");
+    for n in [2, 33, 444] {
+        let content = format!("def f():\n    return {n}\n");
+        h.provider.push(MockTurn::tool("Write", json!({"file_path": app, "content": content})));
+        h.provider.push(MockTurn::tool("Bash", json!({"command": "python3 test_app.py"})));
+    }
+    h.provider.push(MockTurn::tool("Checkpoint", json!({"action": "list"})));
+    h.provider.push(MockTurn::text("done"));
+    let cfg = EngineConfig { verify: Some(crate::verify::VerifyConfig::default()), ..nudged_cfg("passingSnapshots") };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("make f return something better")).await;
+    let t = h.transcript_text();
+    assert_eq!(t.matches(r#""subtype":"passing_snapshot""#).count(), 3, "each passing version was saved");
+    let listed = tool_results(&e).last().unwrap().1.clone();
+    assert_eq!(listed.lines().count(), 1, "one checkpoint left: {listed}");
+}

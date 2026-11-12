@@ -4118,7 +4118,11 @@ impl Engine {
             return;
         }
         self.system_event("passing_snapshot", json!({"label": label, "command": command}));
-        self.passing = Some((label, command.to_string(), writes));
+        // One passing version is kept: the newest. The one before it is dropped, so a long
+        // session doesn't leave a snapshot (and, in a repository, a ref) per passing check.
+        if let Some((old, ..)) = self.passing.replace((label, command.to_string(), writes)) {
+            kodact_tools::builtin::drop_checkpoint(&self.shared.tool_ctx, &old);
+        }
     }
 
     /// Where the passing version is, when the files have changed since and the last check
