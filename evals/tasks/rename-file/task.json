@@ -1,0 +1,7 @@
+{
+  "instruction": "Rename helpers.py to text_utils.py and update everything that imports it.",
+  "check": "test ! -e helpers.py && python3 -m unittest -q && python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "long-horizon",
+  "tags": ["quiet", "everyday", "refactor", "python", "constraints"],
+  "timeout_secs": 300
+}

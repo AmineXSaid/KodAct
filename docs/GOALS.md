@@ -203,22 +203,22 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - progress nudges, **off until measured** (`nudges` in settings,
     `KODACT_NUDGES`; CLI.md, "Progress nudges"): pacing by progress (a long
     stretch with no file written and no check passed, as a share of the run's
-    budget), an earlier form before the first change in a budgeted run, a parse
-    check after shell edits that break a file, a report of what the request
-    names and isn't there, the request's own checks named by the verification
-    loop, passing versions saved and reported (never restored), and back-off
-    for a nudge followed by progress twice. Tasks `map-the-routes`,
-    `rename-keyword`, `named-deliverables`, `optimize-under-time`,
-    `three-reports`, `two-plan-scheduler`; progress counts the files the
-    request names (helper scripts don't, a script that writes a named file
-    does), and `nudges.pace` states the steps left at the run's pace; each
-    turns on only after its before/after shows it helps. First A/B
-    (`evals/baselines/2026-11-12-nudges/`, a small model, 2 runs a side, 5
-    groups): one nudge given in 20 runs, none where nothing went wrong, so
-    they stay out of the way; no effect could be measured, and none is on.
-    The progress nudge at 5 runs a side: every run passed both ways; the
-    nudge spoke in 1 of 5 runs, so the shorter runs with it on were not its
-    doing;
+    budget), an earlier form before the first change in a budgeted run, a
+    parse check after shell edits that break a file, a report of what the
+    request names and isn't there, the request's own checks named by the
+    verification loop, passing versions saved and reported (never restored),
+    and back-off for a nudge followed by progress twice. Tasks
+    `map-the-routes`, `rename-keyword`, `named-deliverables`, `rename-file`,
+    `optimize-under-time`, `three-reports`, `two-plan-scheduler`; progress
+    counts the files the request names (helper scripts don't, a script that
+    writes a named file does), and `nudges.pace` states the steps left at the
+    run's pace; each turns on only after its before/after shows it helps.
+    First A/B (`evals/baselines/2026-11-12-nudges/`, a small model, 2 runs a
+    side, 5 groups): one nudge given in 20 runs, none where nothing went
+    wrong, so they stay out of the way; no effect could be measured, and none
+    is on. The progress nudge at 5 runs a side: every run passed both ways;
+    the nudge spoke in 1 of 5 runs, so the shorter runs with it on were not
+    its doing;
   - the task list (TodoWrite) survives compaction: it is re-attached to the
     summary and recorded as `system/todos`. It also survives resume: it is
     rebuilt from the last TodoWrite call or that record;

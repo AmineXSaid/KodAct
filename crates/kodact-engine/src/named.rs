@@ -186,11 +186,6 @@ impl Named {
         !self.files.is_empty()
     }
 
-    /// Named files that don't exist now (relative to the project).
-    pub fn missing_files(&self, project: &Path) -> Vec<String> {
-        self.files.iter().filter(|f| !self.removed.contains(f) && !resolve(f, project).exists()).cloned().collect()
-    }
-
     /// Named commands no command run this turn contains.
     pub fn unrun_commands(&self, ran: &[String]) -> Vec<String> {
         let ran: Vec<String> = ran.iter().map(|r| squash(r)).collect();
@@ -210,9 +205,15 @@ impl Named {
 }
 
 /// What the model is told before the turn ends, when the request names something that isn't
-/// there: `None` when everything it names is.
-pub(crate) fn report(n: &Named, project: &Path, ran: &[String]) -> Option<(String, serde_json::Value)> {
-    let missing = n.missing_files(project);
+/// there: `None` when everything it names is. `missing` are the files it asks to be made that
+/// still don't exist ([`Watched::still_missing`]): a file it names that existed when the turn
+/// started and is gone now was renamed or removed, as asked or not, and isn't said missing.
+pub(crate) fn report(
+    n: &Named,
+    missing: Vec<String>,
+    project: &Path,
+    ran: &[String],
+) -> Option<(String, serde_json::Value)> {
     let unrun = n.unrun_commands(ran);
     let over = n.over_limit(project);
     if missing.is_empty() && unrun.is_empty() && over.is_empty() {
@@ -255,15 +256,17 @@ fn file_state(p: &Path) -> Option<FileState> {
 /// The files a request names, watched on disk through a turn: what counts as progress.
 ///
 /// The files that don't exist when the turn starts are what the request asks to be made, its
-/// deliverables. When there are some, only a change to a named file is progress: helper
-/// scripts and scratch files are work towards them, not them. A change is seen on disk, so a
-/// script that writes a deliverable counts as much as an edit tool does. When every named file
-/// already exists (a request to fix `parser.py`), a change can rightly land in a file the
-/// request didn't name, and any file written counts.
+/// deliverables, except those named in a sentence that asks to remove something. When there
+/// are some, only a change to a named file is progress: helper scripts and scratch files are
+/// work towards them, not them. A change is seen on disk, so a script that writes a deliverable
+/// counts as much as an edit tool does. When every named file already exists (a request to fix
+/// `parser.py`), a change can rightly land in a file the request didn't name, and any file
+/// written counts.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Watched {
     files: Vec<(String, PathBuf, Option<FileState>)>,
-    asks_for_new: bool,
+    /// The named files that didn't exist when the turn started, as the request names them.
+    deliverables: Vec<String>,
 }
 
 impl Watched {
@@ -278,13 +281,14 @@ impl Watched {
             .filter(|(_, _, p)| !p.is_dir())
             .map(|(f, st, p)| (f, p, st))
             .collect();
-        let asks_for_new = files.iter().any(|(_, _, st)| st.is_none());
-        Watched { files, asks_for_new }
+        let deliverables =
+            files.iter().filter(|(f, _, st)| st.is_none() && !n.removed.contains(f)).map(|(f, ..)| f.clone()).collect();
+        Watched { files, deliverables }
     }
 
     /// The request names files that didn't exist when the turn started.
     pub fn asks_for_new(&self) -> bool {
-        self.asks_for_new
+        !self.deliverables.is_empty()
     }
 
     /// Named files that changed since the last look (created, rewritten, removed).
@@ -333,9 +337,15 @@ impl Watched {
         }
     }
 
-    /// Of the files the request asks to be made, those that still don't exist.
+    /// Of the files the request asks to be made, those that still don't exist. A named file that
+    /// was there when the turn started is never among them: gone now, it was renamed or removed
+    /// (`Rename helper.py to utils.py` leaves no `helper.py`), not left unmade.
     pub fn still_missing(&self) -> Vec<String> {
-        self.files.iter().filter(|(_, p, _)| !p.exists()).map(|(n, ..)| n.clone()).collect()
+        self.files
+            .iter()
+            .filter(|(n, p, _)| self.deliverables.contains(n) && !p.exists())
+            .map(|(n, ..)| n.clone())
+            .collect()
     }
 }
 
@@ -755,7 +765,7 @@ mod tests {
             "Update there.txt to at most 10 bytes. Write gone.txt, and run `sh -c true`.",
             d.path(),
         );
-        assert_eq!(n.missing_files(d.path()), ["gone.txt"]);
+        assert_eq!(Watched::at_start(&n, d.path()).still_missing(), ["gone.txt"]);
         assert_eq!(n.unrun_commands(&[]), ["sh -c true"]);
         assert!(n.unrun_commands(&["cd x &&  sh   -c true -v".to_string()]).is_empty(), "contained, spaces aside");
         assert_eq!(n.over_limit(d.path()), [("there.txt".to_string(), 50, 10, "at most 10 bytes".to_string())]);
@@ -766,8 +776,22 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let n =
             Named::from_request("Move config.ini to settings.toml and delete config.ini. Write notes.md.", d.path());
-        assert_eq!(n.missing_files(d.path()), ["notes.md"]);
+        assert_eq!(Watched::at_start(&n, d.path()).still_missing(), ["notes.md"]);
         assert_eq!(n.removed, ["config.ini", "settings.toml"]);
+    }
+
+    #[test]
+    fn a_renamed_file_is_not_missing() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        std::fs::write(root.join("helper.py"), "def f(): pass\n").unwrap();
+        let n = Named::from_request("Rename helper.py to utils.py and update the imports.", root);
+        let w = Watched::at_start(&n, root);
+        assert_eq!(w.still_missing(), ["utils.py"], "the new name is asked for");
+        std::fs::rename(root.join("helper.py"), root.join("utils.py")).unwrap();
+        assert!(w.still_missing().is_empty(), "the old name is gone as asked, not missing");
+        let report = report(&n, w.still_missing(), root, &[]);
+        assert!(report.is_none(), "{report:?}");
     }
 
     #[test]

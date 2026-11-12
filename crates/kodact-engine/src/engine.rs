@@ -3216,7 +3216,12 @@ impl Engine {
                 && !refused
             {
                 self.constraints_told = true;
-                let report = crate::named::report(&self.named, &self.shared.tool_ctx.project_dir, &self.ran_commands);
+                let report = crate::named::report(
+                    &self.named,
+                    self.watched.still_missing(),
+                    &self.shared.tool_ctx.project_dir,
+                    &self.ran_commands,
+                );
                 if let Some((text, record)) = report.filter(|_| self.may_nudge(crate::progress::Nudge::Constraints)) {
                     self.system_event("nudge", record);
                     notes.push(text);
