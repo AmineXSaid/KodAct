@@ -79,7 +79,9 @@ them twice with the same model, once with `reminders: false` and once with
 the configuration under test, and compare tokens, model calls and wall time
 per task (`kodact-eval compare`): at the same pass rate the two should
 match. Any difference is what the configuration costs when it is not
-needed, and it is stated with the change.
+needed, and it is stated with the change. `scripts/quiet-check.sh` does it on
+the everyday tasks (tag `quiet`: a question about the code, a one-line fix, a
+rename): `scripts/quiet-check.sh --repeat 3 --nudges all -- --model <model>`.
 
 ## How it is checked without a large model at hand
 

@@ -38,6 +38,18 @@ scripts/nudge-ab.sh --repeat 1 suite -- --model sonnet --dangerously-skip-permis
 
 `scripts/nudge-ab.sh --help` lists the groups and how to read the tables.
 
+What KodAct's reminders and nudges cost when the model needs no help
+(`docs/goal.md`, "How quiet is checked"): the everyday tasks (tag `quiet`) run
+with reminders off (A) and with the configuration under test (B), same build,
+same model. At the same pass rate, B's tokens, model calls and minutes should
+match A's; the difference is what the configuration costs a turn in which it
+has nothing to say.
+
+```bash
+scripts/quiet-check.sh --repeat 3 -- --model sonnet --dangerously-skip-permissions
+scripts/quiet-check.sh --repeat 3 --nudges all -- --model sonnet --dangerously-skip-permissions
+```
+
 Results go to `evals/results/<label>/`, which is ignored by git. That folder
 holds `report.md`, `report.json`, and for each run its workspace, transcript
 and stderr.
@@ -58,6 +70,9 @@ and stderr.
 | format-after-edit | verification | Add a function to a module of a project formatted with `ruff format`, whose check rejects unformatted code; the project turns `verification.format` on, so an edit that isn't formatted is formatted and its result says what moved |
 | change-signature | verification | Give a function a new required parameter; its two callers are in other modules, one through `from … import`, one through the module. Nothing fails until a caller runs, so an agent that edits the function and stops finishes falsely. With `verification.languageServer` on, the broken callers are told with the edit (`edit_diagnostics`) |
 | rename-symbol | long-horizon | Rename across modules, an aliased import and a module-qualified call |
+| explain-setting | tool-design | Everyday (`quiet`): answer a question about the code (which environment variable sets the server's port, and its default) by writing `NAME=PORT` to answer.txt. The model needs no help, so KodAct should add nothing (`scripts/quiet-check.sh`) |
+| fix-page-count | tool-design | Everyday (`quiet`): a one-line fix (a page count that rounds down), with its tests. KodAct should add nothing |
+| rename-helper | tool-design | Everyday (`quiet`): rename one function across three small files. KodAct should add nothing |
 | split-module | long-horizon | Split a module into a package and keep the public API |
 | stop-at-target | long-horizon | Meet a stated target (pack the items into at most 33 bins), then write the result to bins.txt. The optimum (31) is reachable but not asked for: turns and minutes show whether the agent stops once the target is met, and the bins.txt step catches stopping before the task is done |
 | switch-idea | long-horizon | Bring a hash table's fullest bucket to at most 4 keys. The keys are anagrams and the hash sums character codes, so no table size helps (24 at any size) and only a different hash does: turns show how long the agent varies one idea before changing it |

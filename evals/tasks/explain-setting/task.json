@@ -1,0 +1,7 @@
+{
+  "instruction": "Which environment variable sets the port the shop server listens on, and which port does it use when that variable isn't set? Write just `NAME=PORT` to answer.txt.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": ["quiet", "everyday", "question"],
+  "timeout_secs": 300
+}

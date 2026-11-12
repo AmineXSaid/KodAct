@@ -2,6 +2,13 @@
 
 ## 0.1.0 (unreleased)
 
+### Nudges that stay out of the way (docs/goal.md rules 7 to 10)
+- **A quiet check**: `scripts/quiet-check.sh` runs three everyday tasks (a
+  question about the code, a one-line fix, a rename; tag `quiet`) with
+  KodAct's reminders off and with the configuration under test, and compares
+  tokens, model calls and time. On work the model does alone, the difference
+  is what KodAct costs when it has nothing to say.
+
 ### Watching a Harbor run, as a chat
 - **`evals/harbor/watch.py` shows a job from its start and then live**, with no
   flag: each trial as a chat under its task, time limit and instruction. Every

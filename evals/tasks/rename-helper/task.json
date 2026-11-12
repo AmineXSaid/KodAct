@@ -1,0 +1,7 @@
+{
+  "instruction": "Rename the function `fmt_price` to `format_price` everywhere in this project.",
+  "check": "! grep -rn 'fmt_price' --include='*.py' . && python3 -m unittest -q && python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": ["quiet", "everyday", "refactor", "python"],
+  "timeout_secs": 300
+}

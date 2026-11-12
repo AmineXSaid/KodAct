@@ -1,0 +1,7 @@
+{
+  "instruction": "page_count in pages.py gives too few pages when the last page is only partly full: 25 items at 10 a page should be 3 pages, not 2. Fix it.",
+  "check": "python3 -m unittest -q test_pages && python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": ["quiet", "everyday", "bugfix", "python"],
+  "timeout_secs": 300
+}
