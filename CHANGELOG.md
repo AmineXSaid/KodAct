@@ -2,6 +2,19 @@
 
 ## 0.1.0 (unreleased)
 
+### Watching a Harbor run, as a chat
+- **`evals/harbor/watch.py` shows a job from its start and then live**, with no
+  flag: each trial as a chat under its task, time limit and instruction. Every
+  step is numbered, with its output tokens, the context it read and, live, how
+  long it took; the start and end of the reasoning; each tool call in full (the
+  whole command, the start of a file written, the lines an edit changes); each
+  result under its call (exit code, first and last lines of output, red when it
+  failed); KodAct's reminders and events in words; how the run ended, KodAct's
+  own check, and the reward with the score so far. While the model thinks or a
+  command runs, a line every minute says which and for how long. `--new` follows
+  only what comes next, `--once` shows a job and stops, `--task` picks tasks,
+  `--compact` keeps the old one-line view.
+
 ### Thinking without acting, and benchmark runs that say what they ran
 - **`nudges.thinkingTimeBox`** (opt-in): a reply still all thinking past a
   limit taken from the run's own pace (3× its usual reply, at least 2

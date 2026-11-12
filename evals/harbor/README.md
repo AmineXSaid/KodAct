@@ -113,16 +113,30 @@ evals/harbor/run.sh subset
 ## Watching a run live
 
 ```bash
-python3 evals/harbor/watch.py              # newest job; --from-start replays it first
-python3 evals/harbor/watch.py --thinking   # also the model's reasoning
-python3 evals/harbor/watch.py --full       # also tool input and output
+python3 evals/harbor/watch.py                       # the newest job: what's there, then live
+python3 evals/harbor/watch.py --task 'gpt2*'        # one task's conversation
+python3 evals/harbor/watch.py --thinking            # the model's whole reasoning
+python3 evals/harbor/watch.py --full                # everything uncut: reasoning, commands, files, output
+python3 evals/harbor/watch.py --new                 # only what happens from now on
+python3 evals/harbor/watch.py --once jobs/<job>     # a job's conversations, then stop
+python3 evals/harbor/watch.py --compact             # one short line per tool call
 ```
 
-One colour per task. For KodAct it shows what the model says, one short line
-per tool call (`$ ls -la /app`, `Read /app/x.py`), failed tool calls, KodAct's
-reminders, how the run ended (with the error when it failed) and the task's
-reward once the verifier writes it. Pi's events are shown the same way. Other
-agents' logs (Ante, ...) are shown as they are. A step shows up once the model finishes it.
+Each trial is a chat under its own header and colour: the model, time limit,
+nudges and extra flags, the task's instruction, then every step of the model,
+numbered, with its output tokens, the context it read and, when seen live, how
+long it took. A step shows the start and end of the model's reasoning, what it
+says, each tool call in full (the whole command, the start of a file it writes,
+the lines an edit takes out and puts in) and each result under its call: the
+exit code and the first and last lines of the output, red when it failed.
+KodAct's reminders and events are named (retries, output limit, the server's
+window, compaction, nudges), then how the run ended, KodAct's own check of the
+result, and the task's reward with the score so far. While the model thinks or a
+command runs, a line every minute says which and for how long. Pi's events are
+shown the same way; other agents' logs (Ante, ...) as they are.
+
+A step shows up once the model finishes it. Running trials are read from their
+containers (Harbor's logs aren't readable from the host until a trial ends).
 
 ## The report of a run
 
