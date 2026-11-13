@@ -310,6 +310,29 @@ const EMPTY_REPLY_PROMPT: &str = "<system-reminder>\nYour reply ended without an
                                   then continue from its result.\n</system-reminder>";
 
 /// Added to the second summary attempt when the first returned no summary.
+/// What an unattended turn is told about the commands still running in the background (`list`).
+/// `ports_isolated`: the sandbox gives each command a network of its own, so detaching a server
+/// inside it leaves a server nothing outside can reach; the way out is to start it unsandboxed.
+pub(crate) fn background_text(list: &str, ports_isolated: bool) -> String {
+    let how = if ports_isolated {
+        "stop it with KillShell and start it again outside the sandbox and detached from the session, for example \
+         `nohup <command> > /tmp/<name>.log 2>&1 &` with `dangerouslyDisableSandbox: true` (that asks for approval), \
+         then check that it answers, with `dangerouslyDisableSandbox: true` as well. Shell commands here run in a \
+         sandbox without network access: a server started inside it can't be reached from outside that command, \
+         detached or not. If the approval is refused, say in your final message that the server could not be left \
+         reachable and give the command that starts it"
+    } else {
+        "stop it with KillShell and start it again detached from the session, for example \
+         `nohup <command> > /tmp/<name>.log 2>&1 &`, then check that it answers"
+    };
+    format!(
+        "<system-reminder>\nStill running in the background: {list}. Background commands are stopped when the \
+         session ends, which in an unattended run is right after you finish. If one of them must keep running \
+         after that (a server or service the task needs), {how}. If none needs to keep running, \
+         finish.\n</system-reminder>"
+    )
+}
+
 const SUMMARY_RETRY: &str = "Your previous attempt returned no summary. Write the summary now, from what you \
                              already know; do not analyze further.";
 
@@ -3562,13 +3585,8 @@ impl Engine {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        Some(format!(
-            "<system-reminder>\nStill running in the background: {list}. Background commands are stopped when the \
-             session ends, which in an unattended run is right after you finish. If one of them must keep running \
-             after that (a server or service the task needs), stop it with KillShell and start it again detached \
-             from the session, for example `nohup <command> > /tmp/<name>.log 2>&1 &`, then check that it answers. \
-             If none needs to keep running, finish.\n</system-reminder>"
-        ))
+        let ports_isolated = self.shared.tool_ctx.sandbox_now().is_some_and(|(b, p)| p.isolates_ports(b));
+        Some(background_text(&list, ports_isolated))
     }
 
     /// The reminder after a reply that was all reasoning, and how many characters of that

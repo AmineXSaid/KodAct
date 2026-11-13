@@ -444,14 +444,17 @@ impl Tool for MultiEdit {
     async fn call(&self, input: Value, ctx: &ToolContext) -> ToolOutput {
         let path = expand_path(str_arg(&input, "file_path"), &ctx.project_dir);
         let original = std::fs::read_to_string(&path).unwrap_or_default();
-        let mut content = original.clone();
+        // As in Edit: match against LF text and keep the file's CRLF.
+        let crlf = original.contains("\r\n");
+        let lf = |s: &str| s.replace("\r\n", "\n");
+        let mut content = if crlf { lf(&original) } else { original.clone() };
         let edits = input.get("edits").and_then(Value::as_array).cloned().unwrap_or_default();
         if edits.is_empty() {
             return ToolOutput::error("edits must contain at least one edit");
         }
         for (i, e) in edits.iter().enumerate() {
             let all = e.get("replace_all").and_then(Value::as_bool).unwrap_or(false);
-            match apply_edit(&content, str_arg(e, "old_string"), str_arg(e, "new_string"), all) {
+            match apply_edit(&content, &lf(str_arg(e, "old_string")), &lf(str_arg(e, "new_string")), all) {
                 Ok(c) => content = c,
                 Err(err) => {
                     return ToolOutput::error(format!(
@@ -462,6 +465,7 @@ impl Tool for MultiEdit {
                 }
             }
         }
+        let content = if crlf { content.replace('\n', "\r\n") } else { content };
         match write_result(ctx, &path, &original, &content) {
             Ok(patch) => ToolOutput::text(format!("Applied {} edits to {}", edits.len(), path.display()))
                 .with_structured(

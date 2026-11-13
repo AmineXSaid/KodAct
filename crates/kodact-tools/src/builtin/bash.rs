@@ -92,6 +92,12 @@ const BASE_DESCRIPTION: &str = "Run a shell command in a persistent working dire
        files instead of cat, grep, find, sed or echo redirection.\n\
      - Chain dependent commands with `&&`; independent commands can be separate calls.";
 
+/// Added to a background start in a sandbox that gives each command its own network: said
+/// there because a server started this way looks up and answers nothing.
+const PORTS_ISOLATED: &str = " It runs in the sandbox without network access: a port it opens can't be reached \
+     from outside this command (not by your next command, a browser or another program). If it must serve one, \
+     stop it and start it again with `dangerouslyDisableSandbox: true`; that asks the user for approval.";
+
 /// The tool description for the session's shell. Unix bash keeps the base text unchanged.
 pub fn description(shell: &ShellChoice) -> String {
     let mut s = BASE_DESCRIPTION.to_string();
@@ -243,8 +249,9 @@ impl Tool for Bash {
             return match ctx.shells.spawn(&ctx.shell, &command, &cwd, &ctx.env, sandbox.as_ref()) {
                 Ok(sh) => ToolOutput::text(format!(
                     "Command running in background with ID: {}. Use BashOutput to read its output; you will be \
-                     told when it exits.",
-                    sh.id()
+                     told when it exits.{}",
+                    sh.id(),
+                    if sandbox.as_ref().is_some_and(|(b, p)| p.isolates_ports(*b)) { PORTS_ISOLATED } else { "" }
                 ))
                 .with_structured(
                     json!({"backgroundTaskId": sh.id(), "stdout": "", "stderr": "", "interrupted": false}),

@@ -171,6 +171,14 @@ impl SandboxPolicy {
         }
     }
 
+    /// Whether a port a sandboxed command opens can be reached only from inside that command.
+    /// Bubblewrap without network gives each command a network of its own, loopback included:
+    /// a server started in one is invisible to the next command, to the person's browser and to
+    /// anything that runs after the session. Seatbelt only refuses outbound connections.
+    pub fn isolates_ports(&self, backend: Backend) -> bool {
+        backend == Backend::Bubblewrap && !self.network
+    }
+
     /// Text appended to a failed command's output when the sandbox may be the cause.
     pub fn explain_failure(&self, output: &str) -> Option<String> {
         let o = output.to_ascii_lowercase();
@@ -200,6 +208,16 @@ mod tests {
 
     fn policy(mode: SandboxMode, root: &Path) -> SandboxPolicy {
         SandboxPolicy { mode, network: false, writable_roots: vec![root.to_path_buf()], extra_writable: vec![] }
+    }
+
+    #[test]
+    fn only_a_network_of_its_own_hides_a_port() {
+        let d = tempfile::tempdir().unwrap();
+        let mut p = policy(SandboxMode::WorkspaceWrite, d.path());
+        assert!(p.isolates_ports(Backend::Bubblewrap));
+        assert!(!p.isolates_ports(Backend::Seatbelt), "Seatbelt refuses outbound connections only");
+        p.network = true;
+        assert!(!p.isolates_ports(Backend::Bubblewrap));
     }
 
     #[cfg(unix)]

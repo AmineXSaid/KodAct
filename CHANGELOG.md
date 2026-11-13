@@ -2,6 +2,24 @@
 
 ## 0.1.0 (unreleased)
 
+### A server in the sandbox, and edits to CRLF files
+- **A server started in the sandbox isn't called reachable**: on Linux, a
+  sandbox without network access gives each shell command a network of its
+  own, so a server started in one answers nothing outside it: not the next
+  command, a browser, or a check run after the session. A background start
+  there now says so, and the reminder an unattended run gets about commands
+  still running names the start outside the sandbox
+  (`dangerouslyDisableSandbox`, which asks for approval) instead of `nohup`
+  alone, and asks for a plain report when that is refused (task
+  `serve-after-exit`). Unsandboxed, with the network allowed, or on macOS,
+  nothing changes.
+- **MultiEdit on a file with CRLF line endings**: a block of several lines
+  copied from Read never matched, and a replacement of several lines left the
+  file with mixed endings. MultiEdit now matches and writes as Edit does (task
+  `crlf-blocks`).
+- `docs/PARITY.md`: Skill, the MCP resource tools and fast-mode pricing were
+  listed as missing and are built.
+
 ### What KodAct says it checked
 - **A tool asked about itself isn't a check**: `gcc --version`, `pytest
   --help`, `make --version` or `gcc -v` after an edit counted as testing it,
