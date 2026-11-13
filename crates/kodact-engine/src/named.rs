@@ -238,7 +238,7 @@ pub(crate) fn report(
             .into(),
     );
     let record = serde_json::json!({
-        "kind": crate::progress::Nudge::Constraints.as_str(),
+        "kind": crate::nudges::Nudge::Constraints.as_str(),
         "missing_files": missing,
         "unrun_commands": unrun,
         "over_limit": over.iter().map(|(f, size, max, _)| serde_json::json!({"file": f, "size": size, "limit": max})).collect::<Vec<_>>(),

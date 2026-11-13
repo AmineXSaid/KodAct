@@ -2923,130 +2923,56 @@ fn nudges(t: &str) -> Vec<Value> {
 }
 
 fn nudged_cfg(list: &str) -> EngineConfig {
-    EngineConfig { nudges: crate::progress::NudgeConfig::from_list(list).0, ..Default::default() }
+    EngineConfig { nudges: crate::nudges::NudgeConfig::from_list(list).0, ..Default::default() }
 }
 
-/// Pacing by progress (#2): a long stretch of varied calls with nothing written fires once, at
-/// the count without a budget and at a fifth of the budget with one; reading then writing, the
-/// usual way of working, never does.
-#[tokio::test]
-async fn a_long_stretch_without_progress_gets_one_nudge() {
-    // No budget: at NO_BUDGET_CALLS calls, once, though the stretch goes on.
-    let h = Harness::new(vec![]);
-    exploring(&h, 22, vec![]);
-    let mut e =
-        h.engine_with(nudged_cfg("progress"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-    e.submit(prompt("find where the value is set")).await;
-    let reqs = h.provider.requests();
-    let at = crate::progress::NO_BUDGET_CALLS as usize;
-    assert!(!last_user_text(&reqs[at - 1]).contains("model calls have passed"), "not before");
-    let text = last_user_text(&reqs[at]);
-    assert!(text.contains(&format!("{at} model calls have passed")) && text.contains("Ignore this"), "{text}");
-    let given = nudges(&h.transcript_text());
-    assert_eq!(given.len(), 1, "one per stretch: {given:?}");
-    assert_eq!((given[0]["kind"].as_str(), given[0]["calls"].as_u64()), (Some("progress"), Some(at as u64)));
+/// The reasoning level each request asked for, in order (`-` for none).
+fn effort_levels(h: &Harness) -> Vec<String> {
+    h.provider
+        .requests()
+        .iter()
+        .map(|r| r.output_config.as_ref().and_then(|c| c["effort"].as_str()).unwrap_or("-").to_string())
+        .collect()
+}
 
-    // With a budget (--max-turns 30): a fifth is 6 calls.
-    let h = Harness::new(vec![]);
-    exploring(&h, 10, vec![]);
-    let cfg = EngineConfig { max_turns: Some(30), ..nudged_cfg("progress") };
-    h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
-        .submit(prompt("look"))
-        .await;
-    let given = nudges(&h.transcript_text());
-    assert_eq!(given.len(), 1, "{given:?}");
-    assert_eq!(given[0]["calls"], 6);
-
-    // Read four files, then write: normal work, no nudge, budget or not.
-    for max_turns in [None, Some(30)] {
-        let h = Harness::new(vec![]);
-        let out = h.cwd().join("out.py");
-        exploring(&h, 4, vec![MockTurn::tool("Write", json!({"file_path": out, "content": "x = 1\n"}))]);
-        let cfg = EngineConfig { max_turns, ..nudged_cfg("progress,progressEarly") };
-        h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
-            .submit(prompt("write out.py"))
-            .await;
-        assert!(nudges(&h.transcript_text()).is_empty(), "{max_turns:?}");
+/// Did two steps make progress, as `adaptiveEffort` sees it? A reply that was all thinking
+/// lowers the level a step, then the two steps run: two of progress in a row bring it back up.
+async fn progress_seen(h: &Harness, request: &str, steps: [MockTurn; 2]) -> bool {
+    use kodact_types::StopReason;
+    let thinking = ContentBlock::Thinking { thinking: "a long plan, never acted on".into(), signature: String::new() };
+    h.provider.push(MockTurn::blocks(vec![thinking], StopReason::MaxTokens));
+    for step in steps {
+        h.provider.push(step);
     }
+    h.provider.push(MockTurn::text("done"));
+    let cfg = EngineConfig { effort: Some("high".into()), verify: None, ..nudged_cfg("adaptiveEffort") };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt(request)).await;
+    let levels = effort_levels(h);
+    assert_eq!(levels[..3], ["high", "medium", "medium"], "down after all thinking: {levels:?}");
+    levels[3] == "high"
 }
 
-/// Progress-early (#1): with a budget, before anything is made, at a tenth of it (never under
-/// MIN_CALLS calls); never without a budget; and a write starts the count again.
-#[tokio::test]
-async fn the_first_version_is_nudged_early_only_with_a_budget() {
-    let h = Harness::new(vec![]);
-    exploring(&h, 8, vec![]);
-    let cfg = EngineConfig { max_turns: Some(40), ..nudged_cfg("progressEarly") };
-    h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({})).submit(prompt("go")).await;
-    let given = nudges(&h.transcript_text());
-    assert_eq!(given.len(), 1, "{given:?}");
-    assert_eq!((given[0]["kind"].as_str(), given[0]["calls"].as_u64()), (Some("progress_early"), Some(5)));
-    assert!(h.provider.requests().iter().any(|r| last_user_text(r).contains("first version")));
-
-    // No budget: early never comes.
-    let h = Harness::new(vec![]);
-    exploring(&h, 20, vec![]);
-    h.engine_with(nudged_cfg("progressEarly"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
-        .submit(prompt("go"))
-        .await;
-    assert!(nudges(&h.transcript_text()).is_empty());
-}
-
-/// Off unless turned on, and `reminders: false` turns it off even when it is on.
-#[tokio::test]
-async fn progress_nudges_are_off_by_default_and_with_reminders_off() {
-    for cfg in [EngineConfig::default(), EngineConfig { reminders: false, ..nudged_cfg("all") }] {
-        let h = Harness::new(vec![]);
-        exploring(&h, 20, vec![]);
-        let cfg = EngineConfig { max_turns: Some(40), ..cfg };
-        h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
-            .submit(prompt("go"))
-            .await;
-        assert!(nudges(&h.transcript_text()).is_empty());
-    }
-}
-
-/// What counts as progress: a passing check always; a shell command that changed something
-/// only when the request names no file (then there is nothing else to make).
+/// What counts as progress, which the reasoning level follows (`adaptiveEffort`): a passing
+/// check always; a shell command that changed something only when the request names no file
+/// (then there is nothing else to make).
 #[tokio::test]
 async fn a_passing_check_and_an_unnamed_change_are_progress() {
-    let script = |h: &Harness, middle: MockTurn| {
-        std::fs::create_dir_all(h.cwd()).unwrap();
-        std::fs::write(h.cwd().join("test_x.py"), "").unwrap();
-        let mut turns = vec![];
-        // Four reads, the middle call, four more: eight calls in all.
-        for i in 0..8 {
-            let f = h.cwd().join(format!("m{i}.py"));
-            std::fs::write(&f, "").unwrap();
-            turns.push(MockTurn::tool("Read", json!({"file_path": f})));
-            if i == 3 {
-                turns.push(middle.clone());
-            }
-        }
-        for t in turns {
-            h.provider.push(t);
-        }
-        h.provider.push(MockTurn::text("done"));
-    };
-    let run = |h: &Harness, request: &'static str| {
-        let cfg = EngineConfig { max_turns: Some(30), ..nudged_cfg("progress") };
-        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-        async move { e.submit(prompt(request)).await }
-    };
+    let bash = |command: &str| MockTurn::tool("Bash", json!({"command": command}));
     // A passing check: a test script that runs clean.
     assert!(crate::verify::is_check("python3 test_x.py", &[], &[]));
     let h = Harness::new(vec![]);
-    script(&h, MockTurn::tool("Bash", json!({"command": "python3 test_x.py"})));
-    run(&h, "make test_x.py pass").await;
-    assert!(nudges(&h.transcript_text()).is_empty(), "the passing check restarted the count");
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    std::fs::write(h.cwd().join("test_x.py"), "").unwrap();
+    let check = || bash("python3 test_x.py");
+    assert!(progress_seen(&h, "make test_x.py pass", [check(), check()]).await, "a passing check");
 
     // A request that names no file: a command that changed something is progress.
-    for (request, nudged) in [("start the service", false), ("start the service in run.sh", true)] {
+    for (request, progress) in [("start the service", true), ("start the service in run.sh", false)] {
         let h = Harness::new(vec![]);
-        script(&h, MockTurn::tool("Bash", json!({"command": "touch started"})));
-        run(&h, request).await;
-        let calls: Vec<u64> = nudges(&h.transcript_text()).iter().filter_map(|n| n["calls"].as_u64()).collect();
-        assert_eq!(calls == [6], nudged, "{request}: {calls:?}");
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        let seen = progress_seen(&h, request, [bash("touch started"), bash("touch started")]).await;
+        assert_eq!(seen, progress, "{request}");
     }
 }
 
@@ -3171,39 +3097,6 @@ async fn a_named_check_is_told_not_run() {
     }
 }
 
-/// Waiting is not stalling (docs/goal.md, rule 8): time inside a slow command is left out of
-/// a stretch's time, so steps that wait on a build get no pacing nudge; the same number of
-/// steps whose time is the model's own does.
-#[tokio::test]
-async fn time_spent_waiting_on_a_tool_is_not_time_without_progress() {
-    let run = |slow_tools: bool| async move {
-        let h = Harness::new(vec![]);
-        std::fs::create_dir_all(h.cwd()).unwrap();
-        for i in 0..6 {
-            let turn = if slow_tools {
-                MockTurn::tool("Bash", json!({"command": "sleep 0.3"}))
-            } else {
-                let f = h.cwd().join(format!("m{i}.py"));
-                std::fs::write(&f, "v = 1\n").unwrap();
-                MockTurn::tool("Read", json!({"file_path": f})).with_delay(Duration::from_millis(60))
-            };
-            h.provider.push(turn);
-        }
-        h.provider.push(MockTurn::tool("Write", json!({"file_path": h.cwd().join("out.txt"), "content": "1\n"})));
-        h.provider.push(MockTurn::text("done"));
-        let cfg = EngineConfig {
-            time_limit: Some(TimeLimit::starting_now(Duration::from_secs(4))),
-            verify: None,
-            ..nudged_cfg("progress,progressEarly")
-        };
-        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-        e.submit(prompt("Write out.txt.")).await;
-        nudges(&h.transcript_text()).len()
-    };
-    assert_eq!(run(true).await, 0, "six commands of 0.3 s: waiting, not stalling");
-    assert_eq!(run(false).await, 1, "the same steps taking the model's time: nudged");
-}
-
 /// The notes due as a turn would end go in one message, one model call (docs/goal.md, rule 8):
 /// open todos, what the request names and isn't there, and unchecked changes, each counted
 /// and logged on its own. Before, each cost a call of its own.
@@ -3302,121 +3195,29 @@ async fn a_passing_version_is_saved_and_reported_never_restored() {
     assert!(!h.transcript_text().contains("passing_snapshot"));
 }
 
-/// Back-off (#7), by delay: a pacing nudge the model went on without (progress came, but only
-/// calls later), twice, is not given again in that run, and what the conversation carries goes
-/// down with it. A nudge the model acted on at once is kept, however often: it is never
-/// silenced for having worked. Off, every nudge comes.
-#[tokio::test]
-async fn a_pacing_nudge_not_needed_twice_is_silenced_one_acted_on_is_kept() {
-    let at = crate::progress::NO_BUDGET_CALLS as usize;
-    // Each round: reads up to the nudge, `late` more reads, then a write (progress).
-    let script = |h: &Harness, late: usize| {
-        std::fs::create_dir_all(h.cwd()).unwrap();
-        for round in 0..3 {
-            for i in 0..at + late {
-                let f = h.cwd().join(format!("r{round}_{i}.py"));
-                std::fs::write(&f, format!("v = {i}\n")).unwrap();
-                h.provider.push(MockTurn::tool("Read", json!({"file_path": f})));
-            }
-            let out = h.cwd().join(format!("out{round}.py"));
-            h.provider.push(MockTurn::tool("Write", json!({"file_path": out, "content": "x = 1\n"})));
-        }
-        h.provider.push(MockTurn::text("done"));
-    };
-    let run = |list: &'static str, late: usize| async move {
-        let h = Harness::new(vec![]);
-        script(&h, late);
-        let cfg = EngineConfig { verify: None, ..nudged_cfg(list) };
-        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-        e.submit(prompt("map the modules")).await;
-        let t = h.transcript_text();
-        let sent: usize = h.provider.requests().iter().map(|r| serde_json::to_string(&r.messages).unwrap().len()).sum();
-        (nudges(&t).len(), t.matches(r#""subtype":"nudge_silenced""#).count(), sent)
-    };
-    // Not needed: the write comes 5 calls after each nudge. Silenced after the second.
-    let (given, silenced, with) = run("progress,backOff", 5).await;
-    assert_eq!((given, silenced), (2, 1));
-    let (given, silenced, without) = run("progress", 5).await;
-    assert_eq!((given, silenced), (3, 0), "off: every nudge");
-    assert!(with < without, "less sent with back-off: {with} < {without}");
-    // Acted on: the write is the next call after each nudge. Kept every time.
-    let (given, silenced, _) = run("progress,backOff", 0).await;
-    assert_eq!((given, silenced), (3, 0), "never silenced for having worked");
-}
-
-/// Progress is the files the request asks for, not helper scripts: a run that writes one
-/// experiment script after another while the named outputs don't exist is nudged; a script
-/// that writes a named output is progress, though no edit tool touched it.
+/// Progress is the files the request asks for, not helper scripts: while the named outputs
+/// don't exist, writing one experiment script after another is not progress; a script that
+/// writes a named output is, though no edit tool touched it.
 #[tokio::test]
 async fn helper_scripts_are_not_progress_while_the_named_outputs_are_missing() {
     let request = "Read jobs.txt and write out/plan_a.txt and out/plan_b.txt.";
-    let setup = |h: &Harness, writes_output: bool| {
-        std::fs::create_dir_all(h.cwd().join("out")).unwrap();
-        std::fs::write(h.cwd().join("jobs.txt"), "1\n2\n").unwrap();
-        for i in 0..8 {
-            let f = h.cwd().join(format!("experiment_{i}.sh"));
-            h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "echo trying\n"})));
-            if i == 2 && writes_output {
-                // A script writes the deliverable: seen on disk.
-                h.provider.push(MockTurn::tool("Bash", json!({"command": "sh -c 'echo 1 > out/plan_a.txt'"})));
-            }
-        }
-        h.provider.push(MockTurn::text("done"));
-    };
-    let cfg = || EngineConfig { max_turns: Some(40), verify: None, ..nudged_cfg("progress,progressEarly") };
-    // Eight helper scripts, no output: the early nudge at a tenth of the budget (5 calls).
-    let h = Harness::new(vec![]);
-    setup(&h, false);
-    h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
-        .submit(prompt(request))
-        .await;
-    let given = nudges(&h.transcript_text());
-    assert_eq!(given.len(), 1, "{given:?}");
-    assert_eq!((given[0]["kind"].as_str(), given[0]["calls"].as_u64()), (Some("progress_early"), Some(5)));
-
-    // A script writes out/plan_a.txt at the fourth call: progress, the count starts again, and
-    // the five calls after it are under a fifth of the budget.
-    let h = Harness::new(vec![]);
-    setup(&h, true);
-    h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
-        .submit(prompt(request))
-        .await;
-    assert!(nudges(&h.transcript_text()).is_empty());
-}
-
-/// Pace (#2 of the scheduler post-mortem): the time warning says the steps left at the run's
-/// pace and names the files the request asks for that don't exist yet; off, it reads as before.
-#[tokio::test]
-async fn the_time_warning_names_steps_left_and_missing_deliverables() {
-    let request = "Write out/plan_a.txt and out/plan_b.txt from jobs.txt.";
-    for (list, paced) in [("pace", true), ("", false)] {
+    let setup = || {
         let h = Harness::new(vec![]);
         std::fs::create_dir_all(h.cwd().join("out")).unwrap();
-        std::fs::write(h.cwd().join("jobs.txt"), "1\n").unwrap();
-        std::fs::write(h.cwd().join("out/plan_a.txt"), "old\n").unwrap();
-        for _ in 0..4 {
-            h.provider.push(MockTurn::tool("SafeA", json!({"tag": "look", "ms": 700})));
-        }
-        h.provider.push(MockTurn::text("done"));
-        // Half an hour, with a second more than a fifth left: the warning comes after the
-        // second 0.7 s step, when the turn has a pace.
-        let total = Duration::from_secs(30 * 60);
-        let limit = TimeLimit { started: Instant::now() - (total - total / 5 - Duration::from_secs(1)), total };
-        let cfg = EngineConfig { time_limit: Some(limit), verify: None, ..nudged_cfg(list) };
-        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-        e.submit(prompt(request)).await;
-        let warned = h
-            .provider
-            .requests()
-            .iter()
-            .map(last_user_text)
-            .find(|t| t.contains("of the run's time left"))
-            .expect("warned");
-        assert_eq!(warned.contains("more steps"), paced, "{list}: {warned}");
-        assert_eq!(warned.contains("don't exist yet: `out/plan_b.txt`"), paced, "{list}: {warned}");
-        assert!(!warned.contains("`out/plan_a.txt`"), "it exists: {warned}");
-        assert_eq!(nudges(&h.transcript_text()).iter().any(|n| n["kind"] == "pace"), paced);
-    }
+        std::fs::write(h.cwd().join("jobs.txt"), "1\n2\n").unwrap();
+        h
+    };
+    let h = setup();
+    let helper = |i: usize| {
+        let f = h.cwd().join(format!("experiment_{i}.sh"));
+        MockTurn::tool("Write", json!({"file_path": f, "content": "echo trying\n"}))
+    };
+    assert!(!progress_seen(&h, request, [helper(0), helper(1)]).await, "helper scripts");
+
+    // A script writes each deliverable: seen on disk.
+    let h = setup();
+    let writes = |name: &str| MockTurn::tool("Bash", json!({"command": format!("sh -c 'echo 1 > out/{name}'")}));
+    assert!(progress_seen(&h, request, [writes("plan_a.txt"), writes("plan_b.txt")]).await, "the named outputs");
 }
 
 const LIMITED: &str = "Write the plan to plan.csv. Keep cost at most 100 and wait at most 5.";
@@ -3641,13 +3442,6 @@ async fn the_reasoning_level_follows_what_the_thinking_produced() {
         h.provider.push(MockTurn::tool("Write", json!({"file_path": out, "content": "second"})));
         h.provider.push(MockTurn::text("done"));
     };
-    let levels = |h: &Harness| -> Vec<String> {
-        h.provider
-            .requests()
-            .iter()
-            .map(|r| r.output_config.as_ref().and_then(|c| c["effort"].as_str()).unwrap_or("-").to_string())
-            .collect()
-    };
     const ASK: &str = "Write out.txt with the answer.";
     let cfg = |list: &str| EngineConfig { effort: Some("high".into()), ..nudged_cfg(list) };
 
@@ -3657,7 +3451,11 @@ async fn the_reasoning_level_follows_what_the_thinking_produced() {
         h.engine_with(cfg("adaptiveEffort"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     let r = e.submit(prompt(ASK)).await;
     assert_eq!(r.result.as_deref(), Some("done"));
-    assert_eq!(levels(&h), ["high", "medium", "medium", "high"], "down after all thinking, up after two of progress");
+    assert_eq!(
+        effort_levels(&h),
+        ["high", "medium", "medium", "high"],
+        "down after all thinking, up after two of progress"
+    );
     let given: Vec<Value> =
         nudges(&h.transcript_text()).into_iter().filter(|n| n["kind"] == "adaptive_effort").collect();
     assert_eq!(given.len(), 2, "{given:?}");
@@ -3670,7 +3468,7 @@ async fn the_reasoning_level_follows_what_the_thinking_produced() {
         script(&h);
         let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
         e.submit(prompt(ASK)).await;
-        assert!(levels(&h).iter().all(|l| l == "high"), "{:?}", levels(&h));
+        assert!(effort_levels(&h).iter().all(|l| l == "high"), "{:?}", effort_levels(&h));
         assert!(nudges(&h.transcript_text()).iter().all(|n| n["kind"] != "adaptive_effort"));
     }
 }
@@ -3827,32 +3625,4 @@ async fn a_passing_version_saved_under_a_reused_label_is_kept() {
     assert_eq!(t.matches(r#""subtype":"passing_snapshot""#).count(), 2);
     let listed = tool_results(&e).last().unwrap().1.clone();
     assert!(listed.contains("passing-1"), "the version just saved is still there: {listed}");
-}
-
-/// Rewriting the same file again and again with no check between is not progress: the stretch
-/// goes on, and its nudge says to run a check. Writing a new file each time is progress.
-#[tokio::test]
-async fn rewriting_one_file_without_a_check_is_not_progress() {
-    let n = crate::progress::NO_BUDGET_CALLS as usize + 2;
-    let run = |same_file: bool| async move {
-        let h = Harness::new(vec![]);
-        std::fs::create_dir_all(h.cwd()).unwrap();
-        std::fs::write(h.cwd().join("app.py"), "v = 0\n").unwrap();
-        h.provider.push(MockTurn::tool("Read", json!({"file_path": h.cwd().join("app.py")})));
-        for i in 0..n {
-            let name = if same_file { "app.py".to_string() } else { format!("part_{i}.py") };
-            let f = h.cwd().join(name);
-            h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": format!("v = {i}\n")})));
-        }
-        h.provider.push(MockTurn::text("done"));
-        let cfg = EngineConfig { verify: None, ..nudged_cfg("progress") };
-        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-        e.submit(prompt("improve app.py")).await;
-        let t = h.transcript_text();
-        let text =
-            h.provider.requests().iter().map(|r| serde_json::to_string(&r.messages).unwrap()).collect::<String>();
-        (nudges(&t).len(), text.contains("Run a check on what is there"))
-    };
-    assert_eq!(run(true).await, (1, true), "the same file over and over: nudged to check");
-    assert_eq!(run(false).await, (0, false), "a new file each time is progress");
 }

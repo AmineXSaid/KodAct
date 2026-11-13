@@ -280,8 +280,8 @@ pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
     }
 }
 
-/// Which progress nudges are on: `KODACT_NUDGES` (a list such as `progress,shellEdit`, or `all`,
-/// for A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
+/// Which nudges are on: `KODACT_NUDGES` (a list such as `shellEdit,constraints`, or `all`, for
+/// A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
 /// measured it; `reminders: false` still turns them all off.
 pub(crate) fn nudges(settings: &LoadedSettings, warnings: &mut Vec<String>) -> kodact_engine::NudgeConfig {
     if let Some(list) = env_nonempty("KODACT_NUDGES") {

@@ -47,3 +47,9 @@ and both of those runs passed.
 Conclusion for now: on this task and model the progress nudge rarely has anything to say and
 costs nothing when silent. Whether it helps when it speaks needs a task where models stall
 more often. It stays off by default.
+
+## Since then
+
+The pacing nudges (`progress`, `progressEarly`, `pace`, `backOff`) were removed on 2026-11-13
+(CHANGELOG, "The pacing nudges are removed"): Terminal-Bench runs with them on showed no gain
+either. The tables above are kept as measured.

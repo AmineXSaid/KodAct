@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -270,9 +269,9 @@ pub struct EngineConfig {
     pub escalate_output: bool,
     /// Start in fast mode (`fastMode` setting).
     pub fast: bool,
-    /// Progress nudges (`nudges` in settings, `KODACT_NUDGES`): each off until measured, and
-    /// all off with `reminders`. Never in sub-agents.
-    pub nudges: crate::progress::NudgeConfig,
+    /// Nudges (`nudges` in settings, `KODACT_NUDGES`): each off until measured, and all off
+    /// with `reminders`. Never in sub-agents.
+    pub nudges: crate::nudges::NudgeConfig,
 }
 
 /// The output cap after a `max_tokens` stop (capped by the model).
@@ -759,19 +758,10 @@ pub struct Engine {
     time_up: Arc<std::sync::atomic::AtomicBool>,
     verify: crate::verify::Tracker,
     guard: crate::stuck::LoopGuard,
-    /// This turn's progress, for the pacing nudges.
-    progress: crate::progress::Progress,
     /// What this turn's request names: its files and commands.
     named: crate::named::Named,
     /// The named files on disk, watched for progress.
     watched: crate::named::Watched,
-    /// Nudges silenced for the rest of the run (`nudges.backOff`).
-    back_off: crate::progress::BackOff,
-    /// Files written since a check last passed: writing one of them again is not counted as
-    /// progress by the pacing nudges.
-    written_unchecked: HashSet<PathBuf>,
-    /// This step's only progress was writing again to such files.
-    rewrite_only: bool,
     /// The shell-edit suggestion was given this turn.
     shell_edit_told: bool,
     /// Shell commands run this turn, for the constraint report.
@@ -913,12 +903,8 @@ impl Engine {
             session_context,
             verify: Default::default(),
             guard: Default::default(),
-            progress: Default::default(),
             named: Default::default(),
             watched: Default::default(),
-            back_off: Default::default(),
-            written_unchecked: Default::default(),
-            rewrite_only: false,
             shell_edit_told: false,
             ran_commands: vec![],
             constraints_told: false,
@@ -1920,7 +1906,7 @@ impl Engine {
         if let Some((from, to, why)) = l.record(step) {
             self.system_event(
                 "nudge",
-                json!({"kind": crate::progress::Nudge::AdaptiveEffort.as_str(), "from": from, "to": to, "why": why}),
+                json!({"kind": crate::nudges::Nudge::AdaptiveEffort.as_str(), "from": from, "to": to, "why": why}),
             );
             self.notice(NoticeLevel::Info, format!("Reasoning effort {from} → {to}: {why}."));
         }
@@ -2532,7 +2518,6 @@ impl Engine {
         }
         self.verify = Default::default();
         self.guard = Default::default();
-        self.progress = crate::progress::Progress::new(self.state.total_cost_usd);
         self.named = crate::named::Named::from_request(&prompt_text, &self.shared.tool_ctx.project_dir);
         self.watched = crate::named::Watched::at_start(&self.named, &self.shared.tool_ctx.project_dir);
         self.shell_edit_told = false;
@@ -2697,7 +2682,7 @@ impl Engine {
                     };
                     self.system_event(
                         "nudge",
-                        json!({"kind": crate::progress::Nudge::ThinkingTimeBox.as_str(), "secs": secs, "reasoning_chars": kept}),
+                        json!({"kind": crate::nudges::Nudge::ThinkingTimeBox.as_str(), "secs": secs, "reasoning_chars": kept}),
                     );
                     self.notice(
                         NoticeLevel::Warning,
@@ -2985,10 +2970,7 @@ impl Engine {
                 // Shell commands that may write: the files they name, as they are now.
                 let shell_before: Vec<Option<crate::shell_edit::Before>> =
                     tool_uses.iter().map(|(_, name, input)| self.shell_edit_before(name, input)).collect();
-                let tools_started = Instant::now();
                 let mut ran = crate::exec::run_tools(&self.shared, &to_run, &cancel, self.mode_str()).await.into_iter();
-                // Waiting on tools (a build, a download) is not the model's time without progress.
-                self.progress.waited(tools_started.elapsed());
                 let writes_now = self.shared.history.writes_len();
                 let mut results: Vec<crate::exec::CallResult> = tool_uses
                     .iter()
@@ -3051,11 +3033,6 @@ impl Engine {
                 } else {
                     crate::effort_loop::Step::Other
                 });
-                if made_progress {
-                    self.progress_for_back_off();
-                } else if self.cfg.nudges.back_off {
-                    self.back_off.step();
-                }
                 for ((_, name, input), r) in tool_uses.iter().zip(&results) {
                     if name == "Bash" && r.denial.is_none() {
                         if let Some(c) = input.get("command").and_then(Value::as_str) {
@@ -3101,20 +3078,13 @@ impl Engine {
                     self.system_event("loop_guard", s.record());
                     self.push_user(Message::user_text(s.text()), true, None, true);
                 }
-                // Pacing by progress: a long stretch with nothing made. The loop guard speaks
-                // first; one reminder per step is enough.
-                if !interrupted {
-                    if let Some(text) = self.progress_nudge(made_progress, stuck.is_empty()) {
-                        self.push_user(Message::user_text(text), true, None, true);
-                    }
-                }
                 if !interrupted {
                     if let Some(text) = self.stale_note(turn.api_calls, false) {
                         self.push_user(Message::user_text(text), true, None, true);
                     }
                 }
                 if self.cfg.reminders && !budget_warned && !interrupted {
-                    if let Some(text) = self.budget_warning(turn.api_calls, started) {
+                    if let Some(text) = self.budget_warning(turn.api_calls) {
                         budget_warned = true;
                         self.push_user(Message::user_text(text), true, None, true);
                     }
@@ -3156,9 +3126,7 @@ impl Engine {
             // end while they run, so their result isn't lost (unattended, the run's end would stop
             // them). It waits for them, then goes on with how they ended.
             if background_waits < BACKGROUND_WAITS && stop_reason != Some(StopReason::Refusal) {
-                let waiting = Instant::now();
                 let ended = self.wait_for_background(&cancel).await;
-                self.progress.waited(waiting.elapsed());
                 if let Some(text) = ended {
                     background_waits += 1;
                     self.push_user(Message::user_text(text), true, None, true);
@@ -3232,7 +3200,7 @@ impl Engine {
                     &self.shared.tool_ctx.project_dir,
                     &self.ran_commands,
                 );
-                if let Some((text, record)) = report.filter(|_| self.may_nudge(crate::progress::Nudge::Constraints)) {
+                if let Some((text, record)) = report {
                     self.system_event("nudge", record);
                     notes.push(text);
                 }
@@ -3248,14 +3216,12 @@ impl Engine {
             // A version that passed is saved and the files now fail: said once a turn. Restoring
             // it is the model's choice (or the person's), never KodAct's.
             if self.cfg.reminders && !self.passing_told && !refused {
-                if let Some(note) =
-                    self.passing_note().filter(|_| self.may_nudge(crate::progress::Nudge::PassingSnapshot))
-                {
+                if let Some(note) = self.passing_note() {
                     self.passing_told = true;
                     let (label, ..) = self.passing.clone().unwrap_or_default();
                     self.system_event(
                         "nudge",
-                        json!({"kind": crate::progress::Nudge::PassingSnapshot.as_str(), "label": label}),
+                        json!({"kind": crate::nudges::Nudge::PassingSnapshot.as_str(), "label": label}),
                     );
                     notes.push(format!(
                         "<system-reminder>\n{note} If you can't fix the failure, put that version back rather than \
@@ -3396,62 +3362,30 @@ impl Engine {
 
     /// A heads-up when this run's turn, spending or time limit is close (GOALS pillar 5), so the model
     /// wraps up with a report instead of being cut off mid-change.
-    fn budget_warning(&self, calls: u32, started: Instant) -> Option<String> {
-        let pace = self.cfg.nudges.pace && !self.cfg.is_subagent;
+    fn budget_warning(&self, calls: u32) -> Option<String> {
         let turns_left = self.cfg.max_turns.filter(|m| *m >= 6).map(|m| m.saturating_sub(calls)).filter(|l| *l <= 3);
         let money_left = self
             .cfg
             .max_budget_usd
             .map(|b| b - self.state.total_cost_usd)
             .filter(|left| self.cfg.max_budget_usd.map(|b| *left <= b * 0.15).unwrap_or(false));
-        // With `nudges.pace`: the steps the time left holds at this turn's pace so far.
-        let steps = self
-            .cfg
-            .time_limit
-            .filter(|_| pace)
-            .and_then(|t| crate::progress::steps_left(t.remaining(), started.elapsed(), calls));
+        // A fifth of the time left, and at least a minute.
         let time_left = self
             .cfg
             .time_limit
             .map(|t| (t.remaining(), t.total))
-            .filter(|(left, total)| crate::progress::time_warning_due(*left, *total, steps.map(|(n, _)| n)))
+            .filter(|(left, total)| *left <= (*total / 5).max(Duration::from_secs(60)))
             .map(|(left, _)| left);
         let what = match (turns_left, money_left, time_left) {
             (Some(t), _, _) => {
                 format!("{t} model call{} left in this run (--max-turns)", if t == 1 { "" } else { "s" })
             }
             (None, Some(m), _) => format!("${m:.2} of the run's budget left (--max-budget-usd)"),
-            (None, None, Some(left)) => match steps {
-                Some((n, per)) => format!(
-                    "{} of the run's time left (--max-time); at this run's pace so far (about {} s a step), that \
-                     is about {n} more step{}",
-                    about(left),
-                    per.as_secs().max(1),
-                    if n == 1 { "" } else { "s" }
-                ),
-                None => format!("{} of the run's time left (--max-time)", about(left)),
-            },
+            (None, None, Some(left)) => format!("{} of the run's time left (--max-time)", about(left)),
             (None, None, None) => return None,
         };
-        // The files the request asks for that still don't exist: only what is on disk counts.
-        let missing = if pace { self.watched.still_missing() } else { vec![] };
-        let first = if missing.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " These files the request asks for don't exist yet: {}. Only what is in them when the run ends \
-                 counts: write your best version to them first, then improve it.",
-                missing.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ")
-            )
-        };
-        if pace && (steps.is_some() || !missing.is_empty()) {
-            self.system_event(
-                "nudge",
-                json!({"kind": "pace", "steps_left": steps.map(|(n, _)| n), "missing": missing}),
-            );
-        }
         Some(format!(
-            "<system-reminder>\nYou have {what}.{first} Wrap up: if the version now in place tested worse than one \
+            "<system-reminder>\nYou have {what}. Wrap up: if the version now in place tested worse than one \
              you had before, put the better one back first. Then finish the most important change, check it, and \
              end with what is done, what was verified and what remains.\n</system-reminder>"
         ))
@@ -3863,19 +3797,19 @@ impl Engine {
         })
     }
 
-    /// Did this step make progress? A file the request names changed on disk (by any tool, a
-    /// script's output included), or a check passed. When the request asks for no new file,
-    /// any file written counts too, and when it names no file at all, so does a shell command
-    /// that changed something. Helper scripts and scratch files written while the files the
-    /// request asks for don't exist yet are not progress. A failed or refused call made nothing.
+    /// Did this step make progress (what `nudges.adaptiveEffort` follows)? A file the request
+    /// names changed on disk (by any tool, a script's output included), or a check passed. When
+    /// the request asks for no new file, any file written counts too, and when it names no file
+    /// at all, so does a shell command that changed something. Helper scripts and scratch files
+    /// written while the files the request asks for don't exist yet are not progress. A failed
+    /// or refused call made nothing.
     fn made_progress(
-        &mut self,
+        &self,
         calls: &[(String, String, Value)],
         results: &[crate::exec::CallResult],
         writes_before: usize,
         changed_named: &[String],
     ) -> bool {
-        let any_write = !self.watched.asks_for_new();
         let configured = self.check_commands();
         let changed = self.shared.history.writes_since(0);
         // A check that passed, or (no file named) a command that changed something.
@@ -3888,31 +3822,10 @@ impl Engine {
                 || (!self.named.names_files()
                     && !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true))
         });
-        self.rewrite_only = false;
-        if ran {
-            self.written_unchecked.clear();
-            return true;
-        }
-        // A write is progress the first time it reaches a file: a file the request names (by
-        // any tool), or, when it asks for no new file, any file an edit tool wrote. Writing the
-        // same files again with no check passing in between is the model going over its own
-        // work: that may be careful editing or thrashing, and the stretch doesn't start over.
-        let project = self.shared.tool_ctx.project_dir.clone();
-        let mut wrote: Vec<PathBuf> = changed_named.iter().map(|n| project.join(n)).collect();
-        if any_write {
-            wrote.extend(self.shared.history.writes_since(writes_before));
-        }
-        if wrote.is_empty() {
-            return false;
-        }
-        let mut new = false;
-        for p in wrote {
-            new |= self.written_unchecked.insert(p);
-        }
-        // Still work produced (for back-off and the reasoning level); only the pacing stretch
-        // treats it as going over the same ground.
-        self.rewrite_only = !new;
-        true
+        // Or a write: to a file the request names (by any tool), or, when it asks for no new
+        // file, to any file an edit tool wrote.
+        ran || !changed_named.is_empty()
+            || (!self.watched.asks_for_new() && !self.shared.history.writes_since(writes_before).is_empty())
     }
 
     /// Shell output held against the limits the request states (`nudges.limitVerdicts`), and a
@@ -3952,7 +3865,7 @@ impl Engine {
                     self.unsaved = Some((step, command.to_string(), v.line.clone(), v.scope.clone()));
                 }
             }
-            if !verdicts_on || !self.may_nudge(crate::progress::Nudge::LimitVerdict) {
+            if !verdicts_on {
                 continue;
             }
             let scoped: Vec<(Option<String>, &crate::limits::Measured)> =
@@ -3962,7 +3875,7 @@ impl Engine {
             self.system_event(
                 "nudge",
                 json!({
-                    "kind": crate::progress::Nudge::LimitVerdict.as_str(),
+                    "kind": crate::nudges::Nudge::LimitVerdict.as_str(),
                     "lines": verdicts.len(),
                     "met": verdicts.iter().filter(|v| v.all_met()).count(),
                     "across": globals.iter().map(|(g, _)| g.name.clone()).collect::<Vec<_>>(),
@@ -3997,13 +3910,10 @@ impl Engine {
             if !changed.contains(&file) || self.size_told.get(&file).copied().unwrap_or(0) >= MAX_PER_FILE {
                 continue;
             }
-            if !self.may_nudge(crate::progress::Nudge::SizeLimit) {
-                continue;
-            }
             *self.size_told.entry(file.clone()).or_default() += 1;
             self.system_event(
                 "nudge",
-                json!({"kind": crate::progress::Nudge::SizeLimit.as_str(), "file": file, "size": size, "limit": max}),
+                json!({"kind": crate::nudges::Nudge::SizeLimit.as_str(), "file": file, "size": size, "limit": max}),
             );
             // The call that wrote it: a file tool on that path, else a shell command naming it,
             // else the step's last call (a script it ran wrote the file).
@@ -4051,7 +3961,7 @@ impl Engine {
         }
         let (at, command, line, scope) = self.unsaved.clone()?;
         let due = if at_end { !self.stale_end_told } else { self.stale_told < 2 && step >= at + STALE_AFTER };
-        if !due || !self.may_nudge(crate::progress::Nudge::StaleDeliverable) {
+        if !due {
             return None;
         }
         if at_end {
@@ -4065,7 +3975,7 @@ impl Engine {
         self.system_event(
             "nudge",
             json!({
-                "kind": crate::progress::Nudge::StaleDeliverable.as_str(),
+                "kind": crate::nudges::Nudge::StaleDeliverable.as_str(),
                 "steps": step.saturating_sub(at),
                 "files": files,
                 "at_end": at_end,
@@ -4112,11 +4022,11 @@ impl Engine {
                 let Some(d) = crate::diagnose::check(&path).await else { continue };
                 let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
                 let mut text = d.text(&shown);
-                if !self.shell_edit_told && self.may_nudge(crate::progress::Nudge::ShellEdit) {
+                if !self.shell_edit_told {
                     self.shell_edit_told = true;
                     self.system_event(
                         "nudge",
-                        json!({"kind": crate::progress::Nudge::ShellEdit.as_str(), "file": shown, "parser": d.parser}),
+                        json!({"kind": crate::nudges::Nudge::ShellEdit.as_str(), "file": shown, "parser": d.parser}),
                     );
                     text.push_str(&crate::shell_edit::suggestion(&shown));
                 }
@@ -4177,68 +4087,6 @@ impl Engine {
                  `Checkpoint` with action `restore` and label `{label}` brings that version back."
             )
         })
-    }
-
-    /// May this nudge be given now? With `nudges.backOff`, a pacing nudge the model twice didn't
-    /// need (progress came only late) is not; any other note always is. Giving it is noted, for
-    /// the count.
-    fn may_nudge(&mut self, kind: crate::progress::Nudge) -> bool {
-        if !self.cfg.nudges.back_off {
-            return true;
-        }
-        if !self.back_off.allows(kind) {
-            return false;
-        }
-        self.back_off.nudged(kind);
-        true
-    }
-
-    /// Progress was made this step: settle the pacing nudges waiting on it (acted on, or not
-    /// needed), and log the ones back-off silences.
-    fn progress_for_back_off(&mut self) {
-        if !self.cfg.nudges.back_off {
-            return;
-        }
-        for kind in self.back_off.progress() {
-            self.system_event("nudge_silenced", json!({"kind": kind.as_str()}));
-        }
-    }
-
-    /// The run's budgets, for the pacing nudges.
-    fn run_budget(&self) -> crate::progress::Budget {
-        crate::progress::Budget {
-            max_calls: self.cfg.max_turns,
-            time: self.cfg.time_limit.map(|t| t.total),
-            usd: self.cfg.max_budget_usd,
-        }
-    }
-
-    /// Count this step for the pacing nudges, and give one when it is due (`may_nudge`: no
-    /// other reminder was given this step).
-    fn progress_nudge(&mut self, made: bool, may_nudge: bool) -> Option<String> {
-        let n = &self.cfg.nudges;
-        if !self.cfg.reminders || self.cfg.is_subagent || !(n.progress || n.progress_early) {
-            return None;
-        }
-        let cost = self.state.total_cost_usd;
-        if made && !self.rewrite_only {
-            self.progress.made(cost);
-            return None;
-        }
-        if made {
-            self.progress.rewrote();
-        }
-        self.progress.step();
-        if !may_nudge {
-            return None;
-        }
-        let budget = self.run_budget();
-        let (kind, stretch) = self.progress.due(&budget, cost, n.progress_early, n.progress)?;
-        if !self.may_nudge(kind) {
-            return None;
-        }
-        self.system_event("nudge", crate::progress::record(kind, stretch));
-        Some(crate::progress::text(kind, stretch, budget.exists()))
     }
 
     /// The reminder to send before the turn may end, if one is due.

@@ -15,7 +15,7 @@ pub mod format;
 mod limits;
 pub mod lsp;
 mod named;
-pub mod progress;
+pub mod nudges;
 pub mod prompts;
 mod repeat;
 pub mod request;
@@ -34,7 +34,7 @@ pub use events::{
     PermissionPrompter, SerializedPrompter, VecSink,
 };
 pub use lsp::{LspConfig, ServerSpec};
-pub use progress::NudgeConfig;
+pub use nudges::NudgeConfig;
 pub use prompts::{build_system, EnvInfo, SystemPromptOptions};
 pub use snapshot::{side_question_request, EngineSnapshot, TurnProgress};
 pub use verify::{detect_checks, Verified, VerifyConfig};
