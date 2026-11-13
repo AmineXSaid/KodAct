@@ -74,7 +74,7 @@ Test names are `<crate or file>::<test>`; `e2e` is `crates/kodact-cli/tests/e2e.
 | Read | partial | `builtin::read_numbers_lines_and_pages`, `notebook_edit_replace_insert_delete`, `openai::tests::a_tool_result_never_carries_base64_and_its_images_follow` | Text, images, notebooks done. PDFs are sent whole: `pages` is passed as a hint, not extracted. On an OpenAI-compatible endpoint (no document block) a PDF goes as its extracted text (`pdf_text`, lopdf with a stream-scan fallback), and images a tool returned follow in the next user message |
 | Write | done | `builtin::write_creates_and_checkpoints`, `files::tests::a_file_made_during_the_session_may_be_written_unread` | Beyond the reference: a file created after the session started (by a shell command or a script) may be written or edited unread; the person's files, and files put back by a checkpoint, must still be read first |
 | Edit | done | `builtin::edit_requires_read_and_unique_match`, `edit_preserves_crlf_and_multiedit_is_atomic` |  |
-| MultiEdit | done | `builtin::edit_preserves_crlf_and_multiedit_is_atomic` |  |
+| MultiEdit | done | `builtin::edit_preserves_crlf_and_multiedit_is_atomic` | Like Edit, matches a CRLF file against LF text and keeps its line endings. Eval task `crlf-blocks` |
 | NotebookEdit | done | `builtin::notebook_edit_replace_insert_delete` |  |
 | Glob | done | `builtin::glob_and_grep` |  |
 | Grep | done | `builtin::glob_and_grep` |  |
@@ -87,9 +87,9 @@ Test names are `<crate or file>::<test>`; `e2e` is `crates/kodact-cli/tests/e2e.
 | WebSearch | done | `builtin::web_fetch_converts_summarizes_and_reports_redirects`, `web::search_results_list_their_sources` | Through the provider's `web_search_20250305` server tool (`webSearch.toolType` overrides); not offered with OpenAI-compatible providers. No live test |
 | ExitPlanMode / EnterPlanMode | done | `engine::c8_questions_and_plan_approval_with_a_person`, `engine::c8_headless_questions_and_plans_are_answered_by_contract` | Contract C8; approval ends plan mode, or sets the mode the approval names |
 | AskUserQuestion | done | `engine::c8_questions_and_plan_approval_with_a_person`, `engine::c8_headless_questions_and_plans_are_answered_by_contract` | Contract C8; the line REPL numbers the options |
-| Skill | todo | | |
+| Skill | done | `skills::discovers_and_loads_skills_on_demand` | Lists model-invocable skills; one with `paths` is offered once a matching file was read or written |
 | SlashCommand | todo | | |
-| ListMcpResources / ReadMcpResource | todo | | |
+| ListMcpResources / ReadMcpResource | done | `mcp::stdio_server_tools_resources_and_server_requests` | Named `ListMcpResourcesTool` and `ReadMcpResourceTool`; offered only when a connected server has resources |
 | TaskCreate / TaskUpdate / TaskList / TaskGet | todo | | |
 | EnterWorktree / ExitWorktree | todo | | |
 
@@ -270,7 +270,7 @@ and T; every command marked R also runs in T.
 | `/context [all]` | done | PR | `core::driver_tests::rename_export_context_and_diff` | Estimates (4 chars a token) per part against the window, the last measured request, suggestions. Immediate. In the TUI, bare `/context` is a 10×10 colour grid with the same numbers (letters without colour), mid-turn too (`tui::session::tests::bare_diff_and_context_open_screens`, `core::driver_tests::context_screen_and_text_share_their_numbers`, `tui::render::tests::context_parts_use_letters_without_colour`) |
 | `/model [model]` | done | PRT | `core::driver_tests::model_effort_and_fast_reach_the_request`, `core::driver_tests::interactive_surfaces_save_defaults`, `cmds::settings_commands_persist_and_reach_the_api` | Text list in P and R, a picker in T; saves `model` in R, session-only in P. Warns when effort or fast mode stop applying. Lists only what the endpoint reports (`Provider::list_models`), never a built-in catalogue (`core::driver_tests::model_lists_only_what_the_endpoint_offers`) |
 | `/effort [level\|auto\|status]` | done | PR | `core::driver_tests::model_effort_and_fast_reach_the_request` | Levels from the model table; `max` is session-only; `auto` clears it |
-| `/fast [on\|off]` | partial | PR | `core::driver_tests::model_effort_and_fast_reach_the_request`, `cmds::settings_commands_persist_and_reach_the_api` | Sends `speed: fast` and the beta flag only on models that offer it. Gap: fast-mode prices aren't modelled, so `/usage` under-reports its cost |
+| `/fast [on\|off]` | done | PR | `core::driver_tests::model_effort_and_fast_reach_the_request`, `cmds::settings_commands_persist_and_reach_the_api`, `core::driver_tests::fast_mode_is_priced_at_the_fast_rate` | Sends `speed: fast` and the beta flag only on models that offer it. Fast mode is priced at twice the model's rates (`FAST_PRICE_MULTIPLIER`) |
 | `/config [key=value]` (`/settings`) | done | PR | `core::driver_tests::config_validates_then_writes_and_applies`, `core::driver_tests::config_reports_a_layer_that_overrides_it`, `cmds::settings_commands_persist_and_reach_the_api` | Argument form of the reference's panel: a whitelist of ten keys, validated before any write, applied live, `--scope`; names an overriding layer |
 | `/output-style [style]` | done | PRT | `core::driver_tests::output_style_survives_an_sdk_system_prompt` | Rebuilds the system prompt; saves `outputStyle` in local settings (R) |
 | `/autocompact [auto\|tokens]` | done | PR | `core::driver_tests::autocompact_and_sandbox` | Also `on`/`off` (`autoCompactEnabled`) |

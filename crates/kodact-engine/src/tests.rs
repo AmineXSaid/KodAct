@@ -2624,6 +2624,19 @@ async fn an_unattended_run_is_told_its_background_commands_will_be_stopped() {
     e.end_session("test").await;
 }
 
+/// In a sandbox that gives each command its own network, `nohup` inside it leaves a server
+/// nothing outside can reach: the reminder names the unsandboxed start instead, and what to do
+/// when that is refused. Elsewhere it reads as before.
+#[test]
+fn the_background_reminder_does_not_promise_a_reachable_server_inside_the_sandbox() {
+    let plain = crate::engine::background_text("`serve` (bash_1)", false);
+    assert!(plain.contains("nohup") && !plain.contains("sandbox"), "{plain}");
+    let boxed = crate::engine::background_text("`serve` (bash_1)", true);
+    assert!(boxed.contains("`serve` (bash_1)") && boxed.contains("stopped when the session ends"), "{boxed}");
+    assert!(boxed.contains("dangerouslyDisableSandbox: true") && boxed.contains("can't be reached"), "{boxed}");
+    assert!(boxed.contains("If the approval is refused"), "{boxed}");
+}
+
 #[tokio::test]
 async fn a_check_that_finishes_in_the_background_counts() {
     let h = Harness::new(vec![]);

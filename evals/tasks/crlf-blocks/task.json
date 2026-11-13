@@ -1,0 +1,10 @@
+{
+  "instruction": "In servers.ini, the [staging] and [backup] sections should retry 5 times with a backoff of 2, and each gets a new line `jitter = true` right after its backoff line. Leave [primary] and everything else in the file exactly as it is.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": [
+    "edit",
+    "crlf"
+  ],
+  "timeout_secs": 300
+}

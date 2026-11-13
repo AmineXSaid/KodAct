@@ -240,7 +240,17 @@ async fn edit_preserves_crlf_and_multiedit_is_atomic() {
     assert!(!out.is_error, "{out:?}");
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "1\r\n2\r\n");
 
+    // MultiEdit too: a block copied from Read (LF) matches a CRLF file, and the file stays CRLF.
+    std::fs::write(&f, "a\r\nb\r\nc\r\nd\r\n").unwrap();
+    filetime_bump(&f);
+    Read.call(json!({"file_path": f}), &c).await;
+    let edits = json!([{"old_string": "a\nb", "new_string": "A\nB\nB2"}, {"old_string": "d", "new_string": "D"}]);
+    let out = MultiEdit.call(json!({"file_path": f, "edits": edits}), &c).await;
+    assert!(!out.is_error, "{out:?}");
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "A\r\nB\r\nB2\r\nc\r\nD\r\n");
+
     std::fs::write(&f, "x y z").unwrap();
+    filetime_bump(&f);
     Read.call(json!({"file_path": f}), &c).await;
     let out = MultiEdit
         .call(json!({"file_path": f, "edits": [{"old_string": "x", "new_string": "X"}, {"old_string": "nope", "new_string": "?"}]}), &c)
@@ -400,6 +410,16 @@ async fn sandbox_confines_writes_and_network() {
     };
     let input = json!({"command": "echo inside > made.txt && cat made.txt"});
     assert!(Bash::default().sandboxed(&input, &c));
+
+    // A background command in a sandbox with its own network is told its ports stay inside it;
+    // one started outside the sandbox, or with the network allowed, is not.
+    let isolated = c.sandbox_now().is_some_and(|(b, p)| p.isolates_ports(b));
+    let out = Bash::default().call(json!({"command": "sleep 5", "run_in_background": true}), &c).await;
+    assert_eq!(out.text_content().contains("can't be reached"), isolated, "{}", out.text_content());
+    let free = json!({"command": "sleep 5", "run_in_background": true, "dangerouslyDisableSandbox": true});
+    let out = Bash::default().call(free, &c).await;
+    assert!(!out.is_error && !out.text_content().contains("sandbox"), "{}", out.text_content());
+    c.shells.kill_all();
     let out = Bash::default().call(input, &c).await;
     assert!(!out.is_error, "{out:?}");
     assert!(c.project_dir.join("made.txt").exists());
