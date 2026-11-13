@@ -109,6 +109,7 @@ Test names are `<crate or file>::<test>`; `e2e` is `crates/kodact-cli/tests/e2e.
 | Thinking / effort per model | done | `request::thinking_per_model` |  |
 | Prompt-cache breakpoints | done | `engine::cache_breakpoints_on_system_tools_and_last_message` | System, last tool and last message |
 | Micro-compaction | done | `compact::c9_micro_clears_only_eligible_results`, `engine::c9_micro_is_sticky_across_requests` | Contract C9 |
+| Summary written ahead and held until compaction is due (KodAct's own; `compaction.background`, off until measured) | done | `engine::on_a_small_window_the_summary_is_written_ahead_and_applied_when_compaction_is_due`, `engine::on_a_large_window_the_same_conversation_writes_no_summary`, `engine::a_held_summary_keeps_the_messages_after_it_without_their_reasoning`, `engine::without_the_setting_no_summary_is_written_ahead`, `held::tests::*` | Context management / wall time and cost per compaction. Eval tasks `deliverable-small-window`, `deliverable-after-compaction`; idea from opencode (MIT) |
 | Auto-compact / `/compact` | done | `engine::c9_auto_triggers_at_threshold`, `engine::manual_compact_passes_instructions`, `engine::prompt_too_long_compacts_and_retries` | Contract C9. `/compact` works in every mode |
 
 ## Permissions

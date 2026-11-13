@@ -3954,7 +3954,6 @@ fn summary_requests(h: &Harness) -> usize {
 }
 
 #[tokio::test]
-#[ignore = "the held summary (harness study O3) not implemented yet"]
 async fn on_a_small_window_the_summary_is_written_ahead_and_applied_when_compaction_is_due() {
     // Window 24k: compaction is due at 15k. 12.5k is past the lead but not due yet.
     let h = responding(
@@ -3965,7 +3964,8 @@ async fn on_a_small_window_the_summary_is_written_ahead_and_applied_when_compact
         ],
         "<summary>held summary of the first step</summary>",
     );
-    let mut e = h.engine_with(small_window(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let ahead = EngineConfig { background_summary: true, ..small_window() };
+    let mut e = h.engine_with(ahead, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     let r = e.submit(prompt("run the two steps")).await;
     assert_eq!(r.result.as_deref(), Some("done"));
     assert_eq!(summary_requests(&h), 1, "one summary, written ahead; none at the limit");
@@ -3978,7 +3978,6 @@ async fn on_a_small_window_the_summary_is_written_ahead_and_applied_when_compact
 }
 
 #[tokio::test]
-#[ignore = "the held summary (harness study O3) not implemented yet"]
 async fn on_a_large_window_the_same_conversation_writes_no_summary() {
     let h = responding(
         vec![
@@ -3988,9 +3987,58 @@ async fn on_a_large_window_the_same_conversation_writes_no_summary() {
         ],
         "<summary>unused</summary>",
     );
-    let large = EngineConfig { autocompact_window: Some(1_000_000), ..Default::default() };
+    let large = EngineConfig { autocompact_window: Some(1_000_000), background_summary: true, ..Default::default() };
     let mut e = h.engine_with(large, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     assert_eq!(e.submit(prompt("run the two steps")).await.result.as_deref(), Some("done"));
     assert_eq!(summary_requests(&h), 0, "far from the limit: nothing is written ahead");
     assert!(!h.transcript_text().contains("compact_boundary"));
+}
+
+#[tokio::test]
+async fn a_held_summary_keeps_the_messages_after_it_without_their_reasoning() {
+    use kodact_types::StopReason;
+    let thinking_step = MockTurn::blocks(
+        vec![
+            ContentBlock::Thinking { thinking: "plan the second step".into(), signature: "sig".into() },
+            ContentBlock::ToolUse {
+                id: "toolu_second".into(),
+                name: "Bash".into(),
+                input: json!({"command": "echo second-step"}),
+                cache_control: None,
+                provider: None,
+            },
+        ],
+        StopReason::ToolUse,
+    )
+    .with_usage(usage(15_500));
+    let h = responding(
+        vec![
+            MockTurn::tool("Bash", json!({"command": "echo first-step"})).with_usage(usage(12_500)),
+            thinking_step,
+            MockTurn::text("done"),
+        ],
+        "<summary>held summary of the first step</summary>",
+    );
+    let ahead = EngineConfig { background_summary: true, ..small_window() };
+    let mut e = h.engine_with(ahead, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("run the two steps")).await;
+    let last = h.provider.requests().into_iter().rfind(|r| r.tool_choice.is_none()).unwrap();
+    let text = serde_json::to_string(&last.messages).unwrap();
+    assert!(text.contains("toolu_second"), "the step after the summary is kept");
+    assert!(!text.contains("plan the second step"), "its reasoning, written about the replaced part, is not");
+    assert!(h.transcript_text().contains("summary_ahead_applied"));
+}
+
+#[tokio::test]
+async fn without_the_setting_no_summary_is_written_ahead() {
+    let h = responding(
+        vec![
+            MockTurn::tool("Bash", json!({"command": "echo first-step"})).with_usage(usage(12_500)),
+            MockTurn::text("done"),
+        ],
+        "<summary>unused</summary>",
+    );
+    let mut e = h.engine_with(small_window(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("step")).await;
+    assert_eq!(summary_requests(&h), 0, "below the threshold, today's behaviour: nothing is written");
 }

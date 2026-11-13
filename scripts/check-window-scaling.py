@@ -14,7 +14,9 @@ What it checks:
                 none is refused;
   --max-time:   a slow reply under a 3-second limit stops near the limit with stop_reason max_time.
 
-Usage: scripts/check-window-scaling.py [path/to/kodact]   (default: target/debug/kodact)
+Usage: scripts/check-window-scaling.py [--env NAME=VALUE ...] [path/to/kodact]
+       (default: target/debug/kodact). `--env` sets a variable for kodact's runs, after the
+       script's own: `--env KODACT_BACKGROUND_SUMMARY=1` checks a setting under test.
 """
 
 import json
@@ -148,6 +150,7 @@ def run(kodact: str, window: int, extra=(), slow=False):
         "NO_PROXY": "127.0.0.1,localhost",
         "no_proxy": "127.0.0.1,localhost",
     })
+    env.update(EXTRA_ENV)
     args = [kodact, "-p", REQUEST, "--output-format", "stream-json", "--verbose", "--model", "check-model",
             "--dangerously-skip-permissions", *extra]
     t0 = time.time()
@@ -157,6 +160,9 @@ def run(kodact: str, window: int, extra=(), slow=False):
     events = [json.loads(line) for line in p.stdout.splitlines() if line.startswith("{")]
     compactions = sum(1 for e in events if e.get("type") == "system" and e.get("subtype") == "compact_boundary")
     result = next((e for e in events if e.get("type") == "result"), {})
+    for e in events:
+        if e.get("type") == "system" and str(e.get("subtype", "")).startswith("summary_ahead"):
+            print(f"   [{e['subtype']}] {json.dumps({k: v for k, v in e.items() if k not in ('type', 'subtype', 'session_id', 'uuid')})}")
     return model.log, compactions, result, elapsed, p.stderr
 
 
@@ -175,8 +181,16 @@ def show(name, log, compactions, result):
         print(f"   {e['prompt']:>8} {e['asked']:>7} {e['window_room']:>8}  {', '.join(note)}")
 
 
+EXTRA_ENV = {}
+
+
 def main():
-    kodact = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "target/debug/kodact")
+    argv = sys.argv[1:]
+    while len(argv) >= 2 and argv[0] == "--env":
+        name, _, value = argv[1].partition("=")
+        EXTRA_ENV[name] = value
+        argv = argv[2:]
+    kodact = os.path.abspath(argv[0] if argv else "target/debug/kodact")
     failures = []
 
     for window, name in [(1_000_000, "large window (1,000,000)"), (100_000, "small window (100,000)")]:
@@ -201,7 +215,12 @@ def main():
             if not after:
                 failures.append(f"{name}: no request after compaction carried the person's request word for word")
             near = [e for e in log if e["prompt"] > window - CAP - window // 50]
-            if not near:
+            ahead = EXTRA_ENV.get("KODACT_BACKGROUND_SUMMARY", "0") not in ("", "0", "false", "off", "no")
+            if not near and ahead:
+                # The summary written ahead was the request that came near the window: nothing does.
+                print(f"   note: with the summary written ahead, no request came near the window; the "
+                      f"reply budget near the window is checked by the run without --env")
+            elif not near:
                 failures.append(f"{name}: no request came near the window, so the reply budget wasn't tested")
             elif any(e["asked"] >= CAP for e in near):
                 failures.append(f"{name}: a request near the window still asked for the full cap")

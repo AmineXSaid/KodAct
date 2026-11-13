@@ -48,6 +48,12 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - compaction in tiers: sticky micro-compaction of stale tool results,
     summarization near the limit, and compact-and-retry when a prompt is too
     long;
+  - a summary written ahead (`compaction.background`, off until measured):
+    started in the background near the limit from the cached request, held
+    until compaction is due, then applied with the messages since kept word
+    for word and their reasoning left out. The lead grows with how fast the
+    run grows, so a conversation that jumps by large reads still gets it in
+    time (`scripts/check-window-scaling.py --env KODACT_BACKGROUND_SUMMARY=1`);
   - sub-agents, so exploration runs in a separate context and only its result
     comes back;
   - budgets on tool output: long Bash output (30k characters), and any other

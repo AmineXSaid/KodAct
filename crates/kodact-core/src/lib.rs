@@ -280,6 +280,16 @@ pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// Whether the compaction summary is written ahead, in the background, and held until
+/// compaction is due (`compaction.background`, or `KODACT_BACKGROUND_SUMMARY` for A/B runs). Off
+/// until an eval run has measured it.
+pub(crate) fn background_summary(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_BACKGROUND_SUMMARY") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/compaction/background").unwrap_or(false),
+    }
+}
+
 /// Which progress nudges are on: `KODACT_NUDGES` (a list such as `progress,shellEdit`, or `all`,
 /// for A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
 /// measured it; `reminders: false` still turns them all off.
@@ -1116,6 +1126,7 @@ pub fn build_session(
             pricing: pricing.clone(),
             autocompact_window,
             auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
+            background_summary: background_summary(&settings),
             ..Default::default()
         },
         memory_context: memory.clone(),
@@ -1150,6 +1161,7 @@ pub fn build_session(
         metadata_user_id: None,
         autocompact_window,
         auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
+        background_summary: background_summary(&settings),
         is_subagent: false,
         edit_diagnostics: edit_diagnostics(&settings, verify.is_some()),
         language_servers: language_servers(&settings, verify.is_some()),
