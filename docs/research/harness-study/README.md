@@ -156,6 +156,9 @@ pruning (N9).
    change cannot be judged.
 5. **Compaction** (O3, O4, G5), after N1.
 
+Ready-to-paste agent prompts for the first five changes (tests first, then
+implementation) are in [prompts.md](prompts.md).
+
 ## What this study does not settle
 
 - Whether any item moves KodAct's metrics. No comparison was run.
