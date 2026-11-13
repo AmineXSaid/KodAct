@@ -200,7 +200,7 @@ pub struct ResultMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<Value>,
     /// How an unattended run ended with the Finish tool: `{"summary", "verified"}`. `verified`
-    /// is the model's claim; `verification` is what KodAct observed.
+    /// is the model's claim, not a check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish: Option<Value>,
     pub uuid: String,

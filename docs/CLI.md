@@ -357,7 +357,8 @@ Measures the harness; see `evals/README.md`. `run` writes `report.json` and
  "modelUsage": {"<model>": {"inputTokens": 0, "outputTokens": 0, "costUSD": 0.0}},
  "permission_denials": [{"tool_name": "Bash", "tool_use_id": "…", "tool_input": {}}],
  "errors": [], "structured_output": null,
- "verification": {"missing": ["out/report.txt"]}, "uuid": "uuid", "exit_code": 0}
+ "verification": {"missing": ["out/report.txt"]},
+ "finish": {"summary": "…", "verified": true}, "uuid": "uuid", "exit_code": 0}
 ```
 
 `verification.missing` lists the files the request asks to be made that
@@ -387,8 +388,12 @@ model's word, not a check KodAct ran:
 "finish": {"summary": "Fixed both bugs; the tests pass.", "verified": true}
 ```
 
+Don't gate on `verified`: a model can claim it for work that fails (task
+`finish-claim` sets up exactly that). Gate on your own check, as above:
+
 ```bash
-kodact -p "fix both bugs" --autonomous --output-format json | jq -e '.finish.verified'
+kodact -p "fix both bugs" --autonomous --output-format json > result.json
+pytest -q   # the gate: your check, not the model's claim
 ```
 
 `exit_code` appears in `json` mode only. A turn whose last replies held only

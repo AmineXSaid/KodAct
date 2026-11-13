@@ -11,6 +11,10 @@
   own check after `kodact` exits. `verification.missing` (files the request
   asks for that don't exist) stays, and the field is absent when nothing is
   missing. `kodact-eval`'s per-run "Changes" column is now "Missing files".
+- **`finish.verified` isn't a gate either**: an unattended run that ends with
+  the Finish tool records the model's claim in `finish`, and a model can claim
+  `verified` for work that fails. The docs gate on your own check, not on
+  `jq -e '.finish.verified'`.
 - **Inside KodAct, a check whose exit code the command hides counts as run,
   not as passed** (`pytest | tail -20`, `make test; echo done`,
   `./run || true`, a check in a loop or in the background; `set -e` and
