@@ -45,6 +45,11 @@ pub struct LoadedSession {
     /// process was killed or crashed mid-turn. Transcripts written before these records
     /// existed never say so.
     pub cut_off: bool,
+    /// What each signed thinking block was written on (`thinking_prefix` records), keyed by a
+    /// hash of its signature: a block whose history changed since is left out of requests.
+    /// Kept outside the message chain, so a rewind or compaction doesn't lose the records of
+    /// the blocks it kept.
+    pub thinking_prefixes: HashMap<String, String>,
 }
 
 /// Append-only writer for one session's JSONL file.
@@ -227,6 +232,14 @@ impl Transcript {
         self.write_line(&json!({"type": "goal", "goal": goal, "sessionId": self.session_id, "timestamp": now()}));
     }
 
+    /// Record what the signed thinking blocks of a reply were written on: `blocks` maps a hash
+    /// of each block's signature to the hash of the request before it.
+    pub fn record_thinking_prefixes(&self, blocks: Value) {
+        self.write_line(
+            &json!({"type": "thinking_prefix", "blocks": blocks, "sessionId": self.session_id, "timestamp": now()}),
+        );
+    }
+
     /// Record the session's scheduled tasks.
     pub fn set_schedule(&self, tasks: Value) {
         self.write_line(&json!({"type": "schedule", "tasks": tasks, "sessionId": self.session_id, "timestamp": now()}));
@@ -266,6 +279,9 @@ impl Transcript {
             let id = v["uuid"].as_str().unwrap_or_default().to_string();
             self.write_line(&v);
             parent = Some(id);
+        }
+        if !loaded.thinking_prefixes.is_empty() {
+            self.record_thinking_prefixes(json!(loaded.thinking_prefixes));
         }
         if !loaded.additional_dirs.is_empty() {
             self.append_meta(json!({"additionalDirectories": loaded.additional_dirs}));
@@ -326,6 +342,13 @@ pub fn load(path: &Path, leaf: Option<&str>) -> Result<LoadedSession, SessionErr
             Some("title") => out.title = v.get("title").and_then(Value::as_str).map(str::to_string),
             Some("goal") => out.goal = v.get("goal").cloned(),
             Some("schedule") => out.schedule = v.get("tasks").cloned(),
+            Some("thinking_prefix") => {
+                for (k, h) in v["blocks"].as_object().into_iter().flatten() {
+                    if let Some(h) = h.as_str() {
+                        out.thinking_prefixes.insert(k.clone(), h.to_string());
+                    }
+                }
+            }
             Some(_) => {
                 if let Some(u) = v.get("uuid").and_then(Value::as_str) {
                     by_uuid.insert(u.to_string(), entries.len());
@@ -437,8 +460,12 @@ mod tests {
         t.append_assistant(&assistant("hi"));
         t.append_system("microcompact", json!({"toolUseIds": ["toolu_1"]}));
         t.append_meta(json!({"additionalDirectories": ["/extra"]}));
+        t.record_thinking_prefixes(json!({"aa": "01", "bb": "02"}));
+        t.record_thinking_prefixes(json!({"cc": "03"}));
         let path = store.session_path(&cwd, ID).unwrap();
         let loaded = load(&path, None).unwrap();
+        assert_eq!(loaded.thinking_prefixes.len(), 3, "every record, outside the chain");
+        assert_eq!(loaded.thinking_prefixes["cc"], "03");
         assert_eq!(loaded.messages.len(), 2);
         assert_eq!(loaded.messages[1].message.text(), "hi");
         assert!(loaded.microcompacted.contains("toolu_1"));

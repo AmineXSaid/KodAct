@@ -17,6 +17,7 @@ pub(crate) mod held;
 mod limits;
 pub mod lsp;
 mod named;
+mod prefix;
 pub mod progress;
 pub mod prompts;
 mod repeat;

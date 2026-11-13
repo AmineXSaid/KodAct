@@ -15,6 +15,8 @@ use serde_json::{json, Value};
 
 use super::*;
 
+mod prefix;
+
 const SID: &str = "00000000-0000-4000-8000-000000000001";
 
 /// A test tool: sleeps `ms`, returns `tag`. Concurrency-safe; read-only unless `writes`.

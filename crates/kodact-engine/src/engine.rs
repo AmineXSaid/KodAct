@@ -730,6 +730,10 @@ pub struct TurnState {
     /// model (or another provider) can't verify their signatures, so they
     /// are dropped when the model changes; the words and tool calls stay.
     pub thinking_model: Option<String>,
+    /// The fingerprint of what preceded each signed thinking block when the model wrote it,
+    /// keyed by [`crate::prefix::thinking_key`]: a block whose history has changed since is
+    /// left out of requests.
+    pub thinking_prefixes: HashMap<String, String>,
 }
 
 /// Outcome of one [`Engine::submit`].
@@ -800,6 +804,8 @@ pub struct Engine {
     /// Files written since a check last passed: writing one of them again is not counted as
     /// progress by the pacing nudges.
     written_unchecked: HashSet<PathBuf>,
+    /// The prefix hash of the last request sent: the reply that comes back was written on it.
+    last_sent: Mutex<Option<crate::prefix::PrefixHash>>,
     /// This step's only progress was writing again to such files.
     rewrite_only: bool,
     /// The shell-edit suggestion was given this turn.
@@ -964,6 +970,7 @@ impl Engine {
             watched: Default::default(),
             back_off: Default::default(),
             written_unchecked: Default::default(),
+            last_sent: Mutex::new(None),
             rewrite_only: false,
             shell_edit_told: false,
             ran_commands: vec![],
@@ -1043,6 +1050,7 @@ impl Engine {
         self.state.uuids = from.uuids.clone();
         self.state.meta = from.meta.clone();
         self.state.microcompacted = from.microcompacted.clone();
+        self.state.thinking_prefixes = from.thinking_prefixes.clone();
         // Automatic compaction measures this before the first request.
         self.state.context_tokens = from.context_tokens;
         self.state.counted = from.counted;
@@ -1153,6 +1161,7 @@ impl Engine {
         self.state.uuids = loaded.messages.iter().map(|e| e.uuid.clone()).collect();
         self.state.meta = loaded.messages.iter().filter(|e| e.is_meta).map(|e| e.uuid.clone()).collect();
         self.state.microcompacted = loaded.microcompacted.clone();
+        self.state.thinking_prefixes = loaded.thinking_prefixes.clone();
         self.state.thinking_model = loaded.model.clone();
         // A resumed session still gets SessionStart (source "resume") with its next
         // prompt; a sub-agent's context is already in its messages.
@@ -1319,6 +1328,14 @@ impl Engine {
 
     fn push_assistant(&mut self, msg: ApiMessage) -> String {
         let uuid = self.shared.transcript.append_assistant(&msg);
+        if let Some(sent) = self.last_sent.lock().unwrap().take() {
+            let records = crate::prefix::record(sent, &msg.content);
+            if !records.is_empty() {
+                let blocks: Map<String, Value> = records.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
+                self.shared.transcript.record_thinking_prefixes(Value::Object(blocks));
+                self.state.thinking_prefixes.extend(records);
+            }
+        }
         self.emit(EngineEvent::Assistant { message: msg.clone(), uuid: uuid.clone(), parent_tool_use_id: None });
         self.state.messages.push(msg.to_message());
         self.state.uuids.push(uuid.clone());
@@ -1484,6 +1501,7 @@ impl Engine {
         let snap = EngineSnapshot {
             messages: Arc::new(self.state.messages.clone()),
             microcompacted: Arc::new(self.state.microcompacted.clone()),
+            thinking_prefixes: Arc::new(self.state.thinking_prefixes.clone()),
             system: Arc::new(self.system.clone()),
             tools: Arc::new(self.shared.tools.specs()),
             total_usage: self.state.total_usage.clone(),
@@ -1531,6 +1549,12 @@ impl Engine {
         watch: bool,
         think_until: Option<Instant>,
     ) -> StreamOutcome {
+        let mut req = req;
+        let (sent, dropped) = crate::prefix::guard(&mut req, &self.state.thinking_prefixes);
+        if dropped > 0 {
+            tracing::debug!(dropped, "thinking left out: the history it was written on changed");
+        }
+        *self.last_sent.lock().unwrap() = Some(sent);
         let started = Instant::now();
         let mut stream = match self.shared.provider.stream(req, cancel.clone()).await {
             Ok(s) => s,
@@ -2454,6 +2478,7 @@ impl Engine {
         self.state.messages.clear();
         self.state.uuids.clear();
         self.state.microcompacted.clear();
+        self.state.thinking_prefixes.clear();
         self.state.context_tokens = 0;
         self.state.counted = 0;
         self.shared.tool_ctx.todos.lock().unwrap().clear();

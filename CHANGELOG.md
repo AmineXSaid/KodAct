@@ -20,6 +20,23 @@
 - `docs/PARITY.md`: Skill, the MCP resource tools and fast-mode pricing were
   listed as missing and are built.
 
+### Signed thinking survives an edited history (N1)
+- **Long sessions on models that keep their thinking no longer end in a 400
+  at the first micro-compaction.** On those models a thinking block's
+  signature covers everything before it. KodAct changes earlier history on
+  purpose: micro-compaction clears old tool results, `/rewind` summarize
+  replaces a range, and a resumed session gets a new system prompt (today's
+  date, the current git status). KodAct now records what each signed block
+  was written on and, before each request, leaves out the blocks whose
+  history changed. The words and tool calls of those turns stay, and blocks
+  written after the change go back as usual. The records are kept in the
+  transcript, so `--resume` and `--fork-session` check the same way. Tests:
+  `crates/kodact-engine/src/tests/prefix.rs` (the checker, the ordinary
+  path, and the three cases that changed history),
+  `crates/kodact-engine/src/prefix.rs`. Eval task `compaction-then-resume`
+  (compaction at a 100k window, then a kill and resume). Not yet run against
+  the real API: that needs a key.
+
 ### What KodAct says it checked
 - **A tool asked about itself isn't a check**: `gcc --version`, `pytest
   --help`, `make --version` or `gcc -v` after an edit counted as testing it,
