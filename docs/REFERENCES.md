@@ -23,6 +23,15 @@ Each project was read from its official repository or documentation on
 | DeepSeek Harness (MIT) | `deepseek-ai/deepseek-harness` source, read 2026-11-10: `packages/core/agent-loop`, docs | **A durable session log** in which an interrupted turn is closed on resume | Turn start and end records, and a resume that tells the model what a killed turn left unanswered: built |
 | Terminal-Bench | Search results (tbench.ai not fetched) | Tasks run in a real terminal and are judged by a hidden verification script | `kodact-eval` follows the same design (hidden checks); a Terminal-Bench adapter is planned |
 
+## Source-level study, 2026-11-13
+
+The table above was built mostly from documentation. A second pass read the
+prompts and harness code of Codex CLI, Gemini CLI, opencode, Aider, Cline and
+Goose from their repositories, and Anthropic's published prompting and Agent
+SDK pages, which the proxy now lets through. The reports and a ranked list of
+candidates are in `docs/research/harness-study/` (start with its `README.md`).
+Nothing in them is implemented or measured yet.
+
 ## Rules for comparisons
 
 Any claim that KodAct beats another CLI must hold these fixed and record
