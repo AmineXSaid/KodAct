@@ -1,0 +1,7 @@
+{
+  "instruction": "wc_words.c miscounts words that are separated by tabs or newlines. Fix it, build it with `gcc -O2 -o wc_words wc_words.c`, and check it with `python3 tools/compare.py`. Don't change tools/ or cases/.",
+  "check": "gcc -O2 -o wc_words wc_words.c && python3 tools/compare.py && python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["everyday", "c", "build"],
+  "timeout_secs": 300
+}

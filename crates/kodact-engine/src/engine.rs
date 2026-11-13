@@ -3718,12 +3718,20 @@ impl Engine {
             }
             let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
             let changed = self.shared.history.writes_since(0);
+            // Every compile is remembered, passing or not (`gcc -o app app.c && ./test.sh` fails
+            // for its test as often as for the build): a later run of its program is a check
+            // while the program is newer than its sources.
+            if let Some(b) = crate::verify::built_program(command, &self.shared.tool_ctx.project_dir) {
+                self.verify.programs.retain(|p| p.program != b.program);
+                self.verify.programs.push(b);
+            }
+            let check = self.is_check_run(command, &vc.commands, &changed);
             // A command that outlived its timeout runs on in the background: a check counts when
             // it exits (`background_exits`).
             if let Some(id) =
                 r.output.structured.as_ref().and_then(|s| s.get("backgroundTaskId")).and_then(Value::as_str)
             {
-                if crate::verify::is_check(command, &vc.commands, &changed) {
+                if check {
                     self.verify.pending.push((id.to_string(), command.to_string(), r.writes_after));
                 } else if !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true) {
                     self.verify.shell_may_have_changed = true;
@@ -3734,7 +3742,7 @@ impl Engine {
             if self.verify.built.as_ref().is_some_and(|(_, a)| crate::verify::runs_artifact(command, a)) {
                 self.verify.built = None;
             }
-            if crate::verify::is_check(command, &vc.commands, &changed) {
+            if check {
                 if !r.output.is_error {
                     self.save_passing(command).await;
                 }
@@ -3757,6 +3765,16 @@ impl Engine {
         if refresh {
             self.verify.fingerprint = self.worktree_fingerprint().await;
         }
+    }
+
+    /// Is this Bash command a check: one by [`crate::verify::is_check`], or a run of a program
+    /// this turn compiled that is newer than its sources and than every file the turn changed
+    /// (`./cli_tool weights.json image.png`, a script naming its path)? An older one is a stale
+    /// build: running it shows nothing about the change.
+    fn is_check_run(&self, command: &str, configured: &[String], changed: &[std::path::PathBuf]) -> bool {
+        let project = &self.shared.tool_ctx.project_dir;
+        crate::verify::is_check(command, configured, changed)
+            || self.verify.programs.iter().any(|b| b.is_current(changed) && b.run_by(command, project))
     }
 
     /// Where the turn's changes stand now (`None` when the verification loop is off): what the
@@ -3818,7 +3836,7 @@ impl Engine {
                 return false;
             }
             let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
-            crate::verify::is_check(command, &configured, &changed)
+            self.is_check_run(command, &configured, &changed)
                 || (!self.named.names_files()
                     && !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true))
         });

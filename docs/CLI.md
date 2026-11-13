@@ -377,6 +377,17 @@ configured `verification.commands` entry) or a run of the changed code. A
 tool asked only about itself (`gcc --version`, `pytest --help`, `gcc -v`) is
 not one: it tests nothing.
 
+A run of a program a compile built in the turn (`gcc -o app app.c`, `rustc`,
+`go build -o`) is a check too: by its path (`./app input.txt`), from inline
+code that starts it by its path (`subprocess.run(['./app', ...])`), or from a
+script that does (`python3 tools/compare.py`). It counts only while the
+program is newer than the sources its compile named and than every file the
+turn's edit tools wrote: a program not rebuilt after an edit, or whose build
+failed, is stale, and running it checks nothing. So a build and test command
+that failed on a bug in its own test code ends `passed` once the program runs
+cleanly, and a comparison script that fails after a passing build ends
+`failed`, not `passed` from the build.
+
 With any status, `missing` lists the files the request asks to be made that
 don't exist when the turn ends: files it names that weren't there when the
 turn started (a file named in a sentence asking to remove something isn't

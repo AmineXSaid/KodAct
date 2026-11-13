@@ -17,6 +17,15 @@
   task".
 
 ### What KodAct says it checked
+- **Running the program a compile built is a check**: a build-and-test
+  command that failed on a bug in its own test code stayed `failed` though the
+  model then ran the program cleanly, with a reminder to fix what wasn't
+  broken; and a comparison script that failed after a passing build left
+  `passed`. A run of a program built in the turn now counts: by its path, from
+  inline code that starts it by its path, or from a script that does. Only
+  while the program is newer than its sources and the turn's edits: a build
+  that failed, or one not redone after an edit, is stale and checks nothing
+  (task `verify-built-program`).
 - **A tool asked about itself isn't a check**: `gcc --version`, `pytest
   --help`, `make --version` or `gcc -v` after an edit counted as testing it,
   so the reminder about untested changes stayed silent and the result said

@@ -1156,6 +1156,53 @@ async fn a_program_built_but_never_run_is_asked_to_run_once() {
     assert!(!h.transcript_text().contains(r#""subtype":"verification""#));
 }
 
+/// A check that failed on a bug in its own test code, then the program the build made, started
+/// by its path from a fixed script: a check, and the turn ends `passed` with no reminder. A
+/// program older than its source (edited, never rebuilt) is a stale build, and running it checks
+/// nothing.
+#[tokio::test]
+async fn running_a_freshly_built_program_is_a_check_and_a_stale_one_is_not() {
+    // `gcc` here is a shell function, so the test needs no compiler.
+    let gcc = "gcc() { printf '#!/bin/sh\\necho 2\\n' > cli_tool && chmod +x cli_tool; }";
+    let cfg = || EngineConfig {
+        verify: Some(crate::verify::VerifyConfig { commands: vec![], max_reminders: 2 }),
+        ..Default::default()
+    };
+    let h = Harness::new(vec![]);
+    let src = h.cwd().join("cli_tool.c");
+    let program = h.cwd().join("cli_tool");
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": src, "content": "int main(){return 0;}\n"})));
+    // Built and run, then the test code's own bug fails the command.
+    let first = format!("{gcc}; gcc -O2 -o cli_tool cli_tool.c && ./cli_tool && python3 -c 'import sys; sys.exit(1)'");
+    h.provider.push(MockTurn::tool("Bash", json!({"command": first})));
+    let rerun =
+        format!("cd /tmp && python3 -c \"import subprocess; subprocess.run(['{}'], check=True)\"", program.display());
+    h.provider.push(MockTurn::tool("Bash", json!({"command": rerun})));
+    h.provider.push(MockTurn::text("done"));
+    let mut e = h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("write cli_tool.c")).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    assert_eq!(r.verification, Some(Verified::Passed { command: rerun }));
+    assert!(!h.transcript_text().contains(r#""subtype":"verification""#), "no reminder");
+
+    // Built, then the source edited and the old program run: a stale build, so the edit is unchecked.
+    let h = Harness::new(vec![]);
+    let src = h.cwd().join("cli_tool.c");
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": src, "content": "int main(){return 0;}\n"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": format!("{gcc}; gcc -O2 -o cli_tool cli_tool.c")})));
+    h.provider.push(
+        MockTurn::tool("Write", json!({"file_path": src, "content": "int main(){return 1;}\n"}))
+            .with_delay(Duration::from_millis(20)),
+    );
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "./cli_tool"})));
+    h.provider.push(MockTurn::text("done"));
+    h.provider.push(MockTurn::text("done, not rebuilt"));
+    let mut e = h.engine_with(cfg(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("write cli_tool.c")).await;
+    assert_eq!(r.result.as_deref(), Some("done, not rebuilt"));
+    assert_eq!(r.verification, Some(Verified::Unchecked { files: vec!["cli_tool.c".into()], shell: false }));
+}
+
 #[tokio::test]
 async fn verify_sees_shell_writes_through_git_and_failed_checks() {
     let h = Harness::new(vec![]);

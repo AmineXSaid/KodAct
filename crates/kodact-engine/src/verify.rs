@@ -259,6 +259,13 @@ fn bare_redirect(w: &str) -> bool {
 /// Does a C-family compiler run get a file to compile (`-` is its standard input)? `gcc -v`,
 /// `gcc --version` and `clang -print-search-dirs` don't: they build nothing and check nothing.
 fn has_input(args: &[String]) -> bool {
+    !compile_inputs(args).is_empty()
+}
+
+/// What a compiler run is given to compile: its file arguments, and `-` for its standard input.
+/// The values of flags that take one (`-o out`, `-I dir`) and redirections are not.
+fn compile_inputs(args: &[String]) -> Vec<&str> {
+    let mut out = vec![];
     let mut args = args.iter().map(String::as_str);
     while let Some(a) = args.next() {
         if matches!(a, "-o" | "-I" | "-L" | "-D" | "-U" | "-x" | "-MF" | "-MT" | "-include" | "-isystem")
@@ -266,10 +273,10 @@ fn has_input(args: &[String]) -> bool {
         {
             args.next();
         } else if a == "-" || (!a.starts_with('-') && !is_redirect(a)) {
-            return true;
+            out.push(a);
         }
     }
-    false
+    out
 }
 
 /// Words a command can start with that don't change what it runs.
@@ -804,6 +811,9 @@ pub(crate) struct Tracker {
     /// The last passing check built a program (its command and the program's path), and
     /// nothing has run that program since: compiling isn't seeing it work.
     pub built: Option<(String, String)>,
+    /// The programs this turn's compile commands built, whether the command passed or not: a
+    /// later run of one is a check while it is newer than its sources ([`Built`]).
+    pub programs: Vec<Built>,
 }
 
 /// Plain data a task produces (an answer, a table, a log, notes): no program in the project runs
@@ -892,6 +902,164 @@ pub(crate) fn built_artifact(command: &str) -> Option<String> {
         };
     }
     built
+}
+
+/// A program a compile command built: where it is and the files it was built from, as the
+/// command named them, from the directory the command ran in (its own `cd`s followed).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Built {
+    pub program: PathBuf,
+    pub sources: Vec<PathBuf>,
+}
+
+/// The program `command`, run from `dir`, builds ([`built_artifact`]), and its sources:
+/// `cd /app && g++ -o cli_tool main.cpp -lm` builds `/app/cli_tool` from `/app/main.cpp`.
+/// `None` when it builds none, or when a `cd` goes somewhere the command doesn't name.
+pub(crate) fn built_program(command: &str, dir: &Path) -> Option<Built> {
+    let commands = strip_heredoc_bodies(command);
+    let mut cwd = Some(dir.to_path_buf());
+    let mut built = None;
+    for part in kodact_permissions::split_compound(&commands) {
+        let all = words(&part);
+        let w = skip_wrappers(&all);
+        let Some(first) = w.first() else { continue };
+        if first == "cd" {
+            cwd = changed_dir(cwd, w.get(1));
+            continue;
+        }
+        let (Some(here), Some(artifact)) = (&cwd, built_artifact(&part)) else { continue };
+        // `go build` names packages after its subcommand.
+        let args = if program(first) == "go" { &w[2..] } else { &w[1..] };
+        let sources = compile_inputs(args).into_iter().filter(|s| *s != "-").map(|s| resolve(here, s)).collect();
+        built = Some(Built { program: resolve(here, &artifact), sources });
+    }
+    built
+}
+
+/// Where `cd` leaves a command: a path, from `from` when it is relative. Anywhere it can't tell
+/// (`cd`, `cd ~`, `cd -`, `cd $DIR`, or a relative path from an unknown place) is `None`.
+fn changed_dir(from: Option<PathBuf>, to: Option<&String>) -> Option<PathBuf> {
+    let to = to?.as_str();
+    if to == "-" || to.starts_with(['~', '$']) {
+        return None;
+    }
+    if Path::new(to).is_absolute() {
+        return Some(resolve(Path::new("/"), to));
+    }
+    from.map(|f| resolve(&f, to))
+}
+
+/// `path` from `dir` (as given when absolute), with `.` and `..` worked out on the names alone.
+fn resolve(dir: &Path, path: &str) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in dir.join(path).components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// The largest script read to see whether it runs a program a compile built.
+const MAX_SCRIPT_BYTES: u64 = 256 * 1024;
+
+/// How inline code starts another program: `subprocess.run`, `os.system`, `Popen`, Node's
+/// `child_process`/`execSync`/`spawn`, `system(` in Perl, Ruby or PHP.
+const LAUNCHERS: &[&str] =
+    &["subprocess", "system(", "popen", "spawn", "child_process", "execsync", "execfile", "os.exec"];
+
+impl Built {
+    /// Is the program on disk at least as new as each of its sources and each file in `changed`
+    /// (what the turn's edit tools wrote)? One that is older wasn't rebuilt after the change, or
+    /// its build failed, and running it says nothing about the change.
+    pub fn is_current(&self, changed: &[PathBuf]) -> bool {
+        let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let Some(built) = modified(&self.program) else { return false };
+        self.sources.iter().chain(changed).filter_map(|p| modified(p)).all(|t| t <= built)
+    }
+
+    /// Does `command`, run from `dir`, run this program: by its path (`./cli_tool w.json x.png`,
+    /// `/app/cli_tool`, after the command's own `cd`s), from inline code that starts programs
+    /// and names its path (`python3 - <<EOF` with `subprocess.run(['/app/cli_tool', ...])`), or
+    /// from a script it runs that does (`python3 tools/compare.py`, `./run_cases.sh`)? A bare
+    /// name is looked up on `PATH`, and a command that names the path to list, copy or strip the
+    /// program doesn't run it.
+    pub fn run_by(&self, command: &str, dir: &Path) -> bool {
+        self.runs(command, dir, true)
+    }
+
+    /// [`Self::run_by`]; `read_scripts` false inside a script, so scripts it runs aren't read.
+    fn runs(&self, command: &str, dir: &Path, read_scripts: bool) -> bool {
+        let commands = strip_heredoc_bodies(command);
+        let mut cwd = Some(dir.to_path_buf());
+        for part in kodact_permissions::split_compound(&commands) {
+            let all = words(&part);
+            let w = skip_wrappers(&all);
+            let Some(first) = w.first() else { continue };
+            if first == "cd" {
+                cwd = changed_dir(cwd, w.get(1));
+                continue;
+            }
+            let Some(here) = cwd.as_deref() else { continue };
+            if first.contains('/') {
+                let target = resolve(here, first);
+                if target == self.program || (read_scripts && self.runs_script(&target, None, here)) {
+                    return true;
+                }
+            }
+            let prog = program(first);
+            let fed_heredoc = w.iter().any(|a| a.starts_with("<<"));
+            let ran = if let Some(inner) = shell_command(prog, &w[1..]) {
+                self.runs(&inner, here, read_scripts)
+            } else if is_shell(prog) && fed_heredoc {
+                heredoc_bodies(command).iter().any(|(_, body)| self.runs(body, here, read_scripts))
+            } else if INTERPRETERS.contains(&prog) && runs_inline_code(&w[1..]) {
+                self.launched_in(command, here)
+            } else if INTERPRETERS.contains(&prog) && read_scripts {
+                // The script it runs, the first word that isn't a flag: `python3 -u tools/compare.py`.
+                w[1..]
+                    .iter()
+                    .find(|a| !a.starts_with('-'))
+                    .is_some_and(|s| self.runs_script(&resolve(here, s), Some(prog), here))
+            } else {
+                false
+            };
+            if ran {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Does the script at `path`, run from `dir` by `interpreter` (or by its own `#!` line), run
+    /// this program? A shell script by its commands, any other by code that starts it. Only a
+    /// text file up to [`MAX_SCRIPT_BYTES`] is read: a program or a large file is no script.
+    fn runs_script(&self, path: &Path, interpreter: Option<&str>, dir: &Path) -> bool {
+        let small = std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= MAX_SCRIPT_BYTES);
+        let Some(text) = small.then(|| std::fs::read_to_string(path).ok()).flatten() else { return false };
+        let shebang = text.lines().next().and_then(|l| l.strip_prefix("#!")).and_then(|l| l.split_whitespace().last());
+        if interpreter.or(shebang.map(program)).is_some_and(is_shell) {
+            self.runs(&text, dir, false)
+        } else {
+            self.launched_in(&text, dir)
+        }
+    }
+
+    /// Does inline code in `command` start a program ([`LAUNCHERS`]) and name this one's path,
+    /// absolute or from `dir`?
+    fn launched_in(&self, command: &str, dir: &Path) -> bool {
+        let lower = command.to_ascii_lowercase();
+        let Some(name) = self.program.file_name().and_then(|n| n.to_str()) else { return false };
+        let suffix = format!("/{name}");
+        LAUNCHERS.iter().any(|l| lower.contains(l))
+            && command
+                .split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '.' | '/' | '-' | '+')))
+                .any(|token| token.ends_with(&suffix) && resolve(dir, token) == self.program)
+    }
 }
 
 /// Does `command` run the program at `artifact` (`./image`, `/work/image > out.ppm`,
@@ -1058,6 +1226,96 @@ mod tests {
         assert!(runs_artifact("cd /work && ./bin/app --help", "bin/app"));
         assert!(!runs_artifact("wc -c image.c && head -3 image.c", "image"));
         assert!(!runs_artifact("ls -l image", "image"));
+    }
+
+    #[test]
+    fn a_compile_is_known_with_where_it_ran_and_its_sources() {
+        let p = |s: &str| PathBuf::from(s);
+        let b = built_program(
+            "cd /app && g++ -O2 -std=c++17 -o cli_tool cli_tool.cpp lodepng.cpp cJSON.c -lm 2>&1 | head -30; ls -l cli_tool",
+            Path::new("/work"),
+        )
+        .unwrap();
+        assert_eq!(b.program, p("/app/cli_tool"));
+        assert_eq!(b.sources, [p("/app/cli_tool.cpp"), p("/app/lodepng.cpp"), p("/app/cJSON.c")]);
+        assert_eq!(built_program("gcc x.c", Path::new("/w")).unwrap().program, p("/w/a.out"));
+        let b = built_program("cd src && cc -o ../bin/app ./main.c", Path::new("/w")).unwrap();
+        assert_eq!((b.program, b.sources), (p("/w/bin/app"), vec![p("/w/src/main.c")]));
+        assert_eq!(built_program("go build -o bin/app ./cmd", Path::new("/w")).unwrap().sources, [p("/w/cmd")]);
+        assert_eq!(built_program("gcc -x c - -o prog", Path::new("/w")).unwrap().sources, Vec::<PathBuf>::new());
+        assert!(built_program("gcc -c x.c && gcc --version", Path::new("/w")).is_none(), "nothing to run");
+        assert!(built_program("cd \"$BUILD\" && gcc -o app x.c", Path::new("/w")).is_none(), "where is not known");
+    }
+
+    #[test]
+    fn a_program_is_current_while_it_is_newer_than_its_sources_and_the_changes() {
+        let d = tempfile::tempdir().unwrap();
+        let at = |name: &str, secs: u64| {
+            let f = d.path().join(name);
+            std::fs::write(&f, name).unwrap();
+            let t = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
+            std::fs::File::options().write(true).open(&f).unwrap().set_modified(t).unwrap();
+            f
+        };
+        let (src, notes) = (at("main.c", 10), at("notes.md", 10));
+        let b = Built { program: at("app", 20), sources: vec![src.clone()] };
+        assert!(b.is_current(&[]) && b.is_current(std::slice::from_ref(&notes)));
+        at("main.c", 30);
+        assert!(!b.is_current(&[]), "the source changed after the build: a stale program");
+        let b = Built { program: at("app", 40), sources: vec![src] };
+        assert!(b.is_current(&[]));
+        at("notes.md", 50);
+        assert!(!b.is_current(std::slice::from_ref(&notes)), "a file the turn changed since");
+        let gone = Built { program: d.path().join("never-built"), sources: vec![] };
+        assert!(!gone.is_current(&[]), "a failed build left nothing to run");
+    }
+
+    #[test]
+    fn a_program_runs_by_its_path_or_from_code_that_starts_it() {
+        let b = Built { program: PathBuf::from("/app/cli_tool"), sources: vec![] };
+        let app = Path::new("/app");
+        for run in [
+            "./cli_tool weights.json image.png",
+            "cd /app && ./cli_tool weights.json image.png; echo \"exit=$?\"; od -c prediction.txt",
+            "timeout 10 /app/cli_tool w.json x.png > /tmp/out.txt 2>/tmp/err.txt",
+            "bash -c './cli_tool w.json x.png'",
+            "cd /tmp && python3 - <<'EOF'\nimport subprocess\nr = subprocess.run(['/app/cli_tool', 'w.json', p])\nEOF",
+            "python3 -c \"import subprocess; print(subprocess.check_output(['./cli_tool', 'w.json', 'x.png']))\"",
+            "node -e \"require('child_process').execSync('./cli_tool w.json x.png')\"",
+            "bash <<'EOF'\n./cli_tool w.json x.png\nEOF",
+        ] {
+            assert!(b.run_by(run, app), "{run}");
+        }
+        for not_run in [
+            "ls -l cli_tool /app/cli_tool && file ./cli_tool",
+            "cp ./cli_tool /usr/local/bin/ && strip /app/cli_tool",
+            "cli_tool w.json x.png",
+            "cd /tmp && ./cli_tool w.json",
+            "./cli_tool.sh && ./build/cli_tool",
+            "python3 -c \"import os; print(os.path.getsize('/app/cli_tool'))\"",
+            "cd ~ && ./cli_tool",
+        ] {
+            assert!(!b.run_by(not_run, app), "{not_run}");
+        }
+        assert!(b.run_by("./cli_tool x", Path::new("/app/")), "the same directory however it is written");
+
+        assert!(b.run_by("../cli_tool x", Path::new("/app/src")));
+        assert!(!b.run_by("../app/cli_tool x", Path::new("/app/src")), "that is /app/app/cli_tool");
+
+        // From a script it runs: read from disk, a shell script by its commands.
+        let d = tempfile::tempdir().unwrap();
+        let b = Built { program: d.path().join("wc_words"), sources: vec![] };
+        let script = |name: &str, text: &str| std::fs::write(d.path().join(name), text).unwrap();
+        script("compare.py", "import subprocess\nsubprocess.run(['./wc_words', 'cases/one.txt'])\n");
+        script("run_cases.sh", "#!/bin/sh\nfor f in cases/*.txt; do ./wc_words \"$f\"; done\n");
+        script("notes.py", "print('build ./wc_words with gcc')\n");
+        script("outer.sh", "./run_cases.sh\n");
+        for run in ["python3 compare.py", "python3 -u ./compare.py > out.txt", "./run_cases.sh", "sh run_cases.sh"] {
+            assert!(b.run_by(run, d.path()), "{run}");
+        }
+        for not_run in ["python3 notes.py", "./outer.sh", "python3 missing.py", "bash missing.sh"] {
+            assert!(!b.run_by(not_run, d.path()), "{not_run}: scripts it runs in turn aren't read");
+        }
     }
 
     #[test]

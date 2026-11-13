@@ -146,6 +146,12 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - a tool asked only about itself (`gcc --version`, `pytest --help`,
     `gcc -v`) is not a check and builds nothing: before, a version probe after
     an edit marked the change as tested and silenced the reminder;
+  - a run of a program a compile built in the turn is a check (by its path,
+    from inline code that starts it, or from a script that does), while the
+    program is newer than its sources and the turn's edits: before, a build and
+    test that failed on its own test code stayed `failed` after the program ran
+    cleanly, and a comparison script failing after a passing build left
+    `passed` (task `verify-built-program`);
   - a file an edit leaves unparseable is said with the edit's result, by the
     language's own parser when installed (`verification.syntaxCheck`;
     `edit_diagnostics` per run, task `syntax-after-edit`).
