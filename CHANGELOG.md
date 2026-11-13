@@ -2,6 +2,19 @@
 
 ## 0.1.0 (unreleased)
 
+### Signed thinking and an edited history: the test (N1)
+- **A check that a session sends thinking back on the history it was written
+  on** (`crates/kodact-engine/src/tests/prefix.rs`). On models that keep their
+  thinking between turns, a block's signature covers the system prompt, the
+  tools and every earlier message; a request that changes any of them is
+  refused or answered from text that is gone. The ordinary path passes:
+  tool calls, a resume the same day, a full compaction. Three cases fail and
+  are marked `ignore` until fixed (`cargo test -p kodact-engine prefix --
+  --ignored`): micro-compaction clears earlier tool results in place; a
+  resume on another day sends a new system prompt (it carries the date and
+  git status); `/rewind` summarize of the start keeps later turns on a
+  replaced prefix. Not yet checked against the real API: that needs a key.
+
 ### What KodAct says it checked
 - **A tool asked about itself isn't a check**: `gcc --version`, `pytest
   --help`, `make --version` or `gcc -v` after an edit counted as testing it,
