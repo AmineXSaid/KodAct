@@ -57,6 +57,7 @@ pub fn result_message(r: &TurnResult, session_id: &str) -> ResultMessage {
         // Only the files asked for that don't exist. How the last check ended is not reported:
         // a check's exit code says too little about the work to hand a script as "passed".
         verification: (!r.missing.is_empty()).then(|| serde_json::json!({"missing": r.missing})),
+        finish: r.finish.clone(),
         uuid: new_uuid(),
         immediate: None,
     }

@@ -48,6 +48,12 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - compaction in tiers: sticky micro-compaction of stale tool results,
     summarization near the limit, and compact-and-retry when a prompt is too
     long;
+  - a summary written ahead (`compaction.background`, off until measured):
+    started in the background near the limit from the cached request, held
+    until compaction is due, then applied with the messages since kept word
+    for word and their reasoning left out. The lead grows with how fast the
+    run grows, so a conversation that jumps by large reads still gets it in
+    time (`scripts/check-window-scaling.py --env KODACT_BACKGROUND_SUMMARY=1`);
   - sub-agents, so exploration runs in a separate context and only its result
     comes back;
   - budgets on tool output: long Bash output (30k characters), and any other
@@ -84,7 +90,19 @@ Each pillar lists what KodAct does about it and what shows that it works.
     throttle and not retried, and a `retry-after` longer than a retry sleeps
     is taken in full when it fits the run's time, or stated and the turn
     ends: never shortened to a minute and tried again.
+  - Edit applies a near match instead of failing when one transformation maps
+    `old_string` exactly onto one place in the file: trailing whitespace, a
+    uniform indentation offset, spaces for the file's tabs (or tabs for its
+    spaces), or ASCII quotes, dashes and spaces for typographic ones. The text
+    `new_string` kept from `old_string` gets the file's own indentation and
+    characters; the text it added is written as given, and the result says
+    what differed and where (tasks `edit-curly-quotes`, `edit-tabs`). A match
+    that is not unique, or a difference no single transformation explains, is
+    not guessed.
   - Edit's "not found" error gives the next step:
+    - `new_string` already in the file: the edit has most likely been made
+      already (a result lost to a crash, a retried call), and nothing is
+      applied (task `edit-already-applied`);
     - text that matches except for whitespace, quoted with line numbers;
     - Read's line-number prefixes copied into `old_string`;
     - otherwise the closest window, scored.
@@ -195,6 +213,12 @@ Each pillar lists what KodAct does about it and what shows that it works.
   search, an unescaped regex character, an offset past the end); LS counts
   its entries; NotebookEdit lists the cell ids it has (task
   `near-miss-paths`).
+  A shorter system prompt (`prompt.short`, off until measured) keeps harness
+  facts, rules about the person's own work and the rules eval tasks show
+  models need, each with its reason, in about a third of the length; it
+  replaces the full one only if the quiet check and the suite show equal or
+  better pass rate on a small and a large model (`KODACT_SHORT_PROMPT=0`
+  against `=1`).
   Tool descriptions are tuned by measurement: `scripts/eval-descriptions.sh`
   runs the suite with and without a set of descriptions and prints the A/B
   table, and a description changes only when the table says so. The first
@@ -237,6 +261,14 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - unattended runs (`--autonomous`, contract C21): no question tools, and a
     reminder to attempt before giving up. In the first Terminal-Bench subset,
     3 of 4 failures ended after 3 turns or fewer, without a real attempt;
+  - unattended runs end with the Finish tool (KodAct's own form of Cline's
+    `submit_and_exit`): a summary, and the model's `verified` claim. A lone
+    call goes through the same end-of-turn checks as a reply (an unchecked
+    change still gets its reminder, and the claim is then dropped); called
+    with other tools it is refused. The result carries `finish` beside
+    `verification`, and `kodact-eval` records `claimed_verified` and the share
+    of runs that claimed verified while their check failed (task
+    `finish-claim`). A reply without the tool ends as before;
   - unattended finish checks (C21): a reply that announces a next step without
     a tool call, or ends with open todos, is sent back once or twice. In the
     quick-thinking run of 2026-10-09, gpt2-codegolf ended "success" on "Let me

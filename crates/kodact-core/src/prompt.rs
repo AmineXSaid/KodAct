@@ -25,6 +25,8 @@ pub struct PromptSpec {
     pub output_style: Option<String>,
     /// `--autonomous`: the unattended-run section.
     pub autonomous: bool,
+    /// `prompt.short`: the shorter built-in prompt.
+    pub short: bool,
     pub env: EnvInfo,
 }
 
@@ -39,6 +41,7 @@ impl PromptSpec {
             exclude_dynamic: self.exclude_dynamic,
             output_style: self.output_style.clone(),
             autonomous: self.autonomous,
+            short: self.short,
         }
     }
 

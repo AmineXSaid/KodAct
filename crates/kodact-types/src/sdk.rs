@@ -23,7 +23,7 @@ pub enum SdkMessage {
     Assistant(AssistantMessage),
     User(UserMessage),
     StreamEvent(StreamEventMessage),
-    Result(ResultMessage),
+    Result(Box<ResultMessage>),
     ControlRequest(ControlRequest),
     ControlResponse(ControlResponse),
     ControlCancelRequest { request_id: String },
@@ -199,6 +199,10 @@ pub struct ResultMessage {
     /// turn ends. Absent when there are none, and with the verification loop off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<Value>,
+    /// How an unattended run ended with the Finish tool: `{"summary", "verified"}`. `verified`
+    /// is the model's claim; `verification` is what KodAct observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish: Option<Value>,
     pub uuid: String,
     /// `true` on the answer to an immediate command a stream-json host sent (C17): it was
     /// answered at once, beside any turn in progress, and is not that turn's result.

@@ -280,6 +280,25 @@ pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// Whether the shorter built-in system prompt is used (`prompt.short`, or `KODACT_SHORT_PROMPT`
+/// for A/B runs). Off until the quiet check and the eval suite show it does as well.
+pub(crate) fn short_prompt(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_SHORT_PROMPT") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/prompt/short").unwrap_or(false),
+    }
+}
+
+/// Whether the compaction summary is written ahead, in the background, and held until
+/// compaction is due (`compaction.background`, or `KODACT_BACKGROUND_SUMMARY` for A/B runs). Off
+/// until an eval run has measured it.
+pub(crate) fn background_summary(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_BACKGROUND_SUMMARY") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/compaction/background").unwrap_or(false),
+    }
+}
+
 /// Which progress nudges are on: `KODACT_NUDGES` (a list such as `progress,shellEdit`, or `all`,
 /// for A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
 /// measured it; `reminders: false` still turns them all off.
@@ -1066,6 +1085,7 @@ pub fn build_session(
         exclude_dynamic: opts.exclude_dynamic_system_prompt_sections,
         output_style: Some(style.prompt.clone()).filter(|p| !p.is_empty()),
         autonomous,
+        short: short_prompt(&settings),
         env: env_info,
     };
     let sp_opts = prompt.options();
@@ -1116,6 +1136,7 @@ pub fn build_session(
             pricing: pricing.clone(),
             autocompact_window,
             auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
+            background_summary: background_summary(&settings),
             ..Default::default()
         },
         memory_context: memory.clone(),
@@ -1150,6 +1171,7 @@ pub fn build_session(
         metadata_user_id: None,
         autocompact_window,
         auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
+        background_summary: background_summary(&settings),
         is_subagent: false,
         edit_diagnostics: edit_diagnostics(&settings, verify.is_some()),
         language_servers: language_servers(&settings, verify.is_some()),

@@ -246,6 +246,9 @@ pub struct EngineConfig {
     pub autocompact_window: Option<u64>,
     /// Summarize automatically when the window is nearly full (contract C9).
     pub auto_compact: bool,
+    /// Write that summary ahead, in the background, and hold it until compaction is due
+    /// (`compaction.background`, off until measured): see `crate::held`.
+    pub background_summary: bool,
     /// Runs as a sub-agent: SubagentStop instead of Stop, no session hooks.
     pub is_subagent: bool,
     /// The verification loop; `None` turns it off. Never runs in sub-agents.
@@ -364,6 +367,7 @@ impl Default for EngineConfig {
             metadata_user_id: None,
             autocompact_window: None,
             auto_compact: true,
+            background_summary: false,
             is_subagent: false,
             verify: None,
             edit_diagnostics: false,
@@ -757,6 +761,9 @@ pub struct TurnResult {
     /// Where the turn's changes stand: checked, failed, or not run (`None` with the
     /// verification loop off).
     pub verification: Option<crate::verify::Verified>,
+    /// How an unattended run ended with the Finish tool: `{"summary", "verified"}`, the model's
+    /// claim, beside what KodAct observed (`verification`).
+    pub finish: Option<Value>,
     /// The files the request asks to be made (those it names that were absent when the turn
     /// started) that don't exist when it ends: the result's `verification.missing`. Which files
     /// a request asks for is read from its words, a guess. Empty with the verification loop
@@ -822,6 +829,18 @@ pub struct Engine {
     /// The most reply a request asks for after a refusal for length whose prompt fit the window
     /// (`shrink_reply`); cleared when the turn starts and when a compaction makes room.
     reply_shrink: Option<u32>,
+    /// A summary written ahead of compaction (`background_summary`).
+    held: Option<crate::held::HeldSummary>,
+    /// Background summaries that failed since the last compaction; at two, none is started
+    /// again until the next one.
+    held_failures: u32,
+    /// A lone Finish call in the reply being handled (unattended runs): its claim, kept if the
+    /// reply ends the run.
+    pending_finish: Option<Value>,
+    /// The conversation's size at the last compaction check, and the most it has grown by
+    /// between two checks: how far ahead a held summary starts (`crate::held::lead`).
+    last_checked: u64,
+    largest_step: u64,
     /// The reasoning level of this turn's requests, when it adapts (`nudges.adaptiveEffort`).
     effort_loop: Option<crate::effort_loop::EffortLoop>,
     /// Tokens the last reply spent thinking, for judging its step once its tools have run.
@@ -910,9 +929,13 @@ impl Engine {
             turn_restore: Default::default(),
             skills_loaded: Default::default(),
         };
+        let mut tools = parts.tools;
+        if cfg.autonomous && !cfg.is_subagent {
+            tools.register(Arc::new(crate::finish::Finish));
+        }
         let shared = Arc::new(Shared {
             provider: parts.provider,
-            tools: parts.tools,
+            tools,
             tool_ctx: parts.tool_ctx,
             permissions,
             hooks: parts.hooks,
@@ -953,6 +976,11 @@ impl Engine {
             size_told: HashMap::new(),
             output_cap: None,
             reply_shrink: None,
+            held: None,
+            held_failures: 0,
+            pending_finish: None,
+            last_checked: 0,
+            largest_step: 0,
             effort_loop: None,
             last_thought: 0,
             reply_secs: Vec::new(),
@@ -1702,14 +1730,153 @@ impl Engine {
                 self.state.microcompacted.extend(ids);
             }
         }
-        if self.cfg.auto_compact
-            && used >= kodact_compact::autocompact_threshold(window, max_out)
-            && !self.state.messages.is_empty()
-        {
+        let threshold = kodact_compact::autocompact_threshold(window, max_out);
+        if used > self.last_checked && self.last_checked > 0 {
+            self.largest_step = self.largest_step.max(used - self.last_checked);
+        }
+        self.last_checked = used;
+        if self.cfg.auto_compact && used >= threshold && !self.state.messages.is_empty() {
+            if self.apply_held(model, window, continue_work, turn).await {
+                return;
+            }
             if let Err(e) = self.compact_for_room(false, continue_work, model, cancel, turn).await {
                 self.notice(NoticeLevel::Warning, format!("Automatic compaction failed: {e}"));
             }
+        } else if self.cfg.auto_compact && self.cfg.background_summary {
+            // One that fell too far behind is replaced by a newer one, written from here.
+            let behind = self.held.as_ref().is_some_and(|h| {
+                h.at <= self.state.messages.len()
+                    && self.estimate_sent(&self.state.messages[h.at..]) > crate::held::tail_limit(window)
+            });
+            if behind {
+                self.held = None;
+                self.system_event("summary_ahead_dropped", json!({"reason": "replaced_by_a_newer_one"}));
+            }
+            self.maybe_start_held(model, used, threshold);
         }
+    }
+
+    /// Start a summary ahead when the conversation is within the lead of the threshold.
+    fn maybe_start_held(&mut self, model: &str, used: u64, threshold: u64) {
+        if self.cfg.auto_compact
+            && self.cfg.background_summary
+            && used + crate::held::lead(threshold, self.largest_step) >= threshold
+            && self.held.is_none()
+            && self.held_failures < 2
+            && !self.state.messages.is_empty()
+            // A PreCompact hook adds to the summary's instructions when compaction happens.
+            && !self.shared.hooks.enabled_for(HookEvent::PreCompact)
+        {
+            self.start_held(model);
+        }
+    }
+
+    /// Start writing the summary of the conversation as it stands (see `crate::held`).
+    fn start_held(&mut self, model: &str) {
+        let mut req = self.build_request(model);
+        let ask = ContentBlock::text(kodact_compact::summary_instruction(None));
+        match req.messages.last_mut() {
+            Some(last) if last.role == kodact_types::Role::User => last.content.push(ask),
+            _ => req.messages.push(Message::user(vec![ask])),
+        }
+        req.tool_choice = Some(json!({"type": "none"}));
+        req.output_config = req.output_config.map(|mut oc| {
+            if let Some(o) = oc.as_object_mut() {
+                o.remove("format");
+            }
+            oc
+        });
+        self.summary_effort(&mut req);
+        let at = self.state.messages.len();
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(crate::held::write(self.shared.provider.clone(), req, cancel.clone()));
+        self.held = Some(crate::held::HeldSummary {
+            at,
+            anchor: at.checked_sub(1).and_then(|i| self.state.uuids.get(i)).cloned(),
+            model: model.to_string(),
+            task: Some(task),
+            cancel,
+        });
+        self.system_event("summary_ahead", json!({"messages": at, "contextTokens": self.projected_context_tokens()}));
+    }
+
+    /// Compaction is due: apply the held summary if there is one for this conversation and
+    /// model and it still covers enough of it. False when there is none to apply, and the
+    /// summary is written now as before.
+    async fn apply_held(&mut self, model: &str, window: u64, continue_work: bool, turn: &mut TurnAcc) -> bool {
+        let Some(held) = self.held.take() else { return false };
+        let len = self.state.messages.len();
+        let same = held.model == model
+            && held.at > 0
+            && held.at <= len
+            && self.state.uuids.get(held.at - 1) == held.anchor.as_ref();
+        if !same {
+            self.system_event("summary_ahead_dropped", json!({"reason": "conversation_changed"}));
+            return false;
+        }
+        let tail = self.estimate_sent(&self.state.messages[held.at..]);
+        if tail > crate::held::tail_limit(window) {
+            self.system_event(
+                "summary_ahead_dropped",
+                json!({"reason": "too_far_behind", "tailTokens": tail, "limit": crate::held::tail_limit(window)}),
+            );
+            return false;
+        }
+        let at = held.at;
+        let t0 = Instant::now();
+        let outcome = held.take().await;
+        turn.api_ms += t0.elapsed().as_millis() as u64;
+        match outcome {
+            Ok((summary, usage)) => {
+                self.record_usage(model, &usage, turn);
+                if summary.is_empty() {
+                    self.held_failures += 1;
+                    self.system_event("summary_ahead_failed", json!({"reason": "empty_summary"}));
+                    return false;
+                }
+                self.install_held(summary, at, continue_work, model);
+                true
+            }
+            Err(reason) => {
+                self.held_failures += 1;
+                self.system_event("summary_ahead_failed", json!({"reason": reason}));
+                false
+            }
+        }
+    }
+
+    /// Replace `state.messages[..at]` with `summary` and keep the messages after it word for
+    /// word. Their reasoning is left out: it was written about the part now replaced, and a
+    /// provider that checks reasoning against what came before it would refuse it.
+    fn install_held(&mut self, summary: String, at: usize, continue_work: bool, model: &str) -> CompactInfo {
+        let pre_tokens = self.projected_context_tokens();
+        let tail = self.state.messages.split_off(at);
+        let tail_uuids = self.state.uuids.split_off(at);
+        let tail_ids: HashSet<String> = tail
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                _ => None,
+            })
+            .collect();
+        let cleared: Vec<String> =
+            self.state.microcompacted.iter().filter(|id| tail_ids.contains(*id)).cloned().collect();
+        let info = self.install_summary_from(pre_tokens, "auto", summary, continue_work, model);
+        for (uuid, mut msg) in tail_uuids.into_iter().zip(tail) {
+            msg.content.retain(|b| !matches!(b, ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }));
+            if msg.content.is_empty() {
+                continue;
+            }
+            self.shared.transcript.rewrite(&uuid, &msg, self.state.meta.contains(&uuid));
+            self.state.uuids.push(uuid);
+            self.state.messages.push(msg);
+        }
+        self.state.microcompacted.extend(cleared);
+        self.state.context_tokens = self.estimate_sent(&self.state.messages);
+        self.state.counted = self.state.messages.len();
+        self.system_event("summary_ahead_applied", json!({"keptMessages": self.state.messages.len() - 1}));
+        info
     }
 
     /// Summarize the conversation now (`/compact [instructions]`).
@@ -1839,6 +2006,22 @@ impl Engine {
     /// requests are recorded (`system/requests`) so a resumed session carries them on too.
     fn install_summary(&mut self, trigger: &str, summary: String, continue_work: bool, model: &str) -> CompactInfo {
         let pre_tokens = self.projected_context_tokens();
+        self.install_summary_from(pre_tokens, trigger, summary, continue_work, model)
+    }
+
+    /// [`Self::install_summary`], for a conversation that was `pre_tokens` before it.
+    fn install_summary_from(
+        &mut self,
+        pre_tokens: u64,
+        trigger: &str,
+        summary: String,
+        continue_work: bool,
+        model: &str,
+    ) -> CompactInfo {
+        // A summary written ahead covers a conversation that is gone now.
+        self.held = None;
+        self.held_failures = 0;
+        self.last_checked = 0;
         let mut requests = std::mem::take(&mut self.carried_requests);
         requests.extend(self.prompt_points().into_iter().map(|p| p.text));
         self.shared.transcript.append_compact_boundary(json!({"trigger": trigger, "preTokens": pre_tokens}));
@@ -2300,6 +2483,7 @@ impl Engine {
             auth_failed: false,
             tool_calls: 0,
             verification: None,
+            finish: None,
             missing: vec![],
         }
     }
@@ -2942,6 +3126,33 @@ impl Engine {
                         None,
                     );
                 }
+            }
+
+            // Unattended, a Finish call on its own is the reply that ends the run: answered, its
+            // summary taken as the reply's text, and the reply goes through the end-of-turn checks
+            // like any other. A note that sends the model back drops the claim.
+            self.pending_finish = None;
+            let mut tool_uses = tool_uses;
+            let mut reply_has_text = reply_has_text;
+            if self.cfg.autonomous
+                && !self.cfg.is_subagent
+                && tool_uses.len() == 1
+                && tool_uses[0].1 == crate::finish::NAME
+                && stop_reason != Some(StopReason::MaxTokens)
+            {
+                let (id, _, input) = tool_uses.remove(0);
+                let claim = crate::finish::claim(&input);
+                self.push_user(
+                    Message::user(vec![ContentBlock::tool_result(id, crate::finish::RECEIVED, false)]),
+                    false,
+                    None,
+                    true,
+                );
+                if let Some(summary) = claim["summary"].as_str().filter(|s| !s.trim().is_empty()) {
+                    last_text = Some(summary.to_string());
+                    reply_has_text = true;
+                }
+                self.pending_finish = Some(claim);
             }
 
             // Output cut off (GOALS pillar 2): a larger cap for the rest of the turn; a cut-off tool
@@ -4352,6 +4563,10 @@ impl Engine {
             None
         };
         let is_error = subtype != ResultSubtype::Success;
+        let finish = self.pending_finish.take().filter(|_| subtype == ResultSubtype::Success);
+        if let Some(claim) = &finish {
+            self.system_event("finish", claim.clone());
+        }
         self.publish();
         TurnResult {
             subtype,
@@ -4372,6 +4587,7 @@ impl Engine {
             auth_failed: false,
             tool_calls: turn.tool_calls,
             verification: None,
+            finish,
             missing: vec![],
         }
     }

@@ -974,6 +974,7 @@ mod tests {
             auth_failed: false,
             tool_calls: 0,
             verification: None,
+            finish: None,
             missing: vec![],
         };
         assert!(matches!(reply_for(&base), Some(UiEvent::Reply { text, is_error: false }) if text == "ok"));

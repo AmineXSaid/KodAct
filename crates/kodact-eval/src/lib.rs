@@ -206,6 +206,11 @@ pub struct RunRecord {
     /// (`verification.missing`): a false finish with these was announced by KodAct itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_missing: Vec<String>,
+    /// An unattended run that ended with the Finish tool: whether the model claimed its tool
+    /// output showed the requirements met. Beside `passed` (what the checker found), a claimed
+    /// but false finish is told from one the model didn't vouch for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_verified: Option<bool>,
     pub timed_out: bool,
     pub check_output: String,
     pub workspace: PathBuf,
@@ -249,6 +254,10 @@ pub struct Summary {
     pub compactions_per_run: f64,
     #[serde(default)]
     pub compact_failures_per_run: f64,
+    /// Runs that ended with the Finish tool claiming `verified` while their checker failed: a
+    /// false finish the model vouched for.
+    #[serde(default)]
+    pub claimed_false_finish_rate: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -294,6 +303,8 @@ pub fn summarize(runs: &[RunRecord]) -> Summary {
         edit_diagnostics_per_run: runs.iter().map(|r| r.edit_diagnostics as f64).sum::<f64>() / n,
         compactions_per_run: runs.iter().map(|r| r.compactions as f64).sum::<f64>() / n,
         compact_failures_per_run: runs.iter().map(|r| r.compact_failures as f64).sum::<f64>() / n,
+        claimed_false_finish_rate: runs.iter().filter(|r| r.claimed_verified == Some(true) && !r.passed).count() as f64
+            / n,
     }
 }
 
@@ -419,6 +430,7 @@ pub struct StreamFacts {
     pub is_error: bool,
     pub stop_reason: Option<String>,
     pub verification_missing: Vec<String>,
+    pub claimed_verified: Option<bool>,
     pub saw_result: bool,
 }
 
@@ -467,6 +479,7 @@ pub fn parse_stream(lines: &[Value]) -> StreamFacts {
                 f.turns = v["num_turns"].as_u64().unwrap_or(0);
                 f.is_error = v["is_error"].as_bool().unwrap_or(true);
                 f.stop_reason = v["stop_reason"].as_str().map(str::to_string);
+                f.claimed_verified = v["finish"]["verified"].as_bool();
                 f.verification_missing = v["verification"]["missing"]
                     .as_array()
                     .map(|a| a.iter().filter_map(|m| m.as_str().map(str::to_string)).collect())
@@ -642,6 +655,7 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         agent_error,
         stop_reason: facts.stop_reason,
         verification_missing: facts.verification_missing,
+        claimed_verified: facts.claimed_verified,
         timed_out,
         check_output,
         workspace: ws,
@@ -682,6 +696,7 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
                     agent_error: true,
                     stop_reason: None,
                     verification_missing: vec![],
+                    claimed_verified: None,
                     timed_out: false,
                     check_output: format!("harness error: {e:#}"),
                     workspace: PathBuf::new(),
@@ -745,7 +760,7 @@ pub fn render_markdown(r: &Report) -> String {
          | Reasoning-only replies per task | {:.2} |\n| Edits told they broke the syntax, per task | {:.2} |\n\
          | Progress nudges per task | {:.2} |\n| Tokens per task | {:.0} |\n| Tool calls before the first write | {} |\n\
          | Compactions per task | {:.2} |\n\
-         | Failed summaries per task | {:.2} |\n\n",
+         | Failed summaries per task | {:.2} |\n| Finished as verified, check failed | {} |\n\n",
         r.label,
         s.runs,
         r.args.join(" "),
@@ -766,6 +781,7 @@ pub fn render_markdown(r: &Report) -> String {
         s.mean_calls_to_first_write.map(|c| format!("{c:.1}")).unwrap_or_else(|| "–".into()),
         s.compactions_per_run,
         s.compact_failures_per_run,
+        pct(s.claimed_false_finish_rate),
     );
     out.push_str("## By pillar\n\n| Pillar | Runs | Pass | False finish | Turns |\n| --- | --- | --- | --- | --- |\n");
     for (p, s) in &r.by_pillar {
@@ -998,10 +1014,23 @@ mod tests {
             agent_error: false,
             stop_reason: Some("end_turn".into()),
             verification_missing: vec![],
+            claimed_verified: None,
             timed_out: false,
             check_output: String::new(),
             workspace: PathBuf::new(),
         }
+    }
+
+    #[test]
+    fn a_finish_claim_is_read_and_a_vouched_false_finish_counted() {
+        let lines = vec![json!({"type": "result", "is_error": false, "finish": {"summary": "s", "verified": true}})];
+        assert_eq!(parse_stream(&lines).claimed_verified, Some(true));
+        assert_eq!(parse_stream(&[json!({"type": "result", "is_error": false})]).claimed_verified, None);
+        let mut failed = rec(false, false, true, 0.0);
+        failed.claimed_verified = Some(true);
+        let mut passed = rec(true, false, false, 0.0);
+        passed.claimed_verified = Some(true);
+        assert_eq!(summarize(&[failed, passed]).claimed_false_finish_rate, 0.5);
     }
 
     #[test]

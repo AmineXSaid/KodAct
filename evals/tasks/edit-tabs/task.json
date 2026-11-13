@@ -1,0 +1,7 @@
+{
+  "instruction": "In fetch.py, fetch_all should give up on a URL at once when client.get raises PermissionError: no retry, and None recorded for it, as for a URL that timed out every time. Timeouts are still retried as now. Keep the file's indentation style.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": ["edit", "whitespace", "tabs", "near-match", "python"],
+  "timeout_secs": 300
+}

@@ -159,6 +159,7 @@ impl SessionView {
             auth_failed: false,
             tool_calls: 0,
             verification: None,
+            finish: None,
             missing: vec![],
         }
     }

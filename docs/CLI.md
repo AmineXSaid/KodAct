@@ -378,6 +378,19 @@ its last command (`pytest | tail` ends 0 whatever the tests did), and a check
 that does pass may test one case of many. To gate on a check, run it yourself
 after `kodact` exits.
 
+An unattended run (`--autonomous`) ends with the Finish tool, and the
+result says so in `finish`: the model's summary and its claim of whether
+this run's tool output showed the requirements met. `verified` is the
+model's word, not a check KodAct ran:
+
+```json
+"finish": {"summary": "Fixed both bugs; the tests pass.", "verified": true}
+```
+
+```bash
+kodact -p "fix both bugs" --autonomous --output-format json | jq -e '.finish.verified'
+```
+
 `exit_code` appears in `json` mode only. A turn whose last replies held only
 reasoning (no text, no tool call), with the reminders to act used up, ends as
 `error_during_execution` with "The model stopped without an answer: …" in
@@ -670,6 +683,8 @@ listed in the system prompt's environment section.
 | `verification.languageServerWaitMs` | `3000` | How long an edit waits for the server's answer |
 | `verification.format` | `false` | `true` runs a file through its formatter after an edit and says what moved, when the file was already in that formatter's style before the edit (a new file: only with a formatter named below). Built-in, each used when installed: `rustfmt`, `ruff format` or `black`, `gofmt`, `prettier`, `clang-format` |
 | `verification.formatters` | built-in | Extension to a command that formats stdin to stdout, used instead of the built-in one: `{"py": ["black", "-q", "-"]}`. `{file}` in an argument is the file's path; an empty list turns an extension off |
+| `compaction.background` | `false` | `true` writes the compaction summary ahead, in the background, once the conversation is within a lead of the compaction threshold (a fifth of the threshold, or twice the largest step the conversation has grown by in one request, at most half), and holds it until compaction is due. The summary request reuses the request the model just answered, so the provider reads it from its cache, and nobody waits for a summary at the limit. When compaction is due, the held summary replaces what it covers and the messages since are kept word for word, without their reasoning. A summary that falls more than two fifths of the window behind is replaced by a newer one; one for a conversation that was rewritten since (a rewind, `/compact`, `/clear`) or for another model is not used. Not with a `PreCompact` hook. `KODACT_BACKGROUND_SUMMARY=1` or `0` overrides the setting for A/B runs. Off until measured |
+| `prompt.short` | `false` | `true` uses the shorter built-in system prompt (about 2,300 characters against 6,200): facts about the harness, rules about your own work, and the rules eval tasks show models need, each with its reason. The environment, unattended, output-style and appended sections are added as with the full one; `--system-prompt` and `KODACT_PROMPTS_DIR` still replace it. `KODACT_SHORT_PROMPT=1` or `0` overrides the setting for A/B runs. Off until measured on a small and a large model |
 | `nudges.progress`, `.progressEarly`, `.shellEdit`, `.constraints`, `.namedChecks`, `.passingSnapshots`, `.backOff`, `.pace`, `.limitVerdicts`, `.staleDeliverables`, `.adaptiveEffort`, `.thinkingTimeBox` | `false` | The progress nudges (below), each on its own |
 | `tools.notes`, `tools.checkpoint` | `false` | `true` (or `KODACT_NOTES=1`, `KODACT_CHECKPOINTS=1`) offers the Notes tool (notes given back after compaction and kept next to the transcript) and the Checkpoint tool (save and restore the project's files). Off by default: together they add about 1,900 characters to every request, and in the first 79 measured runs models called Notes never and Checkpoint twice. `nudges.passingSnapshots` brings Checkpoint with it |
 | `edit.lineRanges` | `false` | `true` (or `KODACT_EDIT_LINES=1`) lets Edit name the lines to replace (`start_line`, `end_line`, `anchor`) instead of retyping them as `old_string`. The anchor is the text of the first line: an edit whose line numbers moved since the file was read is refused with the lines as they are now |
