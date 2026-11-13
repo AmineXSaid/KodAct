@@ -50,6 +50,12 @@ impl Tool for Write {
         let content = str_arg(&input, "content");
         let existed = path.exists();
         let old = if existed { std::fs::read_to_string(&path).ok() } else { None };
+        // Over a file that exists, a line standing for text left out replaces that text.
+        if let Some((n, line)) = old.as_deref().and_then(|o| super::omission::added_placeholder(o, content)) {
+            if ctx.files.refuse_once(&path, line) {
+                return ToolOutput::error(super::omission::refusal("content", n, line));
+            }
+        }
         ctx.checkpoint(&path);
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {

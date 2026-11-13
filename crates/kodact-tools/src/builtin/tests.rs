@@ -622,6 +622,85 @@ fn powershell_read_only_rejects_subexpressions() {
     assert!(!super::bash::powershell_is_read_only("Remove-Item x"));
 }
 
+/// A line that stands for text left out is refused once, with nothing written; the same call
+/// again is meant and goes through. A new file, and a line the file already had, pass.
+#[tokio::test]
+async fn a_placeholder_for_omitted_text_is_refused_once() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let f = d.path().canonicalize().unwrap().join("svc.py");
+    let whole = "import os\n\ndef a():\n    return 1\n\ndef b():\n    return 2\n";
+    std::fs::write(&f, whole).unwrap();
+    c.files.record_read(&f);
+
+    let short = json!({"file_path": f, "content": "import os\n\ndef a():\n    return 10\n\n# ... rest of the file unchanged ...\n"});
+    let out = Write.call(short.clone(), &c).await;
+    let said = out.text_content();
+    assert!(out.is_error && said.contains("line 6 of `content`") && said.contains("Nothing was written"), "{said}");
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), whole);
+
+    let edit = json!({"file_path": f, "old_string": "def b():\n    return 2\n", "new_string": "def b():\n    # ... existing code ...\n"});
+    let out = Edit::default().call(edit.clone(), &c).await;
+    assert!(out.is_error && out.text_content().contains("`new_string`"), "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), whole);
+    // Sent again, it is what the file should hold.
+    assert!(!Edit::default().call(edit, &c).await.is_error);
+    assert!(std::fs::read_to_string(&f).unwrap().contains("# ... existing code ..."));
+    // The line is in the text being replaced: moving it is not adding it.
+    let keep = json!({"file_path": f, "old_string": "    # ... existing code ...\n", "new_string": "    # ... existing code ...\n    return 3\n"});
+    assert!(!Edit::default().call(keep, &c).await.is_error);
+
+    // A new file loses nothing.
+    let new = json!({"file_path": d.path().join("stub.py"), "content": "def todo():\n    # ... rest of the code ...\n    pass\n"});
+    assert!(!Write.call(new, &c).await.is_error);
+}
+
+/// `edit.withoutRead`: a file never read is changed when the call holds its exact text, and
+/// every other case keeps the read-first rule.
+#[tokio::test]
+async fn edit_without_read_takes_exact_text_and_nothing_else() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().canonicalize().unwrap();
+    let f = dir.join("settings.py");
+    std::fs::write(&f, "TIMEOUT = 30\nRETRIES = 3\nBACKOFF = 3\n").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100)); // older than the session: the person's file
+    let c = ctx(&dir);
+    let (strict, edit) = (Edit::default(), Edit { line_ranges: false, unread: true });
+    assert!(
+        strict.description().contains("Read the file first") && !edit.description().contains("Read the file first")
+    );
+    assert!(edit.description().contains("copied exactly"));
+
+    let exact = json!({"file_path": f, "old_string": "TIMEOUT = 30", "new_string": "TIMEOUT = 45"});
+    assert!(strict.validate(&exact, &c).unwrap_err().contains("not been read"), "off: as before");
+    // Text the file doesn't hold, or holds twice, was not seen well enough: read first.
+    for miss in ["TIMEOUT = 31", "= 3\n"] {
+        let input = json!({"file_path": f, "old_string": miss, "new_string": "x"});
+        assert!(edit.validate(&input, &c).unwrap_err().contains("not been read"), "{miss:?}");
+    }
+    let all = json!({"file_path": f, "old_string": "= 3\n", "new_string": "= 4\n", "replace_all": true});
+    edit.validate(&all, &c).unwrap();
+    edit.validate(&exact, &c).unwrap();
+    let out = edit.call(exact, &c).await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert!(std::fs::read_to_string(&f).unwrap().starts_with("TIMEOUT = 45\n"));
+
+    // Changed since it was last seen: read again, with the option too.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&f, "TIMEOUT = 45\nRETRIES = 9\n").unwrap();
+    let again = json!({"file_path": f, "old_string": "RETRIES = 9", "new_string": "RETRIES = 1"});
+    assert!(edit.validate(&again, &c).unwrap_err().contains("modified since read"));
+
+    // Outside the working directories the rule is unchanged.
+    let other = tempfile::tempdir().unwrap();
+    let g = other.path().canonicalize().unwrap().join("o.py");
+    std::fs::write(&g, "A = 1\n").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let c2 = ctx(&dir);
+    let outside = json!({"file_path": g, "old_string": "A = 1", "new_string": "A = 2"});
+    assert!(edit.validate(&outside, &c2).unwrap_err().contains("not been read"));
+}
+
 /// `edit.lineRanges`: lines are named instead of retyped, and a stale number is caught by the
 /// anchor before anything is written.
 #[tokio::test]
@@ -631,7 +710,7 @@ async fn edit_by_line_range_replaces_the_lines_and_refuses_stale_numbers() {
     let f = d.path().canonicalize().unwrap().join("m.py");
     std::fs::write(&f, "import os\n\ndef a():\n    return 1\n\ndef b():\n    return 2\n").unwrap();
     c.files.record_read(&f);
-    let edit = Edit { line_ranges: true };
+    let edit = Edit { line_ranges: true, unread: false };
     assert!(edit.description().contains("start_line") && !Edit::default().description().contains("start_line"));
     assert!(Edit::default().input_schema()["properties"].get("start_line").is_none());
 

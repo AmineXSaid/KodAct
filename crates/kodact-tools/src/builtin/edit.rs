@@ -281,10 +281,36 @@ fn write_result(ctx: &ToolContext, path: &std::path::Path, old: &str, new: &str)
 }
 
 /// `line_ranges` (`edit.lineRanges`, off by default) also lets a call name the lines to
-/// replace instead of retyping them.
+/// replace instead of retyping them. `unread` (`edit.withoutRead`, off by default) lets a call
+/// change a file that was never read when its `old_string` is in the file exactly: the text
+/// came from somewhere the model saw it (a search result, a command's output), and a Read
+/// first would cost a model call to show it again.
 #[derive(Default)]
 pub struct Edit {
     pub line_ranges: bool,
+    pub unread: bool,
+}
+
+const READ_FIRST: &str = "- Read the file first; edits to unread or since-modified files are refused.\n";
+const READ_OR_KNOWN: &str = "- A file you have not read can be edited when it is inside the working directories \
+    and `old_string` is copied exactly from output you were shown (a Grep result, a command's output); \
+    otherwise read it first. A file modified since you read it is refused: read it again.\n";
+
+impl Edit {
+    /// An exact-text edit to a file never read, inside the working directories, whose
+    /// `old_string` the file holds (once, or at least once with `replace_all`).
+    fn known_text(&self, input: &Value, path: &std::path::Path, ctx: &ToolContext) -> bool {
+        let old = str_arg(input, "old_string").replace("\r\n", "\n");
+        if !self.unread || old.is_empty() || input.get("start_line").is_some() || !ctx.files.never_read(path) {
+            return false;
+        }
+        if !ctx.working_dirs.read().unwrap().iter().any(|d| path.starts_with(d)) {
+            return false;
+        }
+        let Ok(content) = std::fs::read_to_string(path) else { return false };
+        let found = content.replace("\r\n", "\n").matches(old.as_str()).count();
+        found == 1 || (found > 1 && input.get("replace_all").and_then(Value::as_bool).unwrap_or(false))
+    }
 }
 
 const LINE_RANGE_HELP: &str = "\n\nInstead of `old_string`, you may name the lines to replace: `start_line` and \
@@ -301,13 +327,13 @@ impl Tool for Edit {
     }
 
     fn description(&self) -> String {
-        "Replace an exact string in a file.\n\n\
-         - Read the file first; edits to unread or since-modified files are refused.\n\
+        String::from("Replace an exact string in a file.\n\n")
+            + if self.unread { READ_OR_KNOWN } else { READ_FIRST }
+            + "\
          - `old_string` must match the file exactly (indentation included) and be unique unless \
            `replace_all` is true; add surrounding lines to make it unique.\n\
          - Copy text from Read output without the line-number prefix.\n\
          - An empty `old_string` on a missing or empty file creates it with `new_string`."
-            .to_string()
             + if self.line_ranges { LINE_RANGE_HELP } else { "" }
     }
 
@@ -375,6 +401,9 @@ impl Tool for Edit {
         if !path.exists() && !str_arg(input, "old_string").is_empty() {
             return Err(format!("File does not exist: {}.{}", path.display(), crate::missing_path_hint(&path)));
         }
+        if self.known_text(input, &path, ctx) {
+            return Ok(());
+        }
         ctx.files.check_writable(&path)
     }
 
@@ -410,6 +439,11 @@ impl Tool for Edit {
                 })),
                 Err(e) => ToolOutput::error(e),
             };
+        }
+        if let Some((n, line)) = super::omission::added_placeholder(old_s, new_s) {
+            if ctx.files.refuse_once(&path, line) {
+                return ToolOutput::error(super::omission::refusal("new_string", n, line));
+            }
         }
         let (updated, near) =
             match apply_edit_near(&norm, &old_s.replace("\r\n", "\n"), &new_s.replace("\r\n", "\n"), all) {
@@ -498,6 +532,18 @@ impl Tool for MultiEdit {
         }
         let mut notes = vec![];
         for (i, e) in edits.iter().enumerate() {
+            if let Some((n, line)) =
+                super::omission::added_placeholder(str_arg(e, "old_string"), str_arg(e, "new_string"))
+            {
+                if ctx.files.refuse_once(&path, line) {
+                    return ToolOutput::error(format!(
+                        "Edit {} of {}: {}",
+                        i + 1,
+                        edits.len(),
+                        super::omission::refusal("new_string", n, line)
+                    ));
+                }
+            }
             let all = e.get("replace_all").and_then(Value::as_bool).unwrap_or(false);
             match apply_edit_near(&content, &lf(str_arg(e, "old_string")), &lf(str_arg(e, "new_string")), all) {
                 Ok((c, near)) => {

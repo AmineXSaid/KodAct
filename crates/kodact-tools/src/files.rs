@@ -16,6 +16,9 @@ pub struct FileState {
     started: SystemTime,
     /// Files that must be read again whatever their age (put back by a checkpoint restore).
     unseen: Mutex<HashSet<PathBuf>>,
+    /// Placeholder lines ("... rest of the code ...") already refused once, per file: the
+    /// same line sent again is meant, and is written.
+    refused: Mutex<HashSet<(PathBuf, String)>>,
 }
 
 impl Default for FileState {
@@ -27,6 +30,7 @@ impl Default for FileState {
             // the one read here: a file made just after the start would look older without this.
             started: SystemTime::now() - CLOCK_TICK,
             unseen: Default::default(),
+            refused: Default::default(),
         }
     }
 }
@@ -85,6 +89,18 @@ impl FileState {
     /// After a full compaction nothing earlier is in view.
     pub fn forget_all_views(&self) {
         self.views.lock().unwrap().clear();
+    }
+
+    /// `true` the first time this line is refused for this file, `false` once it has been.
+    pub fn refuse_once(&self, path: &Path, line: &str) -> bool {
+        self.refused.lock().unwrap().insert((path.to_path_buf(), line.to_string()))
+    }
+
+    /// Never read in this session, and not put back by a checkpoint restore: the case
+    /// `edit.withoutRead` lets an exact-text Edit through. A file that changed since it was
+    /// read is not this case.
+    pub fn never_read(&self, path: &Path) -> bool {
+        !self.reads.lock().unwrap().contains_key(path) && !self.unseen.lock().unwrap().contains(path)
     }
 
     /// `Ok` when an existing file may be modified.

@@ -112,7 +112,8 @@ pub fn summary_instruction(custom: Option<&str>) -> String {
          2. Key facts: technologies, conventions and decisions that matter for continuing.\n\
          3. Files: every file read, created or changed, why it matters, and the essential code (signatures, the \
             exact lines changed) needed to continue without re-reading everything.\n\
-         4. Problems: errors hit, their causes and fixes, and anything still unresolved.\n\
+         4. Problems: errors hit, their causes and fixes, and anything still unresolved. Name each approach \
+            that was tried and given up, and why, so it is not tried again.\n\
          5. User messages: they are attached after this summary word for word, so do not copy them; note only \
             what the summary needs about them (a change of mind, a clarification, which one is current).\n\
          6. Open tasks: work the user asked for that is not finished.\n\

@@ -341,6 +341,15 @@ pub(crate) fn line_edits(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// Whether Edit may change a file never read when the call holds its exact text:
+/// `edit.withoutRead`, or `KODACT_EDIT_UNREAD` (for A/B runs). Off by default until it is measured.
+pub(crate) fn unread_edits(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_EDIT_UNREAD") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/edit/withoutRead").unwrap_or(false),
+    }
+}
+
 /// Whether an edit's result says when the file no longer parses: on with the verification loop
 /// (so `KODACT_VERIFY=0` and `verification.enabled` turn it off too), unless
 /// `verification.syntaxCheck` is false.
@@ -908,7 +917,8 @@ pub fn build_session(
     kodact_tools::builtin::register_core(&mut tools);
     kodact_tools::builtin::set_shell(&mut tools, &shell);
     let line_edits = line_edits(&settings);
-    kodact_tools::builtin::set_line_edits(&mut tools, line_edits);
+    let unread_edits = unread_edits(&settings);
+    kodact_tools::builtin::set_edit_options(&mut tools, line_edits, unread_edits);
     // The passing-snapshot nudge saves with the Checkpoint tool, so it brings the tool along.
     let checkpoints = memory_tool(&settings, "KODACT_CHECKPOINTS", "/tools/checkpoint")
         || nudges(&settings, &mut vec![]).passing_snapshots;
@@ -1114,6 +1124,7 @@ pub fn build_session(
         sandbox: tool_ctx.sandbox.clone(),
         shell: shell.clone(),
         line_edits,
+        unread_edits,
         agent_slots: Arc::new(tokio::sync::Semaphore::new(
             env_nonempty("KODACT_MAX_PARALLEL_AGENTS")
                 .and_then(|v| v.trim().parse::<usize>().ok())

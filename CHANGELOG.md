@@ -57,6 +57,44 @@
   told; and a trial that starts while watched shows its header before its first
   step.
 
+### A placeholder is not written in place of the code it stands for
+- Write over an existing file, Edit and MultiEdit refuse, once, a call whose
+  new text adds a line such as `// ... rest of the code ...` or
+  `# ... existing code ...`: written as it is, that line would replace the
+  code it stands for and nothing would fail until something ran. The refusal
+  names the line and nothing is written. The same call sent again goes
+  through, for a file meant to hold such a line; a new file, and a line the
+  replaced text already had, pass. English wording only: elsewhere nothing is
+  said. No model call and no text on a turn without such a line. Pattern from
+  Gemini CLI's source (docs/REFERENCES.md); no eval task provokes it yet, so
+  it is covered by unit tests only.
+
+### Practices read in other agents' prompts (docs/REFERENCES.md)
+Eight practices KodAct lacked, each written in KodAct's own words. No
+before/after has been run yet (no API key here): every one is owed.
+- **Checks sized to the change** (prompt): the narrowest check that would
+  show the change is wrong comes first, the full suite when the change
+  reaches shared code; a wording change or an answered question needs none.
+  Before, the prompt asked for the tests, type checker, linter or build after
+  any change.
+- **Edit from a search result** (`edit.withoutRead`, off by default): Edit
+  changes a file never read when the call holds its exact text, so a one-line
+  fix found with Grep doesn't cost a Read first (task `edit-from-search`).
+- **A question is answered, not acted on** (prompt; task
+  `question-leaves-code`).
+- **Changes KodAct did not make are left alone** (prompt; task
+  `leave-other-changes`).
+- **Look before deleting or overwriting**, and a go-ahead for what can't be
+  undone or reaches outside the machine (prompt).
+- **The compaction summary names the approaches given up**, and why, so they
+  are not tried again after it.
+- **A long conversation is not a reason to stop early** (prompt): the model
+  is told the earlier part gets summarized and the work continues.
+- **A saved model call is worth more than a smaller result** (prompt): ask a
+  search for the lines around its matches when that spares a Read.
+The system prompt grows by about 1,500 characters (roughly 370 tokens) on
+every request.
+
 ### Nudges that stay out of the way (docs/goal.md rules 7 to 10)
 - **A quiet check**: `scripts/quiet-check.sh` runs three everyday tasks (a
   question about the code, a one-line fix, a rename; tag `quiet`) with
