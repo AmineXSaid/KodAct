@@ -1,0 +1,7 @@
+{
+  "instruction": "Uploads may now be up to 25 MB. Update the message in strings.py that states the upload limit. Keep the file's typography (its quotes, dashes and spaces) as it is, and change nothing else.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": ["edit", "typography", "near-match"],
+  "timeout_secs": 300
+}

@@ -891,3 +891,132 @@ fn tool_sizes() {
     }
     println!("{total:>6}  all core tools");
 }
+
+// ---- Near matches and the "already applied" hint (docs/research/harness-study, A1/G2/C1, O2).
+// Written before the change and ignored until it lands; see evals/tasks/edit-curly-quotes,
+// edit-tabs and edit-already-applied.
+
+/// Edit `f` (already read) and return the tool's text and whether it failed.
+async fn edit_once(c: &ToolContext, f: &str, old: &str, new: &str) -> (String, bool) {
+    let out = Edit::default().call(json!({"file_path": f, "old_string": old, "new_string": new}), c).await;
+    (out.text_content(), out.is_error)
+}
+
+#[tokio::test]
+#[ignore = "edit near matches (harness study A1/G2/C1) not implemented yet"]
+async fn edit_applies_a_match_that_differs_only_in_trailing_whitespace() {
+    let d = tempfile::tempdir().unwrap();
+    let f = p(d.path(), "a.py");
+    std::fs::write(&f, "x = 1   \ny = 2\t\nz = 3\n").unwrap();
+    let c = ctx(d.path());
+    Read.call(json!({"file_path": f}), &c).await;
+    let (t, err) = edit_once(&c, &f, "x = 1\ny = 2", "x = 10\ny = 20").await;
+    assert!(!err, "{t}");
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "x = 10\ny = 20\nz = 3\n");
+    assert!(t.contains("trailing whitespace") && t.contains("line 1"), "the result says what differed: {t}");
+}
+
+#[tokio::test]
+#[ignore = "edit near matches (harness study A1/G2/C1) not implemented yet"]
+async fn edit_applies_a_uniform_indentation_offset_and_reindents_the_replacement() {
+    let d = tempfile::tempdir().unwrap();
+    let f = p(d.path(), "a.py");
+    let file = "def total(items):\n    s = 0\n    for i in items:\n        s += i.price\n    return s\n";
+    std::fs::write(&f, file).unwrap();
+    let c = ctx(d.path());
+    Read.call(json!({"file_path": f}), &c).await;
+    // Every line two spaces short, in old_string and new_string alike.
+    let (t, err) =
+        edit_once(&c, &f, "  for i in items:\n      s += i.price", "  for i in items:\n      s += i.price * i.qty")
+            .await;
+    assert!(!err, "{t}");
+    assert_eq!(
+        std::fs::read_to_string(&f).unwrap(),
+        "def total(items):\n    s = 0\n    for i in items:\n        s += i.price * i.qty\n    return s\n"
+    );
+    assert!(t.contains("indentation") && t.contains("line 3"), "{t}");
+}
+
+#[tokio::test]
+#[ignore = "edit near matches (harness study A1/G2/C1) not implemented yet"]
+async fn edit_maps_spaces_onto_a_tab_indented_file() {
+    let d = tempfile::tempdir().unwrap();
+    let f = p(d.path(), "fetch.py");
+    let file = "def f(xs):\n\tfor x in xs:\n\t\tif x:\n\t\t\treturn x\n\treturn None\n";
+    std::fs::write(&f, file).unwrap();
+    let c = ctx(d.path());
+    Read.call(json!({"file_path": f}), &c).await;
+    let (t, err) = edit_once(
+        &c,
+        &f,
+        "    for x in xs:\n        if x:\n            return x",
+        "    for x in xs:\n        if x is None:\n            continue\n        if x:\n            return x",
+    )
+    .await;
+    assert!(!err, "{t}");
+    assert_eq!(
+        std::fs::read_to_string(&f).unwrap(),
+        "def f(xs):\n\tfor x in xs:\n\t\tif x is None:\n\t\t\tcontinue\n\t\tif x:\n\t\t\treturn x\n\treturn None\n",
+        "the replacement is written in the file's tabs"
+    );
+}
+
+#[tokio::test]
+#[ignore = "edit near matches (harness study A1/G2/C1) not implemented yet"]
+async fn edit_matches_typographic_characters_and_keeps_them_in_copied_text() {
+    let d = tempfile::tempdir().unwrap();
+    let f = p(d.path(), "strings.py");
+    let file = "MSG = \"That file\u{2019}s too large \u{2014} the limit is 10\u{a0}MB.\"\nOTHER = 1\n";
+    std::fs::write(&f, file).unwrap();
+    let c = ctx(d.path());
+    Read.call(json!({"file_path": f}), &c).await;
+    let (t, err) = edit_once(
+        &c,
+        &f,
+        "MSG = \"That file's too large - the limit is 10 MB.\"",
+        "MSG = \"That file's too large - the limit is 25 MB.\"",
+    )
+    .await;
+    assert!(!err, "{t}");
+    assert_eq!(
+        std::fs::read_to_string(&f).unwrap(),
+        "MSG = \"That file\u{2019}s too large \u{2014} the limit is 25\u{a0}MB.\"\nOTHER = 1\n",
+        "text copied from old_string keeps the file's characters"
+    );
+    assert!(t.contains("typographic") && t.contains("line 1"), "{t}");
+}
+
+#[tokio::test]
+#[ignore = "edit near matches (harness study A1/G2/C1) not implemented yet"]
+async fn a_near_match_is_applied_only_when_it_is_unique_and_crlf_is_kept() {
+    let d = tempfile::tempdir().unwrap();
+    let f = p(d.path(), "a.txt");
+    std::fs::write(&f, "    x = 1\n        x = 1\n").unwrap();
+    let c = ctx(d.path());
+    Read.call(json!({"file_path": f}), &c).await;
+    // Matches both lines once indentation is ignored: nothing is written.
+    let (t, err) = edit_once(&c, &f, "x = 1", "x = 2").await;
+    assert!(err, "{t}");
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "    x = 1\n        x = 1\n");
+
+    std::fs::write(&f, "one  \r\ntwo\r\n").unwrap();
+    filetime_bump(&f);
+    Read.call(json!({"file_path": f}), &c).await;
+    let (t, err) = edit_once(&c, &f, "one\ntwo", "1\n2").await;
+    assert!(!err, "{t}");
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "1\r\n2\r\n");
+}
+
+#[test]
+#[ignore = "the already-applied hint (harness study O2) not implemented yet"]
+fn a_miss_says_when_the_new_text_is_already_in_the_file() {
+    let file = "[api]\nhost = api.internal\ntimeout = 60\nretries = 2\n";
+    let e =
+        apply_edit(file, "host = api.internal\ntimeout = 30", "host = api.internal\ntimeout = 60", false).unwrap_err();
+    assert!(e.contains("already in the file"), "{e}");
+    let at_hint = e.find("already in the file").unwrap();
+    assert!(e.find("Closest match").is_none_or(|i| i > at_hint), "the fact comes first: {e}");
+    // A short new_string proves nothing: no claim is made.
+    let e = apply_edit("a = 1\n", "a = 2", "a", false).unwrap_err();
+    assert!(!e.contains("already in the file"), "{e}");
+}

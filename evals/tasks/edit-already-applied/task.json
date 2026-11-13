@@ -1,0 +1,8 @@
+{
+  "instruction": "In services.conf, the api service needs a timeout of 60 seconds. Change that and nothing else.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "recovery",
+  "tags": ["edit", "resume", "crash", "already-applied"],
+  "timeout_secs": 300,
+  "crash": {"after_tool_calls": 2, "resume": "Continue."}
+}
