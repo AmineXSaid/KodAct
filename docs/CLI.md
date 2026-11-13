@@ -393,6 +393,19 @@ kodact -p "fix the failing test" --output-format json | jq -e '.verification.sta
 kodact -p "write the report to out/report.txt" --output-format json | jq -e '.verification.missing == null'
 ```
 
+An unattended run (`--autonomous`) ends with the Finish tool, and the
+result says so in `finish`: the model's summary and its claim of whether
+this run's tool output showed the requirements met. `verified` is the
+model's word; `verification` is what KodAct saw. A script that wants both:
+
+```json
+"finish": {"summary": "Fixed both bugs; the tests pass.", "verified": true}
+```
+
+```bash
+kodact -p "fix both bugs" --autonomous --output-format json | jq -e '.finish.verified and .verification.status == "passed"'
+```
+
 `exit_code` appears in `json` mode only. A turn whose last replies held only
 reasoning (no text, no tool call), with the reminders to act used up, ends as
 `error_during_execution` with "The model stopped without an answer: …" in

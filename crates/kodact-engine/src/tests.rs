@@ -3890,7 +3890,6 @@ fn system_events(h: &Harness, name: &str) -> Vec<Value> {
 }
 
 #[tokio::test]
-#[ignore = "the unattended finish tool (harness study L3) not implemented yet"]
 async fn an_unattended_run_ends_with_the_finish_tool_and_records_its_claim() {
     let unattended = EngineConfig { autonomous: true, ..Default::default() };
     let h = Harness::new(vec![
@@ -3911,7 +3910,6 @@ async fn an_unattended_run_ends_with_the_finish_tool_and_records_its_claim() {
 }
 
 #[tokio::test]
-#[ignore = "the unattended finish tool (harness study L3) not implemented yet"]
 async fn the_finish_tool_is_offered_only_in_unattended_runs_and_a_plain_reply_still_ends_as_before() {
     let h = Harness::new(vec![MockTurn::text("hello")]);
     let mut e = h.engine();
@@ -4041,4 +4039,40 @@ async fn without_the_setting_no_summary_is_written_ahead() {
     let mut e = h.engine_with(small_window(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     e.submit(prompt("step")).await;
     assert_eq!(summary_requests(&h), 0, "below the threshold, today's behaviour: nothing is written");
+}
+
+#[tokio::test]
+async fn finish_with_other_tools_is_refused_and_unchecked_changes_send_the_model_back() {
+    let unattended = || EngineConfig { autonomous: true, ..Default::default() };
+    // Called with another tool: refused, nothing ends, the model calls it again alone.
+    let h = Harness::new(vec![
+        MockTurn::tools(&[
+            ("Bash", json!({"command": "echo ok"})),
+            ("Finish", json!({"summary": "too early", "verified": true})),
+        ]),
+        MockTurn::tool("Finish", json!({"summary": "done after reading", "verified": false})),
+    ]);
+    let mut e = h.engine_with(unattended(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!(r.result.as_deref(), Some("done after reading"));
+    assert_eq!(r.finish.as_ref().unwrap()["verified"], false);
+    let second = &h.provider.requests()[1];
+    assert!(serde_json::to_string(&second.messages).unwrap().contains("Finish was not accepted"));
+
+    // Changes no check has run on: the verification reminder answers the Finish, the claim is
+    // dropped, and only the Finish that ends the run counts.
+    let h = Harness::new(vec![]);
+    let f = h.cwd().join("a.py");
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "x = 1\n"})));
+    h.provider.push(MockTurn::tool("Finish", json!({"summary": "first claim", "verified": true})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "true"})));
+    h.provider.push(MockTurn::tool("Finish", json!({"summary": "checked", "verified": true})));
+    let cfg = EngineConfig { autonomous: true, ..verifying(&["true"]) };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("write a.py")).await;
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 4, "the first Finish was sent back");
+    assert!(last_user_text(&reqs[2]).contains("a.py"), "the reminder names the unchecked file");
+    assert_eq!(r.result.as_deref(), Some("checked"));
+    assert_eq!(system_events(&h, "finish").len(), 1, "only the claim that ended the run is recorded");
 }

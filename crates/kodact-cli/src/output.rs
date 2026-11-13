@@ -61,6 +61,7 @@ pub fn result_message(r: &TurnResult, session_id: &str) -> ResultMessage {
             }
             record
         }),
+        finish: r.finish.clone(),
         uuid: new_uuid(),
         immediate: None,
     }

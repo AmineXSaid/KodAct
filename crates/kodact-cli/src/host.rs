@@ -159,7 +159,7 @@ impl ControlContext {
             };
             let mut msg = crate::output::result_message(&view.local_result(text, is_error), &live.session_id());
             msg.immediate = Some(true);
-            out.line(&SdkMessage::Result(msg));
+            out.line(&SdkMessage::Result(Box::new(msg)));
         });
         self.tasks.lock().unwrap().push(task);
     }

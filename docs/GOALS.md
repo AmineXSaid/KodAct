@@ -253,6 +253,14 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - unattended runs (`--autonomous`, contract C21): no question tools, and a
     reminder to attempt before giving up. In the first Terminal-Bench subset,
     3 of 4 failures ended after 3 turns or fewer, without a real attempt;
+  - unattended runs end with the Finish tool (KodAct's own form of Cline's
+    `submit_and_exit`): a summary, and the model's `verified` claim. A lone
+    call goes through the same end-of-turn checks as a reply (an unchecked
+    change still gets its reminder, and the claim is then dropped); called
+    with other tools it is refused. The result carries `finish` beside
+    `verification`, and `kodact-eval` records `claimed_verified` and the share
+    of runs that claimed verified while their check failed (task
+    `finish-claim`). A reply without the tool ends as before;
   - unattended finish checks (C21): a reply that announces a next step without
     a tool call, or ends with open todos, is sent back once or twice. In the
     quick-thinking run of 2026-10-09, gpt2-codegolf ended "success" on "Let me

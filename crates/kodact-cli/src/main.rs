@@ -535,10 +535,13 @@ impl Reporter {
             self.code = c;
         }
         match self.format {
-            OutputFormat::StreamJson => self.out.line(&SdkMessage::Result(result_message(r, &self.live.session_id()))),
+            OutputFormat::StreamJson => {
+                self.out.line(&SdkMessage::Result(Box::new(result_message(r, &self.live.session_id()))))
+            }
             OutputFormat::Json => {
-                let mut v = serde_json::to_value(SdkMessage::Result(result_message(r, &self.live.session_id())))
-                    .unwrap_or_default();
+                let mut v =
+                    serde_json::to_value(SdkMessage::Result(Box::new(result_message(r, &self.live.session_id()))))
+                        .unwrap_or_default();
                 v["exit_code"] = json!(c);
                 self.last_json = Some(v);
             }

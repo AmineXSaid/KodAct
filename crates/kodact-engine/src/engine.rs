@@ -761,6 +761,9 @@ pub struct TurnResult {
     /// Where the turn's changes stand: checked, failed, or not run (`None` with the
     /// verification loop off).
     pub verification: Option<crate::verify::Verified>,
+    /// How an unattended run ended with the Finish tool: `{"summary", "verified"}`, the model's
+    /// claim, beside what KodAct observed (`verification`).
+    pub finish: Option<Value>,
     /// The files the request asks to be made (those it names that were absent when the turn
     /// started) that don't exist when it ends, reported beside `verification` and never instead
     /// of it: which files a request asks for is read from its words, a guess, so it adds a line
@@ -832,6 +835,9 @@ pub struct Engine {
     /// Background summaries that failed since the last compaction; at two, none is started
     /// again until the next one.
     held_failures: u32,
+    /// A lone Finish call in the reply being handled (unattended runs): its claim, kept if the
+    /// reply ends the run.
+    pending_finish: Option<Value>,
     /// The conversation's size at the last compaction check, and the most it has grown by
     /// between two checks: how far ahead a held summary starts (`crate::held::lead`).
     last_checked: u64,
@@ -924,9 +930,13 @@ impl Engine {
             turn_restore: Default::default(),
             skills_loaded: Default::default(),
         };
+        let mut tools = parts.tools;
+        if cfg.autonomous && !cfg.is_subagent {
+            tools.register(Arc::new(crate::finish::Finish));
+        }
         let shared = Arc::new(Shared {
             provider: parts.provider,
-            tools: parts.tools,
+            tools,
             tool_ctx: parts.tool_ctx,
             permissions,
             hooks: parts.hooks,
@@ -969,6 +979,7 @@ impl Engine {
             reply_shrink: None,
             held: None,
             held_failures: 0,
+            pending_finish: None,
             last_checked: 0,
             largest_step: 0,
             effort_loop: None,
@@ -2473,6 +2484,7 @@ impl Engine {
             auth_failed: false,
             tool_calls: 0,
             verification: None,
+            finish: None,
             missing: vec![],
         }
     }
@@ -3115,6 +3127,33 @@ impl Engine {
                         None,
                     );
                 }
+            }
+
+            // Unattended, a Finish call on its own is the reply that ends the run: answered, its
+            // summary taken as the reply's text, and the reply goes through the end-of-turn checks
+            // like any other. A note that sends the model back drops the claim.
+            self.pending_finish = None;
+            let mut tool_uses = tool_uses;
+            let mut reply_has_text = reply_has_text;
+            if self.cfg.autonomous
+                && !self.cfg.is_subagent
+                && tool_uses.len() == 1
+                && tool_uses[0].1 == crate::finish::NAME
+                && stop_reason != Some(StopReason::MaxTokens)
+            {
+                let (id, _, input) = tool_uses.remove(0);
+                let claim = crate::finish::claim(&input);
+                self.push_user(
+                    Message::user(vec![ContentBlock::tool_result(id, crate::finish::RECEIVED, false)]),
+                    false,
+                    None,
+                    true,
+                );
+                if let Some(summary) = claim["summary"].as_str().filter(|s| !s.trim().is_empty()) {
+                    last_text = Some(summary.to_string());
+                    reply_has_text = true;
+                }
+                self.pending_finish = Some(claim);
             }
 
             // Output cut off (GOALS pillar 2): a larger cap for the rest of the turn; a cut-off tool
@@ -4514,6 +4553,10 @@ impl Engine {
             None
         };
         let is_error = subtype != ResultSubtype::Success;
+        let finish = self.pending_finish.take().filter(|_| subtype == ResultSubtype::Success);
+        if let Some(claim) = &finish {
+            self.system_event("finish", claim.clone());
+        }
         self.publish();
         TurnResult {
             subtype,
@@ -4534,6 +4577,7 @@ impl Engine {
             auth_failed: false,
             tool_calls: turn.tool_calls,
             verification: None,
+            finish,
             missing: vec![],
         }
     }

@@ -11,6 +11,7 @@ mod effort_loop;
 mod engine;
 mod events;
 mod exec;
+pub mod finish;
 pub mod format;
 pub(crate) mod held;
 mod limits;
