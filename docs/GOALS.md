@@ -211,6 +211,12 @@ Each pillar lists what KodAct does about it and what shows that it works.
   search, an unescaped regex character, an offset past the end); LS counts
   its entries; NotebookEdit lists the cell ids it has (task
   `near-miss-paths`).
+  A shorter system prompt (`prompt.short`, off until measured) keeps harness
+  facts, rules about the person's own work and the rules eval tasks show
+  models need, each with its reason, in about a third of the length; it
+  replaces the full one only if the quiet check and the suite show equal or
+  better pass rate on a small and a large model (`KODACT_SHORT_PROMPT=0`
+  against `=1`).
   Tool descriptions are tuned by measurement: `scripts/eval-descriptions.sh`
   runs the suite with and without a set of descriptions and prints the A/B
   table, and a description changes only when the table says so. The first

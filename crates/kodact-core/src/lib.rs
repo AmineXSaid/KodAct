@@ -280,6 +280,15 @@ pub(crate) fn reminders_enabled(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// Whether the shorter built-in system prompt is used (`prompt.short`, or `KODACT_SHORT_PROMPT`
+/// for A/B runs). Off until the quiet check and the eval suite show it does as well.
+pub(crate) fn short_prompt(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_SHORT_PROMPT") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/prompt/short").unwrap_or(false),
+    }
+}
+
 /// Whether the compaction summary is written ahead, in the background, and held until
 /// compaction is due (`compaction.background`, or `KODACT_BACKGROUND_SUMMARY` for A/B runs). Off
 /// until an eval run has measured it.
@@ -1076,6 +1085,7 @@ pub fn build_session(
         exclude_dynamic: opts.exclude_dynamic_system_prompt_sections,
         output_style: Some(style.prompt.clone()).filter(|p| !p.is_empty()),
         autonomous,
+        short: short_prompt(&settings),
         env: env_info,
     };
     let sp_opts = prompt.options();

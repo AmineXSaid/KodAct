@@ -11,6 +11,12 @@ const BUILTIN: &[(&str, &str)] = &[
     ("04-style", include_str!("../prompts/04-style.md")),
 ];
 
+/// The shorter built-in prompt (`prompt.short`, off until measured): facts about the harness,
+/// rules about the user's own work, and the rules eval tasks show models need, each with its
+/// reason. Other harnesses ship base prompts of 750 to 3,700 characters
+/// (docs/research/harness-study); this one is measured against the full one before it replaces it.
+const SHORT: &str = include_str!("../prompts/short.md");
+
 /// The section added for unattended runs (`--autonomous`).
 pub const AUTONOMOUS: &str = include_str!("../prompts/05-autonomous.md");
 
@@ -29,6 +35,8 @@ pub struct SystemPromptOptions {
     pub output_style: Option<String>,
     /// `--autonomous`: add the unattended-run section.
     pub autonomous: bool,
+    /// Use the shorter built-in prompt (`prompt.short`).
+    pub short: bool,
 }
 
 /// Facts about the machine and project for the environment section.
@@ -130,6 +138,8 @@ pub fn build_system(opts: &SystemPromptOptions, env: &EnvInfo) -> (Vec<SystemBlo
         opts.prompts_dir.as_deref().map(|d| read_dir_md(&d.join("system"))).filter(|s| !s.is_empty())
     {
         sections.iter().map(|(_, t)| fill(t, env)).collect::<Vec<_>>().join("\n\n")
+    } else if opts.short {
+        SHORT.trim().to_string()
     } else {
         BUILTIN.iter().map(|(_, t)| t.trim().to_string()).collect::<Vec<_>>().join("\n\n")
     };
@@ -173,6 +183,24 @@ mod tests {
             git_status: None,
             checks: vec![],
             shell: None,
+        }
+    }
+
+    #[test]
+    fn the_short_prompt_replaces_the_built_in_sections_and_keeps_the_rest() {
+        let opts = SystemPromptOptions { short: true, autonomous: true, ..Default::default() };
+        let (blocks, _) = build_system(&opts, &env());
+        let t = &blocks[0].text;
+        assert!(t.starts_with("You are KodAct"));
+        assert!(t.contains("<env>") && t.contains("Running unattended"), "environment and unattended kept");
+        assert!(!t.contains("# How to work"), "the full sections are not added");
+        // Without the sections both share (environment, unattended), it is under half the size.
+        let short = build_system(&SystemPromptOptions { short: true, ..Default::default() }, &env()).0;
+        let full = build_system(&SystemPromptOptions::default(), &env()).0;
+        assert!(short[0].text.len() * 2 < full[0].text.len(), "{} against {}", short[0].text.len(), full[0].text.len());
+        // The rules evals were written for stay: exact output, no faked results, stop at the target.
+        for rule in ["print exactly that", "Never fake a result", "Stop when every requirement is met"] {
+            assert!(t.contains(rule), "{rule}");
         }
     }
 
