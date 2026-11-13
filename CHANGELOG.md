@@ -55,7 +55,39 @@
   (compaction at a 100k window, then a kill and resume). Not yet run against
   the real API: that needs a key.
 
+### The pacing nudges are removed
+- **`progress`, `progressEarly`, `pace` and `backOff` are gone.** In the runs
+  that measured them, the pacing nudge spoke in 2 of 7 runs on a small model,
+  with no difference it caused, and 3 times in 15 Terminal-Bench runs: twice
+  in runs that passed, on a task that passes about 4 times in 5 without it, and
+  once in a run that then failed. What it said ("make the change now") is
+  advice the model can give itself, not a fact it lacks (docs/goal.md rule 8),
+  and without a time limit it would have told a model to stop looking into a
+  question after 15 steps. Nothing changes by default: all four were off.
+  Their names now get the unknown-name warning in `KODACT_NUDGES` and are
+  ignored in settings. The nudges that carry a fact stay, and what counts as
+  progress stays for `adaptiveEffort`. `kodact-eval` reports "Nudges per
+  task".
+
 ### What KodAct says it checked
+- **Running the program a compile built is a check**: a build-and-test
+  command that failed on a bug in its own test code stayed the last check,
+  failed, though the model then ran the program cleanly, so KodAct reminded
+  it to fix what wasn't broken; and a comparison script that failed after a
+  passing build went unseen, the build being the last check. A run of a
+  program built in the turn now counts: by its path, from inline code that
+  starts it by its path, or from a script that does, and where its exit code
+  is the command's own it is a pass (one hidden behind `| tail` or `; echo`
+  is "ran"). Only while the program is newer than its sources and the turn's
+  edits: a build that failed, or one not redone after an edit, is stale and
+  checks nothing (task `verify-built-program`).
+- **`report.py` doesn't blame the agent for a test that couldn't download its
+  data**: a test that fetches its data in its own body (MNIST in
+  `pytorch-model-cli`) and failed on the network was a `false success`, because
+  pytest had started. Now a run whose every failed test's error is a network
+  failure, and none an assertion, is a `verifier error`, out of the valid-run
+  count; the network signatures also cover "Name or service not known", "Name
+  does not resolve" and a failed `urlopen`.
 - **A tool asked about itself isn't a check**: `gcc --version`, `pytest
   --help`, `make --version` or `gcc -v` after an edit counted as testing it,
   so the reminder about untested changes stayed silent and the result said
@@ -67,10 +99,9 @@
   request's words, a guess). `/goal`'s check is told them too, and
   `kodact-eval` records them per run.
 - **A renamed or removed file isn't called missing**: the end-of-turn
-  constraint note and the pace warning listed a file the request asked to
-  rename ("Rename helper.py to utils.py") as missing, asking the model to make
-  it again. Only files that weren't there when the turn started count (task
-  `rename-file`).
+  constraint note listed a file the request asked to rename ("Rename helper.py
+  to utils.py") as missing, asking the model to make it again. Only files that
+  weren't there when the turn started count (task `rename-file`).
 - **"Form", "platform" or "confirm" don't make a sentence a removal**: the
   command `rm` was matched as letters, so "the compressed form of data.txt" or
   "transform" dropped every file the sentence named. `rm` now counts only as a
@@ -79,12 +110,12 @@
   (`</system-reminder>`) is no longer read as a file either.
 - **`np.float64` isn't a file**: a dotted code name had a file name's shape
   (`np.float64`, `self.data`, `math.log`, `app.registry.route`), so the
-  constraint note and the pace warning said it was missing and asked the model
-  to write it. A bare `name.ext` now needs evidence: the file exists, its
-  extension is a common file type, a word just before it asks to write it
-  (`Write me data.comp`), or it is where a sentence that writes files puts
-  something (`... and the process ID to server.pid`). Of the 52 eval tasks'
-  requests, 5 read differently, each losing only names that weren't files.
+  constraint note said it was missing and asked the model to write it. A bare
+  `name.ext` now needs evidence: the file exists, its extension is a common
+  file type, a word just before it asks to write it (`Write me data.comp`), or
+  it is where a sentence that writes files puts something (`... and the
+  process ID to server.pid`). Of the 52 eval tasks' requests, 5 read
+  differently, each losing only names that weren't files.
 - **`watch.py`**: the end says what KodAct's last check ran (`KodAct's last
   check passed: $ gcc -O2 -o app app.c`) and which files the task asks for
   don't exist; a step already under way when the watch starts is timed from the

@@ -179,7 +179,7 @@ pub struct RunRecord {
     /// Replies that were all reasoning, each answered with a reminder to act (`act_reminder`).
     #[serde(default)]
     pub act_reminders: u64,
-    /// Progress nudges given (`system/nudge`), by kind.
+    /// Nudges given (`system/nudge`), by kind.
     #[serde(default)]
     pub nudges: std::collections::BTreeMap<String, u64>,
     /// Tokens the run's requests used: input (cache reads and writes included) and output.
@@ -758,7 +758,7 @@ pub fn render_markdown(r: &Report) -> String {
          | Wall time per task | {:.1}s |\n| Recovery rate | {} |\n| False-finish rate | {} |\n| Invalid-call rate | {} |\n\
          | Verification reminders per task | {:.2} |\n| Loop warnings per task | {:.2} |\n\
          | Reasoning-only replies per task | {:.2} |\n| Edits told they broke the syntax, per task | {:.2} |\n\
-         | Progress nudges per task | {:.2} |\n| Tokens per task | {:.0} |\n| Tool calls before the first write | {} |\n\
+         | Nudges per task | {:.2} |\n| Tokens per task | {:.0} |\n| Tool calls before the first write | {} |\n\
          | Compactions per task | {:.2} |\n\
          | Failed summaries per task | {:.2} |\n| Finished as verified, check failed | {} |\n\n",
         r.label,
@@ -890,7 +890,7 @@ pub fn render_compare(a: &Report, b: &Report) -> String {
         &delta(x.act_reminders_per_run, y.act_reminders_per_run, false),
     ));
     out.push_str(&row(
-        "Progress nudges per task",
+        "Nudges per task",
         format!("{:.2}", x.nudges_per_run),
         format!("{:.2}", y.nudges_per_run),
         &delta(x.nudges_per_run, y.nudges_per_run, false),
@@ -966,22 +966,22 @@ mod tests {
     fn nudges_tokens_and_the_first_write_are_counted() {
         let lines = [
             json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}, {"type": "tool_use", "name": "Grep"}]}}),
-            json!({"type": "system", "subtype": "nudge", "kind": "progress_early", "calls": 5}),
+            json!({"type": "system", "subtype": "nudge", "kind": "shell_edit", "file": "a.py"}),
             json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write"}]}}),
             json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit"}]}}),
-            json!({"type": "system", "subtype": "nudge", "kind": "progress"}),
-            json!({"type": "system", "subtype": "nudge", "kind": "progress"}),
+            json!({"type": "system", "subtype": "nudge", "kind": "constraints"}),
+            json!({"type": "system", "subtype": "nudge", "kind": "constraints"}),
             json!({"type": "result", "is_error": false, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 5}}),
             json!({"type": "result", "is_error": false, "usage": {"input_tokens": 50, "output_tokens": 10}}),
         ];
         let f = parse_stream(&lines);
-        assert_eq!(f.nudges.get("progress"), Some(&2));
-        assert_eq!(f.nudges.get("progress_early"), Some(&1));
+        assert_eq!(f.nudges.get("constraints"), Some(&2));
+        assert_eq!(f.nudges.get("shell_edit"), Some(&1));
         assert_eq!((f.tokens, f.calls_to_first_write), (185, Some(3)));
         let f = parse_stream(&lines[..2]);
         assert_eq!(f.calls_to_first_write, None);
         let mut a = rec(true, false, false, 0.1);
-        a.nudges.insert("progress".into(), 3);
+        a.nudges.insert("constraints".into(), 3);
         a.calls_to_first_write = Some(4);
         let b = rec(true, false, false, 0.1);
         let s = summarize(&[a, b]);

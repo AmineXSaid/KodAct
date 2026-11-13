@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
-# Measure the progress nudges, each against its own eval task: one build, nudge off (A) and on
-# (B), then the A/B table per nudge. This is the measurement each nudge waits for before it can
-# be turned on by default (docs/CLI.md, "Progress nudges").
+# Measure the nudges, each against its own eval task: one build, nudge off (A) and on (B), then
+# the A/B table per nudge. This is the measurement each nudge waits for before it can be turned
+# on by default (docs/CLI.md, "Nudges").
 #
 #   source ~/.kodact-env                       # endpoint and key, as for kodact-eval
 #   scripts/nudge-ab.sh [--repeat N] [--label NAME] [GROUP]... -- KODACT_ARGS
 #
 #   scripts/nudge-ab.sh --repeat 3 -- --model <model> --dangerously-skip-permissions
-#   scripts/nudge-ab.sh --repeat 3 limits pace -- --model <model> --dangerously-skip-permissions
+#   scripts/nudge-ab.sh --repeat 3 limits snapshots -- --model <model> --dangerously-skip-permissions
 #   scripts/nudge-ab.sh --repeat 1 suite -- --model <model> --dangerously-skip-permissions
 #
-# GROUP (default: every group but `suite`):
-#   progress     map-the-routes        none                 vs progress,progressEarly
+# GROUP (default: shellEdit, constraints, snapshots, limits):
 #   shellEdit    rename-keyword        none                 vs shellEdit
 #   constraints  named-deliverables    none                 vs constraints,namedChecks
 #   snapshots    optimize-under-time   none                 vs passingSnapshots
-#   backOff      three-reports         progress,progressEarly vs the same plus backOff
-#   pace         two-plan-scheduler    none                 vs pace
 #   limits       two-plan-scheduler    none                 vs limitVerdicts,staleDeliverables
 #   effort       two-plan-scheduler    none                 vs adaptiveEffort (give both an --effort)
 #   timebox      two-plan-scheduler    none                 vs thinkingTimeBox
@@ -54,17 +51,14 @@ if [ -z "${KODACT_OPENAI_BASE_URL:-}${KODACT_BASE_URL:-}${KODACT_API_KEY:-}${KOD
   echo "nudge-ab: no endpoint or key in the environment: source your env file first" >&2
   exit 1
 fi
-[ ${#groups[@]} -eq 0 ] && groups=(progress shellEdit constraints snapshots backOff pace limits)
+[ ${#groups[@]} -eq 0 ] && groups=(shellEdit constraints snapshots limits)
 
 # group -> "task|off|on"
 spec() {
   case "$1" in
-    progress) echo "map-the-routes|none|progress,progressEarly" ;;
     shellEdit) echo "rename-keyword|none|shellEdit" ;;
     constraints) echo "named-deliverables|none|constraints,namedChecks" ;;
     snapshots) echo "optimize-under-time|none|passingSnapshots" ;;
-    backOff) echo "three-reports|progress,progressEarly|progress,progressEarly,backOff" ;;
-    pace) echo "two-plan-scheduler|none|pace" ;;
     limits) echo "two-plan-scheduler|none|limitVerdicts,staleDeliverables" ;;
     effort) echo "two-plan-scheduler|none|adaptiveEffort" ;;
     timebox) echo "two-plan-scheduler|none|thinkingTimeBox" ;;

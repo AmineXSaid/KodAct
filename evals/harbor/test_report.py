@@ -16,8 +16,11 @@ from pathlib import Path
 import report
 
 
-def make_trial(tmp: Path, task: str, reward: str, verifier_stdout: str, *, ran_tests: int | None) -> report.Trial:
-    """A minimal trial dir: the agent said done (a kodact result), the verifier wrote `reward`."""
+def make_trial(
+    tmp: Path, task: str, reward: str, verifier_stdout: str, *, ran_tests: int | None, tests: list[dict] | None = None
+) -> report.Trial:
+    """A minimal trial dir: the agent said done (a kodact result), the verifier wrote `reward`.
+    `tests` are json-ctrf's per-test records, when the test needs them."""
     d = tmp / f"{task}__TEST"
     (d / "agent").mkdir(parents=True)
     (d / "verifier").mkdir(parents=True)
@@ -28,7 +31,8 @@ def make_trial(tmp: Path, task: str, reward: str, verifier_stdout: str, *, ran_t
     (d / "verifier" / "test-stdout.txt").write_text(verifier_stdout)
     if ran_tests is not None:  # a ctrf.json as json-ctrf would write it
         summary = {"tests": ran_tests, "passed": 0, "failed": ran_tests, "skipped": 0}
-        (d / "verifier" / "ctrf.json").write_text(json.dumps({"results": {"summary": summary, "tests": []}}))
+        records = tests or []
+        (d / "verifier" / "ctrf.json").write_text(json.dumps({"results": {"summary": summary, "tests": records}}))
     return report.Trial(d)
 
 
@@ -95,6 +99,56 @@ def test_verifier_error_is_left_out_of_valid_trials(tmp_path):
     valid = [t for t in trials if not t.verdict.startswith(invalid)]
     # Only the genuine failure is a valid trial; the cert-failed verifier is set apart.
     assert [t.task for t in valid] == ["gpt2-codegolf"]
+
+
+# A test that downloads its own data in its body (pytorch-model-cli fetches MNIST there): the
+# tests ran ("1 failed, 5 passed"), and the one that failed never got past the download.
+MNIST_DOWNLOAD_FAILED = """\
+../tests/test_outputs.py .....F                                          [100%]
+FAILED ../tests/test_outputs.py::test_cli_tool_output - RuntimeError: Error d...
+========================= 1 failed, 5 passed in 41.12s =========================
+"""
+MNIST_TRACE = """\
+    def test_cli_tool_output():
+        # Now first download the first 50 images of the MNIST dataset
+>       dataset = datasets.MNIST(root="./data", train=False, download=True)
+E               RuntimeError: Error downloading train-labels-idx1-ubyte.gz:
+E               Tried https://ossci-datasets.s3.amazonaws.com/mnist/, got:
+E               <urlopen error [Errno -2] Name or service not known>
+E               Tried http://yann.lecun.com/exdb/mnist/, got:
+E               HTTP Error 403: Forbidden
+"""
+PREDICTIONS_TRACE = """\
+    def test_cli_tool_output():
+        # Now first download the first 50 images of the MNIST dataset
+>       assert all_correct, "Predictions do not match expected values"
+E       AssertionError: Predictions do not match expected values
+"""
+
+
+def ctrf_test(name: str, status: str, trace: str = "") -> dict:
+    return {"name": name, "status": status, "message": "The test failed in the call phase", "trace": trace}
+
+
+def test_a_test_that_failed_fetching_its_own_data_is_verifier_error(tmp_path):
+    tests = [ctrf_test(f"test_{i}", "passed") for i in range(5)]
+    tests.append(ctrf_test("test_cli_tool_output", "failed", MNIST_TRACE))
+    t = make_trial(tmp_path, "pytorch-model-cli", "0.0", MNIST_DOWNLOAD_FAILED, ran_tests=6, tests=tests)
+    assert t.verdict == "verifier error"
+
+
+def test_a_wrong_answer_beside_a_network_failure_stays_the_agents(tmp_path):
+    # One test judged the agent's output and failed it: the run measured something.
+    tests = [
+        ctrf_test("test_cli_tool_output", "failed", PREDICTIONS_TRACE),
+        ctrf_test("test_download_sample", "failed", MNIST_TRACE),
+    ]
+    stdout = MNIST_DOWNLOAD_FAILED.replace("1 failed, 5 passed", "2 failed, 4 passed")
+    t = make_trial(tmp_path, "pytorch-model-cli", "0.0", stdout, ran_tests=6, tests=tests)
+    assert t.verdict == "false success"
+    # The test's own source mentions downloading; only its error lines are read.
+    t = make_trial(tmp_path / "b", "pytorch-model-cli", "0.0", stdout, ran_tests=6, tests=tests[:1])
+    assert t.verdict == "false success"
 
 
 def test_verifier_timeout_is_verifier_error(tmp_path):

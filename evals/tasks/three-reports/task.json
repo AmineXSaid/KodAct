@@ -4,9 +4,7 @@
   "pillar": "long-horizon",
   "tags": [
     "python",
-    "exploration",
-    "back-off",
-    "progress-nudges"
+    "exploration"
   ],
   "timeout_secs": 900
 }

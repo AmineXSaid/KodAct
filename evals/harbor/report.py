@@ -61,7 +61,11 @@ VERIFIER_INFRA = re.compile(
     r"(?i)(invalid peer certificate|unknownissuer|certificate[_ ]verify[_ ]failed|unable to get local issuer|"
     r"ssl: certificate|failed to fetch:.*\.(whl|metadata|tar\.gz)|"
     r"couldn.?t be found on the hugging\s*face hub|could not (resolve host|connect to)|"
-    r"temporary failure in name resolution|connection refused|max retries exceeded)"
+    r"temporary failure in name resolution|connection refused|max retries exceeded|"
+    # A name the resolver couldn't find, as glibc, musl and macOS say it; a URL that couldn't be
+    # opened (urllib); a dataset whose every mirror failed (torchvision's MNIST, inside a test).
+    r"name or service not known|name does not resolve|nodename nor servname provided|"
+    r"network is unreachable|no route to host|urlopen error|error downloading)"
 )
 
 # The verifier's own tools could not run in the container, though its tests did: their result
@@ -88,6 +92,14 @@ def redact(text: str) -> str:
 def clip(text, n: int) -> str:
     text = str(text or "").strip()
     return text if len(text) <= n else text[:n] + f" …[{len(text) - n} more chars]"
+
+
+def failure_text(test: dict) -> str:
+    """A failed test's own error, from json-ctrf: the exception lines of its trace (pytest's `E `
+    lines), else its trace or message. Not its source lines, which can say anything."""
+    trace = test.get("trace") or ""
+    lines = [ln for ln in trace.splitlines() if ln.startswith("E ")]
+    return "\n".join(lines) or trace or (test.get("message") or "")
 
 
 def head_tail(text, n: int) -> str:
@@ -337,9 +349,16 @@ class Trial:
         # during setup. Its absence, with the infra signature, means the verifier died fetching its
         # own dependencies or data and measured nothing.
         tests_ran = re.search(r"\b\d+ (passed|failed)\b", stdout)
+        # Some tests fetch their data in the test body itself (pytorch-model-cli downloads MNIST
+        # there), so they ran and failed without judging anything: each failed test's own error is
+        # a network failure, and none is an assertion about the agent's output.
+        errors = [failure_text(t) for t in tests if t.get("status") not in ("passed", "skipped")]
+        failed_fetching = bool(errors) and all(VERIFIER_INFRA.search(e) and "AssertionError" not in e for e in errors)
         self.verifier_infra = bool(
             (self.reward or 0) < 1
-            and ((not tests_ran and VERIFIER_INFRA.search(stdout)) or VERIFIER_ENV.search(stdout))
+            and (
+                (not tests_ran and VERIFIER_INFRA.search(stdout)) or failed_fetching or VERIFIER_ENV.search(stdout)
+            )
         )
         return {"summary": res.get("summary") or {}, "failed": failed, "stdout_tail": stdout.splitlines()[-VERIFIER_LINES:]}
 

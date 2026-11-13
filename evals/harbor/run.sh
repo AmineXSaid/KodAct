@@ -19,8 +19,8 @@
 #                         a proxy blocks huggingface.co (job name gets -hfmirror)
 #   KODACT_STATIC_BIN      use this binary as is (job name gets -custombin); by default
 #                         target-static/release/kodact is rebuilt when the source changed
-#   KODACT_NUDGES          the progress nudges on in every task (job name gets -n-<list>, so an
-#                         A/B of nudges off and on is two jobs told apart by name)
+#   KODACT_NUDGES          the nudges on in every task (job name gets -n-<list>, so an A/B of
+#                         nudges off and on is two jobs told apart by name)
 #   KODACT_*               endpoint, key and limits, passed into the containers
 # Anything after the mode goes to `harbor run` (e.g. -i 'some-task*').
 set -euo pipefail

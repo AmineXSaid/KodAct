@@ -7,9 +7,7 @@
     "optimize",
     "deliverables",
     "time-limit",
-    "joint-limit",
-    "progress-nudges",
-    "pace"
+    "joint-limit"
   ],
   "timeout_secs": 900,
   "args": [
