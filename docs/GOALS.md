@@ -84,7 +84,19 @@ Each pillar lists what KodAct does about it and what shows that it works.
     throttle and not retried, and a `retry-after` longer than a retry sleeps
     is taken in full when it fits the run's time, or stated and the turn
     ends: never shortened to a minute and tried again.
+  - Edit applies a near match instead of failing when one transformation maps
+    `old_string` exactly onto one place in the file: trailing whitespace, a
+    uniform indentation offset, spaces for the file's tabs (or tabs for its
+    spaces), or ASCII quotes, dashes and spaces for typographic ones. The text
+    `new_string` kept from `old_string` gets the file's own indentation and
+    characters; the text it added is written as given, and the result says
+    what differed and where (tasks `edit-curly-quotes`, `edit-tabs`). A match
+    that is not unique, or a difference no single transformation explains, is
+    not guessed.
   - Edit's "not found" error gives the next step:
+    - `new_string` already in the file: the edit has most likely been made
+      already (a result lost to a crash, a retried call), and nothing is
+      applied (task `edit-already-applied`);
     - text that matches except for whitespace, quoted with line numbers;
     - Read's line-number prefixes copied into `old_string`;
     - otherwise the closest window, scored.

@@ -8,20 +8,48 @@ use crate::{expand_path, Tool, ToolContext, ToolOutput};
 
 /// Replace `old` with `new` in `content`, enforcing uniqueness unless `all`.
 pub fn apply_edit(content: &str, old: &str, new: &str, all: bool) -> Result<String, String> {
+    apply_edit_near(content, old, new, all).map(|(c, _)| c)
+}
+
+/// [`apply_edit`], and the near match it applied when `old` was not in `content` as written
+/// (`super::near`): the tool result says what differed.
+pub fn apply_edit_near(
+    content: &str,
+    old: &str,
+    new: &str,
+    all: bool,
+) -> Result<(String, Option<super::near::NearMatch>), String> {
     if old == new {
         return Err("No changes to make: old_string and new_string are exactly the same.".into());
     }
     if old.is_empty() {
         if content.is_empty() {
-            return Ok(new.to_string());
+            return Ok((new.to_string(), None));
         }
         return Err("old_string is empty but the file is not; use Write to replace a whole file.".into());
     }
     let count = content.matches(old).count();
     match count {
-        0 => Err(format!("String to replace not found in file.\nString: {old}\n\n{}", not_found_hint(content, old))),
-        1 => Ok(content.replacen(old, new, 1)),
-        _ if all => Ok(content.replace(old, new)),
+        0 => {
+            // The new text already there says more than any near match of the old: the edit has
+            // most likely been made already (a result lost to a crash, a retried call), and a
+            // near match could make it twice.
+            if let Some(line) = already_applied(content, new) {
+                return Err(format!(
+                    "String to replace not found in file, but new_string is already in the file (starting at line                      {line}): this edit may already have been made. Read those lines before trying again.\nString: \
+                     {old}"
+                ));
+            }
+            if !all {
+                if let Some(m) = super::near::find(content, old, new) {
+                    let c = m.content.clone();
+                    return Ok((c, Some(m)));
+                }
+            }
+            Err(format!("String to replace not found in file.\nString: {old}\n\n{}", not_found_hint(content, old)))
+        }
+        1 => Ok((content.replacen(old, new, 1), None)),
+        _ if all => Ok((content.replace(old, new), None)),
         n => {
             let at: Vec<String> =
                 content.match_indices(old).map(|(i, _)| (content[..i].matches('\n').count() + 1).to_string()).collect();
@@ -33,6 +61,16 @@ pub fn apply_edit(content: &str, old: &str, new: &str, all: bool) -> Result<Stri
             ))
         }
     }
+}
+
+/// The 1-based line where `new` (trimmed) already is in `content`, when it is long enough to
+/// say so with confidence: a short `new_string` ("1", "}") is in most files.
+fn already_applied(content: &str, new: &str) -> Option<usize> {
+    let new = new.trim();
+    if new.chars().count() < 20 {
+        return None;
+    }
+    content.find(new).map(|i| content[..i].matches('\n').count() + 1)
 }
 
 /// Replace lines `start..=end` (1-based) of `content` with `new` (`edit.lineRanges`). `anchor`
@@ -373,16 +411,22 @@ impl Tool for Edit {
                 Err(e) => ToolOutput::error(e),
             };
         }
-        let updated = match apply_edit(&norm, &old_s.replace("\r\n", "\n"), &new_s.replace("\r\n", "\n"), all) {
-            Ok(u) => u,
-            Err(e) => return ToolOutput::error(e),
-        };
+        let (updated, near) =
+            match apply_edit_near(&norm, &old_s.replace("\r\n", "\n"), &new_s.replace("\r\n", "\n"), all) {
+                Ok(u) => u,
+                Err(e) => return ToolOutput::error(e),
+            };
+        let note = near.as_ref().map(|m| format!(" {}", m.note())).unwrap_or_default();
         let out = if crlf { updated.replace('\n', "\r\n") } else { updated.clone() };
         match write_result(ctx, &path, &content, &out) {
             Ok(patch) => ToolOutput::text(format!(
-                "The file {} has been updated. Here's the result of running `cat -n` on a snippet of the edited file:\n{}",
+                "The file {} has been updated.{note} Here's the result of running `cat -n` on a snippet of the edited \
+                 file:\n{}",
                 path.display(),
-                snippet(&updated, new_s)
+                match &near {
+                    Some(m) => snippet_at(&updated, m.first_line, new_s.lines().count()),
+                    None => snippet(&updated, new_s),
+                }
             ))
             .with_structured(json!({
                 "filePath": path, "oldString": old_s, "newString": new_s, "replaceAll": all,
@@ -452,10 +496,16 @@ impl Tool for MultiEdit {
         if edits.is_empty() {
             return ToolOutput::error("edits must contain at least one edit");
         }
+        let mut notes = vec![];
         for (i, e) in edits.iter().enumerate() {
             let all = e.get("replace_all").and_then(Value::as_bool).unwrap_or(false);
-            match apply_edit(&content, &lf(str_arg(e, "old_string")), &lf(str_arg(e, "new_string")), all) {
-                Ok(c) => content = c,
+            match apply_edit_near(&content, &lf(str_arg(e, "old_string")), &lf(str_arg(e, "new_string")), all) {
+                Ok((c, near)) => {
+                    content = c;
+                    if let Some(m) = near {
+                        notes.push(format!(" Edit {}: {}", i + 1, m.note()));
+                    }
+                }
                 Err(err) => {
                     return ToolOutput::error(format!(
                         "Edit {} of {} failed; no changes were made. {err}",
@@ -467,10 +517,12 @@ impl Tool for MultiEdit {
         }
         let content = if crlf { content.replace('\n', "\r\n") } else { content };
         match write_result(ctx, &path, &original, &content) {
-            Ok(patch) => ToolOutput::text(format!("Applied {} edits to {}", edits.len(), path.display()))
-                .with_structured(
-                    json!({"filePath": path, "edits": edits, "originalFile": original, "structuredPatch": patch}),
-                ),
+            Ok(patch) => {
+                ToolOutput::text(format!("Applied {} edits to {}.{}", edits.len(), path.display(), notes.concat()))
+                    .with_structured(
+                        json!({"filePath": path, "edits": edits, "originalFile": original, "structuredPatch": patch}),
+                    )
+            }
             Err(e) => ToolOutput::error(e),
         }
     }

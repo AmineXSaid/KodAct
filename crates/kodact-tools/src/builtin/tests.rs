@@ -365,8 +365,9 @@ fn apply_edit_rules() {
 fn edit_failures_point_at_the_nearest_text() {
     let file =
         "def total(items):\n    s = 0\n    for i in items:\n        s += i.price\n    return s\n\nx = 1\nx = 1\n";
-    // Wrong indentation: the hint quotes the real lines with their numbers.
-    let e = apply_edit(file, "  for i in items:\n      s += i.price", "", false).unwrap_err();
+    // Indentation off by different amounts on different lines (a uniform offset is applied as a
+    // near match): the hint quotes the real lines with their numbers.
+    let e = apply_edit(file, "      for i in items:\n      s += i.price", "", false).unwrap_err();
     assert!(e.contains("except for whitespace") && e.contains("lines 3-4"), "{e}");
     assert!(e.contains("     3\t    for i in items:"), "{e}");
     // Read's line-number prefixes copied into old_string.
@@ -903,7 +904,6 @@ async fn edit_once(c: &ToolContext, f: &str, old: &str, new: &str) -> (String, b
 }
 
 #[tokio::test]
-#[ignore = "edit near matches (harness study A1/G2/C1) not implemented yet"]
 async fn edit_applies_a_match_that_differs_only_in_trailing_whitespace() {
     let d = tempfile::tempdir().unwrap();
     let f = p(d.path(), "a.py");
@@ -913,11 +913,10 @@ async fn edit_applies_a_match_that_differs_only_in_trailing_whitespace() {
     let (t, err) = edit_once(&c, &f, "x = 1\ny = 2", "x = 10\ny = 20").await;
     assert!(!err, "{t}");
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "x = 10\ny = 20\nz = 3\n");
-    assert!(t.contains("trailing whitespace") && t.contains("line 1"), "the result says what differed: {t}");
+    assert!(t.contains("trailing whitespace") && t.contains("lines 1-2"), "the result says what differed: {t}");
 }
 
 #[tokio::test]
-#[ignore = "edit near matches (harness study A1/G2/C1) not implemented yet"]
 async fn edit_applies_a_uniform_indentation_offset_and_reindents_the_replacement() {
     let d = tempfile::tempdir().unwrap();
     let f = p(d.path(), "a.py");
@@ -934,11 +933,10 @@ async fn edit_applies_a_uniform_indentation_offset_and_reindents_the_replacement
         std::fs::read_to_string(&f).unwrap(),
         "def total(items):\n    s = 0\n    for i in items:\n        s += i.price * i.qty\n    return s\n"
     );
-    assert!(t.contains("indentation") && t.contains("line 3"), "{t}");
+    assert!(t.contains("indentation") && t.contains("lines 3-4"), "{t}");
 }
 
 #[tokio::test]
-#[ignore = "edit near matches (harness study A1/G2/C1) not implemented yet"]
 async fn edit_maps_spaces_onto_a_tab_indented_file() {
     let d = tempfile::tempdir().unwrap();
     let f = p(d.path(), "fetch.py");
@@ -962,7 +960,6 @@ async fn edit_maps_spaces_onto_a_tab_indented_file() {
 }
 
 #[tokio::test]
-#[ignore = "edit near matches (harness study A1/G2/C1) not implemented yet"]
 async fn edit_matches_typographic_characters_and_keeps_them_in_copied_text() {
     let d = tempfile::tempdir().unwrap();
     let f = p(d.path(), "strings.py");
@@ -987,7 +984,6 @@ async fn edit_matches_typographic_characters_and_keeps_them_in_copied_text() {
 }
 
 #[tokio::test]
-#[ignore = "edit near matches (harness study A1/G2/C1) not implemented yet"]
 async fn a_near_match_is_applied_only_when_it_is_unique_and_crlf_is_kept() {
     let d = tempfile::tempdir().unwrap();
     let f = p(d.path(), "a.txt");
@@ -1008,7 +1004,6 @@ async fn a_near_match_is_applied_only_when_it_is_unique_and_crlf_is_kept() {
 }
 
 #[test]
-#[ignore = "the already-applied hint (harness study O2) not implemented yet"]
 fn a_miss_says_when_the_new_text_is_already_in_the_file() {
     let file = "[api]\nhost = api.internal\ntimeout = 60\nretries = 2\n";
     let e =
