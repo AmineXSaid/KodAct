@@ -368,6 +368,7 @@ answer. It is absent with the verification loop off.
 | --- | --- | --- |
 | `no_changes` | The turn changed no file | |
 | `passed` | A check ran after the last change and passed | `command` |
+| `ran` | A check ran after the last change and the command ended 0, but in a form that hides the check's own exit code, so whether it passed isn't known | `command` |
 | `read_back` | Only plain data files changed (an answer, a table), each read back after its last change | |
 | `failed` | The last check failed, and nothing changed after it | `command` |
 | `unchecked` | Changes no check has run on since | `files`, and `shell: true` when they came from shell commands |
@@ -376,6 +377,15 @@ A check is a test, build or lint run (`cargo test`, `make`, `pytest`, a
 configured `verification.commands` entry) or a run of the changed code. A
 tool asked only about itself (`gcc --version`, `pytest --help`, `gcc -v`) is
 not one: it tests nothing.
+
+The shell reports the exit code of the last command it ran, so `passed` is
+claimed only where that is the check's own: `pytest`, `cd app && make test`,
+`cargo test && echo ok`. `pytest | tail -20`, `make test; echo done`,
+`./run || true`, a check inside a loop or one sent to the background end 0
+whatever the check did, and are reported as `ran`. `set -e` and
+`set -o pipefail` earlier in the same command are honoured
+(`set -o pipefail; pytest | tail -20` can pass). A non-zero end is `failed`
+either way. No reminder comes of `ran`; only the result says it.
 
 With any status, `missing` lists the files the request asks to be made that
 don't exist when the turn ends: files it names that weren't there when the

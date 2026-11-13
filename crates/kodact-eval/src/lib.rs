@@ -202,7 +202,7 @@ pub struct RunRecord {
     pub compact_fallbacks: u64,
     pub agent_error: bool,
     pub stop_reason: Option<String>,
-    /// What the result said of the changes (`verification.status`): `passed`, `failed`,
+    /// What the result said of the changes (`verification.status`): `passed`, `ran`, `failed`,
     /// `unchecked`, `read_back` or `no_changes`. Beside `passed` it shows whether a false
     /// finish was announced by KodAct itself (`unchecked`, `failed`, or files said missing in
     /// `verification_missing`) or slipped past a check.

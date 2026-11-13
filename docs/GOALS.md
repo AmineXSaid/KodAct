@@ -135,7 +135,8 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - It is on by default; `KODACT_VERIFY=0` turns this one off, and
     `kodact-eval` records `verify_reminders` per run.
   - the result states where the changes stand (`verification.status`:
-    `passed`, `failed`, `unchecked`, `read_back`, `no_changes`), for scripts
+    `passed`, `ran`, `failed`, `unchecked`, `read_back`, `no_changes`; `ran`
+    is a check whose exit code the command hid, as in `pytest | tail`), for scripts
     to gate on; `kodact-eval` records it per run, so a false finish shows as
     announced (`unchecked`, `failed`) or as slipped past a check (`passed`);
   - `verification.missing` names the files the request asks to be made that

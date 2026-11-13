@@ -15,7 +15,7 @@ pub mod threat;
 pub use mode::PermissionMode;
 pub use paths::{is_within, normalize};
 pub use rule::{Rule, RuleError, RuleSpec};
-pub use shell::split_compound;
+pub use shell::{split_compound, split_with_separators, Separator};
 
 use std::path::{Path, PathBuf};
 

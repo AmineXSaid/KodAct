@@ -734,6 +734,86 @@ pub fn is_check(command: &str, configured: &[String], changed: &[PathBuf]) -> bo
     inline_interp && references_changed(command, changed)
 }
 
+/// Does this check command hide the check's exit code? The shell reports the status of the
+/// last thing it ran: `pytest | tail -20`, `make test; echo done`, `./run || true` and a check
+/// inside a `for` loop all end 0 whatever the check did, so a 0 from them says the command ran,
+/// not that it passed. Asked only of a command [`is_check`] accepted. `set -e` and
+/// `set -o pipefail` earlier in the command are honoured. When the check can't be placed in the
+/// command, the answer is yes: a pass is claimed only where the status is the check's own.
+pub fn hides_result(command: &str, configured: &[String], changed: &[PathBuf]) -> bool {
+    use kodact_permissions::Separator as S;
+    let stripped = strip_heredoc_bodies(command);
+    let parts = kodact_permissions::split_with_separators(&stripped);
+    let bodies = heredoc_bodies(command);
+    let (mut errexit, mut pipefail) = (false, false);
+    // The last part that is a check, and whether a shell it starts hides the result itself.
+    let mut found: Option<(usize, bool)> = None;
+    for (i, (part, _)) in parts.iter().enumerate() {
+        let all = words(part);
+        let w = skip_wrappers(&all);
+        let Some(first) = w.first() else { continue };
+        let prog = program(first);
+        if prog == "set" && found.is_none() {
+            let short = |c: char| w[1..].iter().any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(c));
+            let long = |name: &str| w.windows(2).any(|p| p[0].starts_with('-') && p[0].ends_with('o') && p[1] == name);
+            errexit |= short('e') || long("errexit");
+            pipefail |= long("pipefail");
+            continue;
+        }
+        if let Some(inner) = shell_command(prog, &w[1..]) {
+            if is_check(&inner, configured, changed) {
+                found = Some((i, hides_result(&inner, configured, changed)));
+            }
+            continue;
+        }
+        if is_shell(prog) && w.iter().any(|a| a.starts_with("<<")) {
+            if let Some((_, body)) = bodies
+                .iter()
+                .find(|(opener, body)| opener.contains(part.as_str()) && is_check(body, configured, changed))
+            {
+                found = Some((i, hides_result(body, configured, changed)));
+                continue;
+            }
+        }
+        let inline = INTERPRETERS.contains(&prog)
+            && !is_shell(prog)
+            && runs_inline_code(&w[1..])
+            && !in_place(prog, &w[1..])
+            && references_changed(command, changed);
+        if inline || part_is_check(part, configured, changed) {
+            found = Some((i, false));
+        }
+    }
+    let Some((mut j, inner_hides)) = found else { return true };
+    if inner_hides {
+        return true;
+    }
+    let last = parts.len() - 1;
+    // The check's own pipeline: only its last command's status counts, unless pipefail.
+    if parts[j].1 == S::Pipe {
+        if !pipefail {
+            return true;
+        }
+        while j < last && parts[j].1 == S::Pipe {
+            j += 1;
+        }
+    }
+    match parts[j].1 {
+        S::End | S::Pipe => false,
+        S::Background => true,
+        S::Or => j < last,
+        // With `set -e` a failing command ends the script there.
+        S::Seq => j < last && !errexit,
+        // `check && a && b`: a failure skips the rest of the list. Anything after the list, or
+        // an `||` in it, replaces the status.
+        S::And => parts[j + 1..].iter().enumerate().any(|(k, (_, sep))| match sep {
+            S::Or | S::Background => true,
+            S::Seq => j + 1 + k < last,
+            _ => false,
+        }),
+    }
+}
+
 fn part_is_check(part: &str, configured: &[String], changed: &[PathBuf]) -> bool {
     let all = words(part);
     let w = skip_wrappers(&all);
@@ -791,6 +871,9 @@ pub(crate) struct Tracker {
     pub fingerprint: Option<u64>,
     /// The last check's command and whether it failed.
     pub last_check: Option<(String, bool)>,
+    /// The last check ended 0 from a command that hides the check's own exit code
+    /// ([`hides_result`]): it ran, and whether it passed isn't known.
+    pub last_hidden: bool,
     pub reminders: u32,
     /// Checks still running in the background (they outlived their Bash timeout): the shell's ID,
     /// the command, and the file-history writes when it moved there.
@@ -917,6 +1000,10 @@ pub enum Verified {
     NoChanges,
     /// A check ran after the last change and passed.
     Passed { command: String },
+    /// A check ran after the last change and the command ended 0, but in a form that hides the
+    /// check's own exit code (`pytest | tail`, `make test; echo done`, `./run || true`): it
+    /// ran, and whether it passed isn't known.
+    Ran { command: String },
     /// The only changes are plain data files, read back after their last change.
     ReadBack,
     /// The last check failed, and nothing changed after it.
@@ -931,6 +1018,7 @@ impl Verified {
         match self {
             Verified::NoChanges => "no_changes",
             Verified::Passed { .. } => "passed",
+            Verified::Ran { .. } => "ran",
             Verified::ReadBack => "read_back",
             Verified::Failed { .. } => "failed",
             Verified::Unchecked { .. } => "unchecked",
@@ -940,7 +1028,9 @@ impl Verified {
     pub fn record(&self) -> Value {
         let mut v = serde_json::json!({"status": self.status()});
         match self {
-            Verified::Passed { command } | Verified::Failed { command } => v["command"] = command.as_str().into(),
+            Verified::Passed { command } | Verified::Ran { command } | Verified::Failed { command } => {
+                v["command"] = command.as_str().into()
+            }
             Verified::Unchecked { files, shell } => {
                 v["files"] = serde_json::json!(files);
                 if *shell {
@@ -1335,6 +1425,63 @@ mod tests {
         ] {
             assert!(is_check(yes, none, &changed), "{yes}");
         }
+    }
+
+    /// The shell reports its last command: a 0 after a pipe, a `;` or an `||` isn't the check's.
+    #[test]
+    fn a_command_that_hides_the_checks_exit_code_is_told_apart() {
+        let changed = [PathBuf::from("/p/enc.c"), PathBuf::from("/p/cli_tool")];
+        let hides = |c: &str| {
+            assert!(is_check(c, &[], &changed), "a check: {c}");
+            hides_result(c, &[], &changed)
+        };
+        for shown in [
+            "pytest",
+            "cd /app && pytest -q",
+            "cargo test && echo ok",
+            "make test 2>&1",
+            "cat input.txt | pytest",
+            "pytest;",
+            "set -e; make test; echo done",
+            "set -o pipefail; pytest 2>&1 | tail -20",
+            "set -euo pipefail\npytest | tee log.txt\necho done",
+            "bash -c 'cd /app && pytest'",
+            "pytest | tail; make test",
+            "gcc -O2 -o enc enc.c && ./enc && cmp a b | head -3",
+            "echo start; pytest",
+        ] {
+            assert!(!hides(shown), "the status is the check's: {shown}");
+        }
+        for hidden in [
+            "pytest 2>&1 | tail -20",
+            "cargo test | grep -c ok",
+            "make test; echo exit=$?",
+            "pytest\necho done",
+            "pytest || true",
+            "pytest && echo ok || echo failed",
+            "make test && echo ok; ls",
+            "pytest &",
+            "for i in 1 2 3; do pytest; echo ---; done",
+            "bash -c 'pytest | tail'",
+            "bash -c 'pytest'; echo done",
+            "set -e; pytest | tail",
+            "set -o pipefail; pytest | tail; echo done",
+            "gcc -O0 -o /tmp/dbg enc.c && cat data.comp | /tmp/dbg > /tmp/o 2>/tmp/log; echo exit=$?; tail -5 /tmp/log",
+        ] {
+            assert!(hides(hidden), "the status is another command's: {hidden}");
+        }
+        // A here-document run by a shell, and inline code that names a changed module.
+        assert!(!hides("bash <<'EOF'\ncd /p && pytest\nEOF"));
+        assert!(hides("bash <<'EOF'\npytest | tail\nEOF"));
+        let changed = [PathBuf::from("/p/algo.py")];
+        let inline = "python3 -c 'import algo; assert algo.f(2) == 4'";
+        assert!(is_check(inline, &[], &changed) && !hides_result(inline, &[], &changed));
+        let piped = "python3 -c 'import algo; assert algo.f(2) == 4' 2>&1 | tail -3";
+        assert!(is_check(piped, &[], &changed) && hides_result(piped, &[], &changed));
+        assert_eq!(
+            Verified::Ran { command: "pytest | tail".into() }.record(),
+            serde_json::json!({"status": "ran", "command": "pytest | tail"})
+        );
     }
 
     #[test]

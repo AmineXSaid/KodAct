@@ -463,6 +463,8 @@ def check_line(check: dict) -> str:
     files = ", ".join(check.get("files") or [])
     if status in ("passed", "failed") and command:
         return f"KodAct's last check {status}: $ {first_line(command, width() - 30)}"
+    if status == "ran" and command:
+        return f"KodAct's last check ran, its exit code hidden by the command: $ {first_line(command, width() - 50)}"
     if status == "unchecked":
         return "KodAct: changes no check has run on since: " + (files or "made by shell commands")
     return {"no_changes": "KodAct: no file changed", "read_back": "KodAct: data files read back after their last change"}.get(

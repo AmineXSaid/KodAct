@@ -257,6 +257,12 @@ pub fn harness_note(state: Option<&kodact_engine::Verified>, missing: &[String])
         Some(Verified::Passed { command }) => {
             format!("the last check (`{command}`) passed, and nothing changed after it.")
         }
+        Some(Verified::Ran { command }) => {
+            format!(
+                "the last check (`{command}`) ran and nothing changed after it, but the command hides the check's \
+                 exit code (a pipe, or commands after it), so whether it passed is not known."
+            )
+        }
         _ => String::new(),
     };
     if !missing.is_empty() {
@@ -320,6 +326,8 @@ mod tests {
             harness_note(Some(&Verified::Failed { command: "make test".into() }), &[]).contains("(`make test`) failed")
         );
         assert!(harness_note(Some(&Verified::Passed { command: "make test".into() }), &[]).contains("passed"));
+        let ran = harness_note(Some(&Verified::Ran { command: "make test | tail".into() }), &[]);
+        assert!(ran.contains("`make test | tail`") && ran.contains("not known"), "{ran}");
         // Nothing to say of a turn that changed nothing, or with the loop off.
         assert_eq!(harness_note(Some(&Verified::NoChanges), &[]), "");
         assert_eq!(harness_note(Some(&Verified::ReadBack), &[]), "");

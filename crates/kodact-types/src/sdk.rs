@@ -196,7 +196,7 @@ pub struct ResultMessage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
     /// Where the turn's changes stand when it ends (absent with the verification loop off):
-    /// `{"status": "no_changes" | "passed" | "read_back" | "failed" | "unchecked"}`, with the
+    /// `{"status": "no_changes" | "passed" | "ran" | "read_back" | "failed" | "unchecked"}`, with the
     /// check's `command`, or the unchecked `files`; and `missing`, the files the request asks to
     /// be made that don't exist, beside the status and never changing it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

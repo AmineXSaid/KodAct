@@ -993,6 +993,18 @@ async fn the_result_reports_the_verification_state() {
     let r = e.submit(prompt("again")).await;
     assert_eq!(r.verification, Some(Verified::Failed { command: "false".into() }));
     assert_eq!(r.verification.as_ref().unwrap().record(), json!({"status": "failed", "command": "false"}));
+    // A check whose exit code the command hides: it ran, and no pass is claimed. No reminder
+    // comes of it: the turn ends where the model ended it.
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "x = 3\n"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "false; echo exit=$?"})));
+    h.provider.push(MockTurn::text("checked"));
+    let mut e = verifying_engine(&h, &["false"]);
+    let before = h.provider.requests().len();
+    let r = e.submit(prompt("once more")).await;
+    assert_eq!(r.result.as_deref(), Some("checked"));
+    assert_eq!(h.provider.requests().len() - before, 3, "no extra turn");
+    assert_eq!(r.verification, Some(Verified::Ran { command: "false; echo exit=$?".into() }));
+    assert_eq!(r.verification.as_ref().unwrap().record(), json!({"status": "ran", "command": "false; echo exit=$?"}));
     // A turn that changed nothing; and no field with the loop off.
     h.provider.push(MockTurn::text("just talking"));
     assert_eq!(e.submit(prompt("hi")).await.verification, Some(Verified::NoChanges));

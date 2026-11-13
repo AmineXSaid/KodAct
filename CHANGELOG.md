@@ -2,6 +2,20 @@
 
 ## 0.1.0 (unreleased)
 
+### "passed" only when the exit code is the check's own
+- **A check run as `pytest | tail` isn't called passed**: the shell reports
+  the exit code of the last command it ran, so a check piped into `tail` or
+  `head`, followed by `; echo done` or `|| true`, run in a loop or sent to the
+  background ended 0 whatever it did, and the result said
+  `verification.status: "passed"`. Those are now `ran`: a check ran, and
+  whether it passed isn't known. `passed` is kept for commands whose exit code
+  is the check's (`pytest`, `cd app && make test`, `set -o pipefail; pytest |
+  tail`). Nothing is added to any request and no reminder comes of it; the
+  passing-version snapshot (`nudges.passingSnapshots`) is no longer saved from
+  such a run, and `/goal`'s check is told the outcome is unknown (task
+  `verify-long-report`). A script that gates on `passed` will see `ran` for
+  runs it used to accept.
+
 ### A server in the sandbox, and edits to CRLF files
 - **A server started in the sandbox isn't called reachable**: on Linux, a
   sandbox without network access gives each shell command a network of its
