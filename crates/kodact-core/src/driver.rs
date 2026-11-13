@@ -393,6 +393,7 @@ impl Driver {
             // Directories added by /add-dir and by permission answers alike.
             additional_dirs: self.engine.tool_ctx().working_dirs.read().unwrap().iter().skip(1).cloned().collect(),
             microcompacted: st.microcompacted.clone(),
+            thinking_prefixes: st.thinking_prefixes.clone(),
             title: t.title(),
             last_uuid: t.last_uuid(),
             permission_mode: Some(self.engine.handle().permissions.read().unwrap().mode.as_str().to_string()),

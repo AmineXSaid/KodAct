@@ -6,9 +6,10 @@
 //! models, answered by reasoning about text that is no longer there. Cache markers and request
 //! parameters (effort, thinking settings) don't count; appending does not count.
 //!
-//! These tests record every request a session sends and check that rule for each signed block.
-//! The ones marked `ignore` fail today: they are the cases to fix (study recommendation N1). Run
-//! them with `cargo test -p kodact-engine prefix -- --ignored`.
+//! These tests record every request a session sends and check that rule for each signed block,
+//! on the ordinary path and on the three paths that change earlier history (micro-compaction,
+//! a resume under a new system prompt, `/rewind` summarize). On those, KodAct leaves out the
+//! blocks whose history changed ([`crate::prefix`]) and keeps the ones written after.
 
 use kodact_types::{Message, MessagesRequest, StopReason, SystemBlock};
 
@@ -93,6 +94,14 @@ fn assert_append_only(reqs: &[MessagesRequest]) {
     assert!(carried, "no signed thinking was sent back: the test checks nothing");
     let v = prefix_violations(reqs);
     assert!(v.is_empty(), "signed thinking sent on a changed history:\n{}", v.join("\n"));
+}
+
+/// Does request `r` send back the block signed `sig`?
+fn carries(r: &MessagesRequest, sig: &str) -> bool {
+    r.messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .any(|b| matches!(b, ContentBlock::Thinking { signature, .. } if signature == sig))
 }
 
 fn system_on(date: &str) -> Vec<SystemBlock> {
@@ -207,7 +216,6 @@ async fn a_resume_on_the_same_day_sends_the_history_back_unchanged() {
 /// result was written on the full result, so the next request breaks its signature. In real
 /// use: a long session on such a model fails or degrades at the first micro-compaction.
 #[tokio::test]
-#[ignore = "N1: micro-compaction edits earlier tool results"]
 async fn micro_compaction_keeps_signed_thinking_on_its_prefix() {
     let h = Harness::new(vec![]);
     std::fs::create_dir_all(h.cwd()).unwrap();
@@ -217,25 +225,27 @@ async fn micro_compaction_keeps_signed_thinking_on_its_prefix() {
     // As in `c9_micro_is_sticky_across_requests`: the read result is cleared a few turns later.
     h.provider.push(signed(0, MockTurn::tool("Read", json!({"file_path": big}))).with_usage(usage(2_000)));
     h.provider.push(signed(1, MockTurn::text("read it")).with_usage(usage(9_000)));
-    for i in 2..=5 {
+    for i in 2..=6 {
         h.provider.push(signed(i, MockTurn::text(&format!("answer {i}"))).with_usage(usage(9_000)));
     }
-    for i in 1..=5 {
+    for i in 1..=6 {
         e.submit(prompt(&format!("turn {i}"))).await;
     }
     let reqs = h.provider.requests();
-    assert!(
-        reqs.iter().any(|r| result_text(r, "toolu_00_read").as_deref() == Some(request::CLEARED_RESULT)),
-        "the result was cleared: the case this test is about happened"
-    );
+    let cleared = reqs
+        .iter()
+        .position(|r| result_text(r, "toolu_00_read").as_deref() == Some(request::CLEARED_RESULT))
+        .expect("the result was cleared: the case this test is about happened");
     assert_append_only(&reqs);
+    // What was written on the full result goes; what was written after the clearing stays.
+    assert!(carries(&reqs[cleared - 1], "sig-1") && !carries(&reqs[cleared], "sig-1"));
+    assert!(carries(reqs.last().unwrap(), &format!("sig-{cleared}")));
 }
 
 /// `--resume` the next day: the system prompt carries today's date, so the resumed session
 /// sends the old thinking under a new system prompt. The same holds for the git status
 /// snapshot after a commit.
 #[tokio::test]
-#[ignore = "N1: the system prompt carries the date and git status"]
 async fn a_resume_on_another_day_keeps_signed_thinking_on_its_prefix() {
     let h = Harness::new(vec![signed(0, MockTurn::text("first answer"))]);
     let mut e = h.engine();
@@ -244,19 +254,22 @@ async fn a_resume_on_another_day_keeps_signed_thinking_on_its_prefix() {
     let path = SessionStore::new(h.dir.path().join("store")).session_path(&h.cwd(), SID).unwrap();
     let loaded = kodact_session::LoadedSession::load(&path, None).unwrap();
 
-    let h2 = Harness::new(vec![signed(1, MockTurn::text("second answer"))]);
+    let h2 = Harness::new(vec![signed(1, MockTurn::text("second answer")), signed(2, MockTurn::text("third answer"))]);
     let mut resumed = h2.engine();
     resumed.set_system(system_on("2026-11-14"));
     resumed.restore(&loaded);
     resumed.submit(prompt("two")).await;
+    resumed.submit(prompt("three")).await;
     let reqs: Vec<_> = h.provider.requests().into_iter().chain(h2.provider.requests()).collect();
     assert_append_only(&reqs);
+    assert!(!carries(&reqs[1], "sig-0"), "written under yesterday's system prompt");
+    assert!(carries(&reqs[2], "sig-1"), "written under today's");
+    assert_eq!(reqs[1].messages[1].text(), "first answer", "the words stay");
 }
 
 /// `/rewind` summarize of the start of a conversation: the turns kept after the summary were
 /// written on the turns it replaced.
 #[tokio::test]
-#[ignore = "N1: summarizing a range keeps later turns on a replaced prefix"]
 async fn summarizing_the_start_keeps_later_signed_thinking_on_its_prefix() {
     let h = Harness::new(vec![
         signed(0, MockTurn::text("first answer")),
@@ -264,6 +277,7 @@ async fn summarizing_the_start_keeps_later_signed_thinking_on_its_prefix() {
         signed(2, MockTurn::text("third answer")),
         MockTurn::blocks(vec![ContentBlock::text("<summary>One question answered.</summary>")], StopReason::EndTurn),
         signed(4, MockTurn::text("fourth answer")),
+        signed(5, MockTurn::text("fifth answer")),
     ]);
     let mut e = h.engine();
     e.submit(prompt("one")).await;
@@ -272,5 +286,26 @@ async fn summarizing_the_start_keeps_later_signed_thinking_on_its_prefix() {
     // Messages: one, first answer, two, second answer, three, third answer.
     e.summarize_range(0, 2, None).await.unwrap();
     e.submit(prompt("four")).await;
-    assert_append_only(&h.provider.requests());
+    e.submit(prompt("five")).await;
+    let reqs = h.provider.requests();
+    assert_append_only(&reqs);
+    assert!(!carries(&reqs[4], "sig-1") && !carries(&reqs[4], "sig-2"), "written before the summary");
+    assert!(carries(&reqs[5], "sig-4"), "written after it");
+}
+
+/// A resumed session checks against what the earlier process recorded: the same day, nothing
+/// is left out (the records survive in the transcript).
+#[tokio::test]
+async fn a_resume_keeps_the_records_of_what_thinking_was_written_on() {
+    let h = Harness::new(vec![signed(0, MockTurn::text("first answer"))]);
+    let mut e = h.engine();
+    e.submit(prompt("one")).await;
+    let path = SessionStore::new(h.dir.path().join("store")).session_path(&h.cwd(), SID).unwrap();
+    let loaded = kodact_session::LoadedSession::load(&path, None).unwrap();
+    assert_eq!(loaded.thinking_prefixes.len(), 1);
+    let h2 = Harness::new(vec![MockTurn::text("second answer")]);
+    let mut resumed = h2.engine();
+    resumed.restore(&loaded);
+    resumed.submit(prompt("two")).await;
+    assert!(carries(&h2.provider.requests()[0], "sig-0"));
 }

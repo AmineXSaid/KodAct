@@ -2,18 +2,22 @@
 
 ## 0.1.0 (unreleased)
 
-### Signed thinking and an edited history: the test (N1)
-- **A check that a session sends thinking back on the history it was written
-  on** (`crates/kodact-engine/src/tests/prefix.rs`). On models that keep their
-  thinking between turns, a block's signature covers the system prompt, the
-  tools and every earlier message; a request that changes any of them is
-  refused or answered from text that is gone. The ordinary path passes:
-  tool calls, a resume the same day, a full compaction. Three cases fail and
-  are marked `ignore` until fixed (`cargo test -p kodact-engine prefix --
-  --ignored`): micro-compaction clears earlier tool results in place; a
-  resume on another day sends a new system prompt (it carries the date and
-  git status); `/rewind` summarize of the start keeps later turns on a
-  replaced prefix. Not yet checked against the real API: that needs a key.
+### Signed thinking survives an edited history (N1)
+- **Long sessions on models that keep their thinking no longer end in a 400
+  at the first micro-compaction.** On those models a thinking block's
+  signature covers everything before it. KodAct changes earlier history on
+  purpose: micro-compaction clears old tool results, `/rewind` summarize
+  replaces a range, and a resumed session gets a new system prompt (today's
+  date, the current git status). KodAct now records what each signed block
+  was written on and, before each request, leaves out the blocks whose
+  history changed. The words and tool calls of those turns stay, and blocks
+  written after the change go back as usual. The records are kept in the
+  transcript, so `--resume` and `--fork-session` check the same way. Tests:
+  `crates/kodact-engine/src/tests/prefix.rs` (the checker, the ordinary
+  path, and the three cases that changed history),
+  `crates/kodact-engine/src/prefix.rs`. Eval task `compaction-then-resume`
+  (compaction at a 100k window, then a kill and resume). Not yet run against
+  the real API: that needs a key.
 
 ### What KodAct says it checked
 - **A tool asked about itself isn't a check**: `gcc --version`, `pytest

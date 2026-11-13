@@ -221,6 +221,32 @@ KodAct shrinks context in three ways.
 - **What it doesn't change:** the transcript keeps the original content.
   Micro-compaction only rewrites what is sent to the API.
 
+**Signed thinking and a changed history** (`kodact-engine/src/prefix.rs`).
+On models that keep their thinking between turns, a thinking block's
+signature covers everything before it: the system prompt, the tool set,
+every earlier message and the thinking before it. Micro-compaction, a
+`/rewind` summary of a range, and a resume under a new system prompt (the
+date and git status are in it) all change that history. A request that
+sends such a block back is refused (400) or answered from text that is gone.
+- **When a reply arrives**, each signed block gets a fingerprint: a 64-bit
+  FNV-1a hash of the request it answered, as sent (system prompt, tools as a
+  set by name, messages, no cache markers), plus the reply's blocks before
+  it. Fingerprints are kept in the session state and in the JSONL as
+  `thinking_prefix` records, outside the message chain, so a resume, fork,
+  rewind or compaction keeps them.
+- **Before each request** (`stream_inner`, and side questions), every signed
+  block whose fingerprint no longer matches is left out, and every later
+  block with it, since each block's fingerprint covers the ones before it. A
+  block with no record (a transcript from before this) is left out too. The
+  turn's words and tool calls stay. A reply that was only reasoning is
+  removed, and the person's messages on either side are joined.
+- **What stays:** blocks written after the change were written on the
+  changed history, so they match and go back. Unsigned reasoning (gateways
+  that send none) isn't checked.
+- **Cost:** the reasoning written before a change is lost once per change,
+  and the cache restarts there, which the change already did. Tests:
+  `tests::prefix::*`, `prefix::tests::*`. Eval: `compaction-then-resume`.
+
 **Auto-compact** summarizes the conversation.
 - **The window** is `--autocompact <tokens>` (100k–1M), or `autoCompactWindow`
   in settings, or the model's context window.

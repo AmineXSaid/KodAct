@@ -6,7 +6,7 @@
 //! Readers clone the inner `Arc` ([`crate::EngineHandle::snapshot`]) and drop
 //! the lock at once, so no guard is held for long, and never across `.await`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,6 +33,8 @@ pub struct EngineSnapshot {
     pub messages: Arc<Vec<Message>>,
     /// Tool results cleared by micro-compaction (requests show a placeholder for them).
     pub microcompacted: Arc<HashSet<String>>,
+    /// What each signed thinking block was written on ([`crate::prefix`]).
+    pub thinking_prefixes: Arc<HashMap<String, String>>,
     pub system: Arc<Vec<SystemBlock>>,
     pub tools: Arc<Vec<ToolSpec>>,
     pub total_usage: Usage,
@@ -212,6 +214,8 @@ pub fn side_question_request(
             provider_name: &snap.provider_name,
         },
     );
+    // Signed thinking whose history changed is left out here too.
+    crate::prefix::guard(&mut req, &snap.thinking_prefixes);
     let mut extra = vec![];
     for (q, a) in earlier {
         extra.push(Message::user_text(q.clone()));
