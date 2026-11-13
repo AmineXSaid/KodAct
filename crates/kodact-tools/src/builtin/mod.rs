@@ -67,10 +67,11 @@ pub fn set_memory_tools(reg: &mut ToolRegistry, notes: bool, checkpoint: bool) {
     }
 }
 
-/// Let Edit name the lines to replace (`edit.lineRanges`).
-pub fn set_line_edits(reg: &mut ToolRegistry, on: bool) {
-    if on {
-        reg.wrap("Edit", |_| Arc::new(Edit { line_ranges: true }));
+/// Edit's opt-in forms: naming the lines to replace (`edit.lineRanges`), and changing a file
+/// never read when the call holds its exact text (`edit.withoutRead`).
+pub fn set_edit_options(reg: &mut ToolRegistry, line_ranges: bool, unread: bool) {
+    if line_ranges || unread {
+        reg.wrap("Edit", move |_| Arc::new(Edit { line_ranges, unread }));
     }
 }
 

@@ -1,0 +1,12 @@
+{
+  "instruction": "Why does `parse_duration(\"90m\")` return 90 and not 5400? Put the reason in answer.txt, in a sentence or two.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": [
+    "python",
+    "quiet",
+    "everyday",
+    "question"
+  ],
+  "timeout_secs": 300
+}

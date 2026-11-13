@@ -1,0 +1,12 @@
+{
+  "instruction": "Calls to the billing service give up too early. Raise its timeout from 5 to 20 seconds.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": [
+    "python",
+    "quiet",
+    "everyday",
+    "search"
+  ],
+  "timeout_secs": 300
+}

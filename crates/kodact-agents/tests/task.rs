@@ -51,6 +51,7 @@ fn setup(responder: impl Fn(&MessagesRequest) -> MockTurn + Send + Sync + 'stati
         sandbox: Default::default(),
         shell: kodact_platform::shell::detect().clone(),
         line_edits: false,
+        unread_edits: false,
         agent_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         extra_tools: vec![],
         store: Some(SessionStore::new(dir.path().join("agents"))),

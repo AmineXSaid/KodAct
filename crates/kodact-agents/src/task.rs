@@ -37,6 +37,8 @@ pub struct AgentRuntime {
     pub shell: kodact_tools::shells::ShellChoice,
     /// Edit may name lines instead of retyping them (`edit.lineRanges`), as in the session.
     pub line_edits: bool,
+    /// Edit may change a file never read when it holds its exact text (`edit.withoutRead`).
+    pub unread_edits: bool,
     /// Task agents that may run at once (`maxParallelAgents`); more wait their turn.
     pub agent_slots: Arc<tokio::sync::Semaphore>,
     /// Tools beyond the built-ins (MCP servers' tools), offered to sub-agents too.
@@ -360,7 +362,7 @@ impl TaskTool {
         let mut reg = ToolRegistry::new();
         kodact_tools::builtin::register_core(&mut reg);
         kodact_tools::builtin::set_shell(&mut reg, &self.rt.shell);
-        kodact_tools::builtin::set_line_edits(&mut reg, self.rt.line_edits);
+        kodact_tools::builtin::set_edit_options(&mut reg, self.rt.line_edits, self.rt.unread_edits);
         for t in &self.rt.extra_tools {
             reg.register(t.clone());
         }

@@ -87,6 +87,13 @@ impl FileState {
         self.views.lock().unwrap().clear();
     }
 
+    /// Never read in this session, and not put back by a checkpoint restore: the case
+    /// `edit.withoutRead` lets an exact-text Edit through. A file that changed since it was
+    /// read is not this case.
+    pub fn never_read(&self, path: &Path) -> bool {
+        !self.reads.lock().unwrap().contains_key(path) && !self.unseen.lock().unwrap().contains(path)
+    }
+
     /// `Ok` when an existing file may be modified.
     pub fn check_writable(&self, path: &Path) -> Result<(), String> {
         if !path.exists() {
