@@ -357,53 +357,38 @@ Measures the harness; see `evals/README.md`. `run` writes `report.json` and
  "modelUsage": {"<model>": {"inputTokens": 0, "outputTokens": 0, "costUSD": 0.0}},
  "permission_denials": [{"tool_name": "Bash", "tool_use_id": "…", "tool_input": {}}],
  "errors": [], "structured_output": null,
- "verification": {"status": "passed", "command": "cargo test"}, "uuid": "uuid", "exit_code": 0}
+ "verification": {"missing": ["out/report.txt"]}, "uuid": "uuid", "exit_code": 0}
 ```
 
-`verification` says where the turn's changes stand when it ends, so a script
-or a CI job can tell checked work from work nobody ran without reading the
-answer. It is absent with the verification loop off.
-
-| `status` | Meaning | Also carries |
-| --- | --- | --- |
-| `no_changes` | The turn changed no file | |
-| `passed` | A check ran after the last change and passed | `command` |
-| `read_back` | Only plain data files changed (an answer, a table), each read back after its last change | |
-| `failed` | The last check failed, and nothing changed after it | `command` |
-| `unchecked` | Changes no check has run on since | `files`, and `shell: true` when they came from shell commands |
-
-A check is a test, build or lint run (`cargo test`, `make`, `pytest`, a
-configured `verification.commands` entry) or a run of the changed code. A
-tool asked only about itself (`gcc --version`, `pytest --help`, `gcc -v`) is
-not one: it tests nothing.
-
-With any status, `missing` lists the files the request asks to be made that
+`verification.missing` lists the files the request asks to be made that
 don't exist when the turn ends: files it names that weren't there when the
 turn started (a file named in a sentence asking to remove something isn't
 one, and a request that isn't in English isn't read). Which files a request
-asks for is read from its words, a guess, so `missing` sits beside the
-status and never changes it:
-
-```json
-"verification": {"status": "passed", "command": "make", "missing": ["out/report.txt"]}
-```
+asks for is read from its words, a guess. The field is absent when nothing is
+missing, and with the verification loop off.
 
 ```bash
-kodact -p "fix the failing test" --output-format json | jq -e '.verification.status == "passed"'
-kodact -p "write the report to out/report.txt" --output-format json | jq -e '.verification.missing == null'
+kodact -p "write the report to out/report.txt" --output-format json | jq -e '.verification == null'
 ```
+
+The result does not say whether the last check passed. KodAct follows the
+checks a turn runs to decide on its reminder, but a check's exit code says too
+little about the work to hand a script as "passed": the shell reports only
+its last command (`pytest | tail` ends 0 whatever the tests did), and a check
+that does pass may test one case of many. To gate on a check, run it yourself
+after `kodact` exits.
 
 An unattended run (`--autonomous`) ends with the Finish tool, and the
 result says so in `finish`: the model's summary and its claim of whether
 this run's tool output showed the requirements met. `verified` is the
-model's word; `verification` is what KodAct saw. A script that wants both:
+model's word, not a check KodAct ran:
 
 ```json
 "finish": {"summary": "Fixed both bugs; the tests pass.", "verified": true}
 ```
 
 ```bash
-kodact -p "fix both bugs" --autonomous --output-format json | jq -e '.finish.verified and .verification.status == "passed"'
+kodact -p "fix both bugs" --autonomous --output-format json | jq -e '.finish.verified'
 ```
 
 `exit_code` appears in `json` mode only. A turn whose last replies held only
@@ -598,8 +583,8 @@ plus `system/goal` events in stream-json, and exit status `1` if the goal
 ends unmet. `/goal` shows its status; `/goal clear` ends it. Contract C18
 has the details.
 
-The check is also told what KodAct itself recorded of the turn's changes (the
-`verification` state of the result): files changed with no check run since,
+The check is also told what KodAct itself recorded of the turn's changes:
+files changed with no check run since,
 or how the last check ended. An agent's "all tests pass" over unchecked files
 is contradicted by that record. A turn whose calls were all refused by the
 loop guard counts as a turn without a tool call. A goal ends on an error that

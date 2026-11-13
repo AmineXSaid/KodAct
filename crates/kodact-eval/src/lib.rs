@@ -202,19 +202,13 @@ pub struct RunRecord {
     pub compact_fallbacks: u64,
     pub agent_error: bool,
     pub stop_reason: Option<String>,
-    /// What the result said of the changes (`verification.status`): `passed`, `failed`,
-    /// `unchecked`, `read_back` or `no_changes`. Beside `passed` it shows whether a false
-    /// finish was announced by KodAct itself (`unchecked`, `failed`, or files said missing in
-    /// `verification_missing`) or slipped past a check.
-    #[serde(default)]
-    pub verification: Option<String>,
     /// The files the request asks for that didn't exist when the run ended
-    /// (`verification.missing`): a false finish with these was announced by KodAct too.
+    /// (`verification.missing`): a false finish with these was announced by KodAct itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_missing: Vec<String>,
     /// An unattended run that ended with the Finish tool: whether the model claimed its tool
-    /// output showed the requirements met. Beside `verification` (what KodAct saw) and `passed`
-    /// (what the checker found), a claimed but false finish is told from an announced one.
+    /// output showed the requirements met. Beside `passed` (what the checker found), a claimed
+    /// but false finish is told from one the model didn't claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_verified: Option<bool>,
     pub timed_out: bool,
@@ -435,7 +429,6 @@ pub struct StreamFacts {
     pub api_error: bool,
     pub is_error: bool,
     pub stop_reason: Option<String>,
-    pub verification: Option<String>,
     pub verification_missing: Vec<String>,
     pub claimed_verified: Option<bool>,
     pub saw_result: bool,
@@ -486,7 +479,6 @@ pub fn parse_stream(lines: &[Value]) -> StreamFacts {
                 f.turns = v["num_turns"].as_u64().unwrap_or(0);
                 f.is_error = v["is_error"].as_bool().unwrap_or(true);
                 f.stop_reason = v["stop_reason"].as_str().map(str::to_string);
-                f.verification = v["verification"]["status"].as_str().map(str::to_string);
                 f.claimed_verified = v["finish"]["verified"].as_bool();
                 f.verification_missing = v["verification"]["missing"]
                     .as_array()
@@ -662,7 +654,6 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         compact_fallbacks: facts.compact_fallbacks,
         agent_error,
         stop_reason: facts.stop_reason,
-        verification: facts.verification,
         verification_missing: facts.verification_missing,
         claimed_verified: facts.claimed_verified,
         timed_out,
@@ -704,7 +695,6 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
                     compact_fallbacks: 0,
                     agent_error: true,
                     stop_reason: None,
-                    verification: None,
                     verification_missing: vec![],
                     claimed_verified: None,
                     timed_out: false,
@@ -803,7 +793,7 @@ pub fn render_markdown(r: &Report) -> String {
             s.mean_turns
         ));
     }
-    out.push_str("\n## Runs\n\n| Task | Run | Pass | False finish | Turns | Cost | Tool errors | Time | Reminders (verify/loop/act) | Nudges | Tokens | Compactions (done/failed/note) | Changes |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+    out.push_str("\n## Runs\n\n| Task | Run | Pass | False finish | Turns | Cost | Tool errors | Time | Reminders (verify/loop/act) | Nudges | Tokens | Compactions (done/failed/note) | Missing files |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for x in &r.runs {
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} | ${:.4} | {}/{} | {:.1}s | {}/{}/{} | {} | {} | {}/{}/{} | {} |\n",
@@ -828,10 +818,7 @@ pub fn render_markdown(r: &Report) -> String {
             x.compactions,
             x.compact_failures,
             x.compact_fallbacks,
-            match x.verification_missing.as_slice() {
-                [] => x.verification.clone().unwrap_or_default(),
-                missing => format!("{}, missing {}", x.verification.as_deref().unwrap_or(""), missing.join(" ")),
-            }
+            x.verification_missing.join(" ")
         ));
     }
     out
@@ -1026,7 +1013,6 @@ mod tests {
             compact_fallbacks: 0,
             agent_error: false,
             stop_reason: Some("end_turn".into()),
-            verification: None,
             verification_missing: vec![],
             claimed_verified: None,
             timed_out: false,
@@ -1079,7 +1065,7 @@ mod tests {
             json!({"type": "system", "subtype": "compact_failed", "trigger": "auto", "reason": "empty_summary"}),
             json!({"type": "system", "subtype": "compact_fallback", "trigger": "auto"}),
             json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"trigger": "auto"}}),
-            json!({"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.05, "num_turns": 3, "stop_reason": "end_turn", "verification": {"status": "unchecked", "files": ["a.py"], "missing": ["out.txt"]}}),
+            json!({"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.05, "num_turns": 3, "stop_reason": "end_turn", "verification": {"missing": ["out.txt"]}}),
         ];
         let f = parse_stream(&lines);
         assert_eq!((f.verify_reminders, f.loop_guards), (1, 1));
@@ -1088,7 +1074,6 @@ mod tests {
         assert_eq!((f.tool_calls, f.tool_errors, f.turns), (2, 1, 3));
         assert!(f.saw_result && !f.is_error && !f.api_error);
         assert_eq!(f.cost_usd, 0.05);
-        assert_eq!(f.verification.as_deref(), Some("unchecked"));
         assert_eq!(f.verification_missing, ["out.txt"]);
     }
 

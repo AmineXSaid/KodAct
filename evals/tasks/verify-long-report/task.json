@@ -1,0 +1,7 @@
+{
+  "instruction": "Some totals from pricing.py are wrong. Fix pricing.py so that the project's check, `python3 tests.py`, passes. Don't change tests.py.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["python", "bugfix", "long-output"],
+  "timeout_secs": 600
+}

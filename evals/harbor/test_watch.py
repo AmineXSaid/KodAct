@@ -150,16 +150,12 @@ def test_a_runs_error_is_shown_once():
     assert "unknown model" in text(watch.handle("error: unknown model", True))
 
 
-def test_the_end_says_what_the_last_check_ran_and_what_is_missing():
+def test_the_end_says_what_is_missing():
     end = {"type": "result", "subtype": "error_during_execution", "is_error": True, "num_turns": 3,
-           "errors": ["Reached the time limit (--max-time)."],
-           "verification": {"status": "passed", "command": "cd /app && gcc --version | head -1", "missing": ["data.comp"]}}
+           "errors": ["Reached the time limit (--max-time)."], "verification": {"missing": ["data.comp"]}}
     shown = text(watch.Chat().render(end))
-    assert "KodAct's last check passed: $ cd /app && gcc --version | head -1" in shown, shown
-    assert "files the task asks for that don't exist: data.comp" in shown
-    unchecked = dict(end, verification={"status": "unchecked", "files": ["a.py", "b.py"]})
-    shown = text(watch.Chat().render(unchecked))
-    assert "KodAct: changes no check has run on since: a.py, b.py" in shown and "don't exist" not in shown
+    assert "files the task asks for that don't exist: data.comp" in shown, shown
+    assert "don't exist" not in text(watch.Chat().render(dict(end, verification=None)))
 
 
 def test_a_step_whose_start_came_before_the_watch_says_over():

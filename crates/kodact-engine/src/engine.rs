@@ -769,9 +769,8 @@ pub struct TurnResult {
     /// claim, beside what KodAct observed (`verification`).
     pub finish: Option<Value>,
     /// The files the request asks to be made (those it names that were absent when the turn
-    /// started) that don't exist when it ends, reported beside `verification` and never instead
-    /// of it: which files a request asks for is read from its words, a guess, so it adds a line
-    /// to the result and changes no status a script gates on. Empty with the verification loop
+    /// started) that don't exist when it ends: the result's `verification.missing`. Which files
+    /// a request asks for is read from its words, a guess. Empty with the verification loop
     /// off.
     pub missing: Vec<String>,
 }
@@ -3740,6 +3739,9 @@ impl Engine {
                 let (_, command, writes_after) = self.verify.pending.remove(i);
                 let passed = sh.status() == kodact_tools::shells::ShellStatus::Completed(Some(0));
                 self.verify.write_mark = writes_after;
+                let changed = self.shared.history.writes_since(0);
+                self.verify.last_hidden =
+                    passed && crate::verify::hides_result(&command, &self.check_commands(), &changed);
                 self.verify.last_check = Some((command, !passed));
                 refresh = true;
             }
@@ -4055,12 +4057,16 @@ impl Engine {
                 self.verify.built = None;
             }
             if crate::verify::is_check(command, &vc.commands, &changed) {
-                if !r.output.is_error {
+                // A 0 from `pytest | tail` or `make test; echo done` is the last command's, not
+                // the check's: it ran, and nothing is claimed (or saved as passing) from it.
+                let hidden = !r.output.is_error && crate::verify::hides_result(command, &vc.commands, &changed);
+                if !r.output.is_error && !hidden {
                     self.save_passing(command).await;
                 }
                 self.verify.write_mark = r.writes_after;
                 self.verify.shell_may_have_changed = false;
                 self.verify.last_check = Some((command.to_string(), r.output.is_error));
+                self.verify.last_hidden = hidden;
                 // A passing build is remembered until its program runs; any other passing check
                 // (tests, a run of the program) stands on its own.
                 if !r.output.is_error {
@@ -4110,6 +4116,7 @@ impl Engine {
         } else {
             match &self.verify.last_check {
                 Some((command, true)) => Verified::Failed { command: command.clone() },
+                Some((command, false)) if self.verify.last_hidden => Verified::Ran { command: command.clone() },
                 Some((command, false)) => Verified::Passed { command: command.clone() },
                 None if writes > 0 => Verified::ReadBack,
                 None => Verified::NoChanges,
@@ -4531,10 +4538,13 @@ impl Engine {
             crate::verify::Verified::Failed { command } if writes > 0 => {
                 crate::verify::Reminder::LastCheckFailed { command }
             }
-            crate::verify::Verified::Passed { .. } if writes > 0 => match self.verify.built.clone() {
-                Some((command, artifact)) => crate::verify::Reminder::BuiltNotRun { command, artifact },
-                None => return None,
-            },
+            // `Ran` adds no reminder of its own: only the result says the check's outcome is unknown.
+            crate::verify::Verified::Passed { .. } | crate::verify::Verified::Ran { .. } if writes > 0 => {
+                match self.verify.built.clone() {
+                    Some((command, artifact)) => crate::verify::Reminder::BuiltNotRun { command, artifact },
+                    None => return None,
+                }
+            }
             _ => return None,
         };
         self.verify.reminders += 1;

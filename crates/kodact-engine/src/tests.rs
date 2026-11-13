@@ -972,8 +972,9 @@ async fn verify_reminds_once_when_changes_are_unchecked() {
     assert_eq!(r.verification, Some(Verified::Passed { command: "true".into() }));
 }
 
-/// The result says where the changes stand, so a script can gate on it without reading the
-/// answer: checked and passed, checked and failed, never run, or nothing changed.
+/// Where the changes stand when a turn ends, as the engine holds it (for the reminder and
+/// `/goal`'s check): checked and passed, run with its exit code hidden, failed, never run, or
+/// nothing changed.
 #[tokio::test]
 async fn the_result_reports_the_verification_state() {
     let h = Harness::new(vec![]);
@@ -994,7 +995,17 @@ async fn the_result_reports_the_verification_state() {
     let mut e = verifying_engine(&h, &["false"]);
     let r = e.submit(prompt("again")).await;
     assert_eq!(r.verification, Some(Verified::Failed { command: "false".into() }));
-    assert_eq!(r.verification.as_ref().unwrap().record(), json!({"status": "failed", "command": "false"}));
+    // A check whose exit code the command hides: it ran, and no pass is claimed. No reminder
+    // comes of it: the turn ends where the model ended it.
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "x = 3\n"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "false; echo exit=$?"})));
+    h.provider.push(MockTurn::text("checked"));
+    let mut e = verifying_engine(&h, &["false"]);
+    let before = h.provider.requests().len();
+    let r = e.submit(prompt("once more")).await;
+    assert_eq!(r.result.as_deref(), Some("checked"));
+    assert_eq!(h.provider.requests().len() - before, 3, "no extra turn");
+    assert_eq!(r.verification, Some(Verified::Ran { command: "false; echo exit=$?".into() }));
     // A turn that changed nothing; and no field with the loop off.
     h.provider.push(MockTurn::text("just talking"));
     assert_eq!(e.submit(prompt("hi")).await.verification, Some(Verified::NoChanges));
