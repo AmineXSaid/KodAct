@@ -208,7 +208,7 @@ pub struct RunRecord {
     pub verification_missing: Vec<String>,
     /// An unattended run that ended with the Finish tool: whether the model claimed its tool
     /// output showed the requirements met. Beside `passed` (what the checker found), a claimed
-    /// but false finish is told from one the model didn't claim.
+    /// but false finish is told from one the model didn't vouch for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_verified: Option<bool>,
     pub timed_out: bool,

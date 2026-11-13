@@ -1,7 +1,7 @@
 //! The finish tool of unattended runs (`--autonomous`): the run ends with a summary and the
 //! model's claim of whether its own tool output shows the requirements met, recorded in the
-//! result's `finish`. Set against what a checker finds, a run that says "verified" and fails is
-//! a false finish a script can see.
+//! result (`finish`). It is the model's word: the result carries no verdict of KodAct's own on
+//! the last check (`verification.status` was removed; a pass there proved unreliable).
 //!
 //! The idea comes from Cline's `submit_and_exit` (Apache-2.0), described in
 //! docs/research/harness-study/05-cline.md; this is KodAct's own form of it. A call alone
