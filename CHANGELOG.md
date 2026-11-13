@@ -26,6 +26,13 @@
   while the program is newer than its sources and the turn's edits: a build
   that failed, or one not redone after an edit, is stale and checks nothing
   (task `verify-built-program`).
+- **`report.py` doesn't blame the agent for a test that couldn't download its
+  data**: a test that fetches its data in its own body (MNIST in
+  `pytorch-model-cli`) and failed on the network was a `false success`, because
+  pytest had started. Now a run whose every failed test's error is a network
+  failure, and none an assertion, is a `verifier error`, out of the valid-run
+  count; the network signatures also cover "Name or service not known", "Name
+  does not resolve" and a failed `urlopen`.
 - **A tool asked about itself isn't a check**: `gcc --version`, `pytest
   --help`, `make --version` or `gcc -v` after an edit counted as testing it,
   so the reminder about untested changes stayed silent and the result said
