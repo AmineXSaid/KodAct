@@ -2,19 +2,23 @@
 
 ## 0.1.0 (unreleased)
 
-### "passed" only when the exit code is the check's own
-- **A check run as `pytest | tail` isn't called passed**: the shell reports
-  the exit code of the last command it ran, so a check piped into `tail` or
-  `head`, followed by `; echo done` or `|| true`, run in a loop or sent to the
-  background ended 0 whatever it did, and the result said
-  `verification.status: "passed"`. Those are now `ran`: a check ran, and
-  whether it passed isn't known. `passed` is kept for commands whose exit code
-  is the check's (`pytest`, `cd app && make test`, `set -o pipefail; pytest |
-  tail`). Nothing is added to any request and no reminder comes of it; the
-  passing-version snapshot (`nudges.passingSnapshots`) is no longer saved from
-  such a run, and `/goal`'s check is told the outcome is unknown (task
-  `verify-long-report`). A script that gates on `passed` will see `ran` for
-  runs it used to accept.
+### The result no longer says a check passed
+- **`verification.status` is gone from the result** (`passed`, `failed`,
+  `unchecked`, `read_back`, `no_changes`, with `command` and `files`). In
+  recorded runs it said `passed` on work that was wrong: a check piped into
+  `tail` or followed by `; echo done` ends 0 whatever it did, and a check that
+  does pass may cover one case of many. A script that read it should run its
+  own check after `kodact` exits. `verification.missing` (files the request
+  asks for that don't exist) stays, and the field is absent when nothing is
+  missing. `kodact-eval`'s per-run "Changes" column is now "Missing files".
+- **Inside KodAct, a check whose exit code the command hides counts as run,
+  not as passed** (`pytest | tail -20`, `make test; echo done`,
+  `./run || true`, a check in a loop or in the background; `set -e` and
+  `set -o pipefail` in the same command are honoured). Nothing is said to the
+  model about it. It changes two things that acted on a pass: `/goal`'s check
+  is told the outcome isn't known, and the passing-version snapshot
+  (`nudges.passingSnapshots`) isn't saved from such a run (task
+  `verify-long-report`).
 
 ### A server in the sandbox, and edits to CRLF files
 - **A server started in the sandbox isn't called reachable**: on Linux, a

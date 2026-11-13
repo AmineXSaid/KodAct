@@ -725,7 +725,7 @@ async fn print_reports_verification_and_nudges_open_todos() {
     let (code, out, err) = run(&e, &api, &args, None).await;
     assert_eq!(code, 0, "stderr: {err}");
     let v: Value = serde_json::from_str(out.trim()).unwrap();
-    assert_eq!(v["verification"], json!({"status": "unchecked", "files": ["notes.py"]}), "{out}");
+    assert!(v.get("verification").is_none(), "how the last check ended is not in the result: {out}");
     let reqs = api.requests();
     assert_eq!(reqs.len(), 3, "the todo and verification reminders, in one message");
     let sent = |i: usize| reqs[i]["messages"].as_array().unwrap().last().unwrap().to_string();

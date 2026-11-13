@@ -758,9 +758,8 @@ pub struct TurnResult {
     /// verification loop off).
     pub verification: Option<crate::verify::Verified>,
     /// The files the request asks to be made (those it names that were absent when the turn
-    /// started) that don't exist when it ends, reported beside `verification` and never instead
-    /// of it: which files a request asks for is read from its words, a guess, so it adds a line
-    /// to the result and changes no status a script gates on. Empty with the verification loop
+    /// started) that don't exist when it ends: the result's `verification.missing`. Which files
+    /// a request asks for is read from its words, a guess. Empty with the verification loop
     /// off.
     pub missing: Vec<String>,
 }

@@ -449,27 +449,9 @@ def finish_lines(ev: dict) -> list[str]:
         if why:
             out.append(f"  {RED}{first_line(why, width() - 4)}{RESET}")
     check = ev.get("verification")
-    if isinstance(check, dict) and check.get("status"):
-        out.append(f"  {DIM}{check_line(check)}{RESET}")
-        if check.get("missing"):
-            out.append(f"  {YELLOW}files the task asks for that don't exist: {', '.join(check['missing'])}{RESET}")
+    if isinstance(check, dict) and check.get("missing"):
+        out.append(f"  {YELLOW}files the task asks for that don't exist: {', '.join(check['missing'])}{RESET}")
     return out
-
-
-def check_line(check: dict) -> str:
-    """KodAct's record of the changes at the end (`verification`), and what its last check ran:
-    a pass is that command passing, not the task's result."""
-    status, command = check.get("status"), check.get("command")
-    files = ", ".join(check.get("files") or [])
-    if status in ("passed", "failed") and command:
-        return f"KodAct's last check {status}: $ {first_line(command, width() - 30)}"
-    if status == "ran" and command:
-        return f"KodAct's last check ran, its exit code hidden by the command: $ {first_line(command, width() - 50)}"
-    if status == "unchecked":
-        return "KodAct: changes no check has run on since: " + (files or "made by shell commands")
-    return {"no_changes": "KodAct: no file changed", "read_back": "KodAct: data files read back after their last change"}.get(
-        status, f"KodAct's check: {status}"
-    )
 
 
 class Chat:

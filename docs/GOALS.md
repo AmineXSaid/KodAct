@@ -134,13 +134,14 @@ Each pillar lists what KodAct does about it and what shows that it works.
     model alone.
   - It is on by default; `KODACT_VERIFY=0` turns this one off, and
     `kodact-eval` records `verify_reminders` per run.
-  - the result states where the changes stand (`verification.status`:
-    `passed`, `ran`, `failed`, `unchecked`, `read_back`, `no_changes`; `ran`
-    is a check whose exit code the command hid, as in `pytest | tail`), for scripts
-    to gate on; `kodact-eval` records it per run, so a false finish shows as
-    announced (`unchecked`, `failed`) or as slipped past a check (`passed`);
+  - how the last check ended is not part of the result: `verification.status`
+    was removed after recorded runs showed `passed` on work that was wrong
+    (a check piped into `tail` ends 0 whatever it did; a check that passes may
+    cover one case of many). KodAct still follows the checks to decide on the
+    reminder above and on what `/goal`'s check is told, where a check whose
+    exit code the command hides counts as run, not as passed;
   - `verification.missing` names the files the request asks to be made that
-    don't exist when the turn ends, beside the status and never changing it
+    don't exist when the turn ends
     (which files are asked for is read from the request's words); a false
     finish with it was announced too (`kodact-eval` records
     `verification_missing`, task `named-deliverables`);

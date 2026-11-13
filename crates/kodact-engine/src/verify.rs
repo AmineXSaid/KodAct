@@ -992,8 +992,9 @@ pub(crate) fn runs_artifact(command: &str, artifact: &str) -> bool {
     })
 }
 
-/// Where a turn's changes stand when it ends: the `verification` field of the result, so a
-/// script or a CI job can tell checked work from work nobody ran, without reading the answer.
+/// Where a turn's changes stand: what the verification reminder is decided on, and what
+/// `/goal`'s check is told. Not part of the result a script reads: an exit code says too
+/// little about the work to report as a pass.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Verified {
     /// The turn changed no file.
@@ -1011,36 +1012,6 @@ pub enum Verified {
     /// Changes no check has run on since: the files the edit tools wrote, or (`shell`) files
     /// changed through shell commands.
     Unchecked { files: Vec<String>, shell: bool },
-}
-
-impl Verified {
-    pub fn status(&self) -> &'static str {
-        match self {
-            Verified::NoChanges => "no_changes",
-            Verified::Passed { .. } => "passed",
-            Verified::Ran { .. } => "ran",
-            Verified::ReadBack => "read_back",
-            Verified::Failed { .. } => "failed",
-            Verified::Unchecked { .. } => "unchecked",
-        }
-    }
-
-    pub fn record(&self) -> Value {
-        let mut v = serde_json::json!({"status": self.status()});
-        match self {
-            Verified::Passed { command } | Verified::Ran { command } | Verified::Failed { command } => {
-                v["command"] = command.as_str().into()
-            }
-            Verified::Unchecked { files, shell } => {
-                v["files"] = serde_json::json!(files);
-                if *shell {
-                    v["shell"] = true.into();
-                }
-            }
-            _ => {}
-        }
-        v
-    }
 }
 
 /// What the model is reminded of.
@@ -1478,29 +1449,6 @@ mod tests {
         assert!(is_check(inline, &[], &changed) && !hides_result(inline, &[], &changed));
         let piped = "python3 -c 'import algo; assert algo.f(2) == 4' 2>&1 | tail -3";
         assert!(is_check(piped, &[], &changed) && hides_result(piped, &[], &changed));
-        assert_eq!(
-            Verified::Ran { command: "pytest | tail".into() }.record(),
-            serde_json::json!({"status": "ran", "command": "pytest | tail"})
-        );
-    }
-
-    #[test]
-    fn the_result_states_where_the_changes_stand() {
-        assert_eq!(Verified::NoChanges.record(), serde_json::json!({"status": "no_changes"}));
-        assert_eq!(
-            Verified::Passed { command: "cargo test".into() }.record(),
-            serde_json::json!({"status": "passed", "command": "cargo test"})
-        );
-        assert_eq!(
-            Verified::Unchecked { files: vec!["a.rs".into()], shell: false }.record(),
-            serde_json::json!({"status": "unchecked", "files": ["a.rs"]})
-        );
-        assert_eq!(
-            Verified::Unchecked { files: vec![], shell: true }.record(),
-            serde_json::json!({"status": "unchecked", "files": [], "shell": true})
-        );
-        assert_eq!(Verified::Failed { command: "make".into() }.record()["status"], "failed");
-        assert_eq!(Verified::ReadBack.status(), "read_back");
     }
 
     #[test]
