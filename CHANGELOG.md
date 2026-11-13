@@ -2,6 +2,18 @@
 
 ## 0.1.0 (unreleased)
 
+### A placeholder is not written in place of the code it stands for
+- Write over an existing file, Edit and MultiEdit refuse, once, a call whose
+  new text adds a line such as `// ... rest of the code ...` or
+  `# ... existing code ...`: written as it is, that line would replace the
+  code it stands for and nothing would fail until something ran. The refusal
+  names the line and nothing is written. The same call sent again goes
+  through, for a file meant to hold such a line; a new file, and a line the
+  replaced text already had, pass. English wording only: elsewhere nothing is
+  said. No model call and no text on a turn without such a line. Pattern from
+  Gemini CLI's source (docs/REFERENCES.md); no eval task provokes it yet, so
+  it is covered by unit tests only.
+
 ### Practices read in other agents' prompts (docs/REFERENCES.md)
 Eight practices KodAct lacked, each written in KodAct's own words. No
 before/after has been run yet (no API key here): every one is owed.

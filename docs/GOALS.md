@@ -192,6 +192,10 @@ Each pillar lists what KodAct does about it and what shows that it works.
   model, 7 tasks, 21 runs a side) tried a TodoWrite and a Glob text; the
   pass rate stayed at 81% and turns moved from 10.0 to 9.7, within noise, so
   neither was adopted. Each later pass is recorded the same way.
+  A line that stands for text left out (`// ... rest of the code ...`) is
+  not written over the code it stands for: Write over an existing file, Edit
+  and MultiEdit refuse it once, naming the line, and take the same call
+  again when the line is meant.
   With `edit.withoutRead` (off by default until measured), Edit changes a
   file never read when the call holds its exact text, inside the working
   directories: a line a search already showed is edited without a Read

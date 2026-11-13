@@ -9,6 +9,7 @@ mod interact;
 mod ls;
 mod memory;
 mod notebook;
+mod omission;
 mod read;
 mod todo;
 mod web;

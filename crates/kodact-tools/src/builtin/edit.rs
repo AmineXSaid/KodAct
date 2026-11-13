@@ -402,6 +402,11 @@ impl Tool for Edit {
                 Err(e) => ToolOutput::error(e),
             };
         }
+        if let Some((n, line)) = super::omission::added_placeholder(old_s, new_s) {
+            if ctx.files.refuse_once(&path, line) {
+                return ToolOutput::error(super::omission::refusal("new_string", n, line));
+            }
+        }
         let updated = match apply_edit(&norm, &old_s.replace("\r\n", "\n"), &new_s.replace("\r\n", "\n"), all) {
             Ok(u) => u,
             Err(e) => return ToolOutput::error(e),
@@ -479,6 +484,18 @@ impl Tool for MultiEdit {
             return ToolOutput::error("edits must contain at least one edit");
         }
         for (i, e) in edits.iter().enumerate() {
+            if let Some((n, line)) =
+                super::omission::added_placeholder(str_arg(e, "old_string"), str_arg(e, "new_string"))
+            {
+                if ctx.files.refuse_once(&path, line) {
+                    return ToolOutput::error(format!(
+                        "Edit {} of {}: {}",
+                        i + 1,
+                        edits.len(),
+                        super::omission::refusal("new_string", n, line)
+                    ));
+                }
+            }
             let all = e.get("replace_all").and_then(Value::as_bool).unwrap_or(false);
             match apply_edit(&content, str_arg(e, "old_string"), str_arg(e, "new_string"), all) {
                 Ok(c) => content = c,

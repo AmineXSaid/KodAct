@@ -601,6 +601,39 @@ fn powershell_read_only_rejects_subexpressions() {
     assert!(!super::bash::powershell_is_read_only("Remove-Item x"));
 }
 
+/// A line that stands for text left out is refused once, with nothing written; the same call
+/// again is meant and goes through. A new file, and a line the file already had, pass.
+#[tokio::test]
+async fn a_placeholder_for_omitted_text_is_refused_once() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let f = d.path().canonicalize().unwrap().join("svc.py");
+    let whole = "import os\n\ndef a():\n    return 1\n\ndef b():\n    return 2\n";
+    std::fs::write(&f, whole).unwrap();
+    c.files.record_read(&f);
+
+    let short = json!({"file_path": f, "content": "import os\n\ndef a():\n    return 10\n\n# ... rest of the file unchanged ...\n"});
+    let out = Write.call(short.clone(), &c).await;
+    let said = out.text_content();
+    assert!(out.is_error && said.contains("line 6 of `content`") && said.contains("Nothing was written"), "{said}");
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), whole);
+
+    let edit = json!({"file_path": f, "old_string": "def b():\n    return 2\n", "new_string": "def b():\n    # ... existing code ...\n"});
+    let out = Edit::default().call(edit.clone(), &c).await;
+    assert!(out.is_error && out.text_content().contains("`new_string`"), "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), whole);
+    // Sent again, it is what the file should hold.
+    assert!(!Edit::default().call(edit, &c).await.is_error);
+    assert!(std::fs::read_to_string(&f).unwrap().contains("# ... existing code ..."));
+    // The line is in the text being replaced: moving it is not adding it.
+    let keep = json!({"file_path": f, "old_string": "    # ... existing code ...\n", "new_string": "    # ... existing code ...\n    return 3\n"});
+    assert!(!Edit::default().call(keep, &c).await.is_error);
+
+    // A new file loses nothing.
+    let new = json!({"file_path": d.path().join("stub.py"), "content": "def todo():\n    # ... rest of the code ...\n    pass\n"});
+    assert!(!Write.call(new, &c).await.is_error);
+}
+
 /// `edit.withoutRead`: a file never read is changed when the call holds its exact text, and
 /// every other case keeps the read-first rule.
 #[tokio::test]
