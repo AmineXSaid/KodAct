@@ -96,6 +96,7 @@ else
 fi
 export PI_BUNDLE
 
+. "$repo/evals/harbor/hf-endpoint.sh"  # which Hugging Face Hub: before the job name, which says it
 ca=""
 [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_UV_CACHE:-}" ] && ca="${ca}-uvcache"

@@ -2,6 +2,25 @@
 
 ## 0.1.0 (unreleased)
 
+### Harbor runs behind a proxy: tests that judge instead of failing to start
+- **The tests always have uv.** Terminal-Bench test scripts download uv
+  before testing anything. When that download failed ("Could not resolve
+  host: releases.astral.sh"), the result was `uvx: command not found`, and
+  the trial was a verifier error that judged nothing. After the agent's run,
+  the agent now puts this machine's uv where the installer would (`uvx`, the
+  `env` file). It skips this if the container already has a uv, or if this
+  uv doesn't run there. `KODACT_HARBOR_UV_BIN` picks the binary, and `none`
+  turns it off. The agent never sees that uv: it is added after its run.
+- **The Hugging Face mirror is chosen at the start, only when needed.** With
+  `KODACT_HARBOR_HF_ENDPOINT` unset, each run script now checks huggingface.co
+  through this machine's proxy. If it is blocked and hf-mirror.com answers,
+  the agent and the tests use the mirror, the run says so, and the job name
+  gets `-hfmirror`. Before, a blocked huggingface.co made `reshard-c4-data`
+  fail in every run unless the variable was exported each time. `off` never
+  uses a mirror, and a URL picks another. The mirror is run by a third party:
+  only public data goes through it, and no Hugging Face token reaches the
+  containers.
+
 ### "a or b" asks for one file, not both
 - **`verification.missing` no longer lists the other alternative**: a request
   naming "`requirements.txt` OR `pyproject.toml`" got both files listed as

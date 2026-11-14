@@ -26,6 +26,7 @@ model="${KODACT_HARBOR_MODEL:-${ANTE_MODEL:-deep-thinking}}"
 model_tag="$(printf '%s' "${model#*/}" | tr -c 'A-Za-z0-9._-' '-')"
 provider="${ANTE_PROVIDER:-openai-compatible}"
 install="${ANTE_INSTALL_ARGS:-}"
+. "$repo/evals/harbor/hf-endpoint.sh"  # which Hugging Face Hub: before the job name, which says it
 ca=""; [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_UV_CACHE:-}" ] && ca="${ca}-uvcache"
 [ -n "${KODACT_HARBOR_PIP_CACHE:-}" ] && ca="${ca}-pipcache"

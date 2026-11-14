@@ -31,6 +31,10 @@ fi
 # Face's own storage hosts. Only for public test data: the mirror sees every request.
 # With KODACT_HARBOR_CA_BUNDLE, the CA variables above already point requests and curl at the
 # kept bundle; without it they are not set, as no kept bundle exists to point them at.
+# The run scripts settle the setting first (hf-endpoint.sh); `off` and the like are no address.
+case "$(printf '%s' "${KODACT_HARBOR_HF_ENDPOINT:-}" | tr 'A-Z' 'a-z')" in
+  off|none|0|no|false) unset KODACT_HARBOR_HF_ENDPOINT ;;
+esac
 if [ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ]; then
   verifier_ca+=(--ve "HF_ENDPOINT=${KODACT_HARBOR_HF_ENDPOINT%/}" --ve HF_HUB_DISABLE_XET=1)
   if [ -z "${KODACT_HARBOR_CA_BUNDLE:-}" ]; then

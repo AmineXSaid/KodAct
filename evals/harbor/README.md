@@ -68,7 +68,8 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | `KODACT_HARBOR_AUTONOMOUS` | `1` | `kodact --autonomous`; `0` turns it off (job name gets `-noauto`) |
 | `KODACT_HARBOR_TIME_LIMIT` | the task's own limit | Seconds for `kodact --max-time` |
 | `KODACT_HARBOR_CA_BUNDLE` | | Extra CAs to trust inside containers (see below) |
-| `KODACT_HARBOR_HF_ENDPOINT` | | Another Hugging Face Hub address for the agent and the tests, where a proxy blocks huggingface.co (job name gets `-hfmirror`; see below) |
+| `KODACT_HARBOR_HF_ENDPOINT` | hf-mirror.com only where huggingface.co is blocked | The Hugging Face Hub address for the agent and the tests, checked at the start; `off` never uses a mirror, a URL picks one (job name gets `-hfmirror`; see below) |
+| `KODACT_HARBOR_UV_BIN` | this machine's `uv` | The uv put in each container for the tests after the agent's run, when there is none, so a test script whose own download of uv fails still runs; `none` turns it off (see below) |
 | `KODACT_HARBOR_HOSTS` | the endpoint's host | Names to resolve here and pin in each container's `/etc/hosts` (`none` turns it off) |
 | `KODACT_HARBOR_HOST_IP` | found automatically | This machine's address, used in place of a `localhost` endpoint |
 
@@ -351,7 +352,7 @@ than the task's 15-minute verifier limit; give the tests more time, not the
 agent, with `--verifier-timeout-multiplier 3` after the mode. For real scores, run from a network without
 TLS inspection.
 
-### The proxy blocks huggingface.co: use a mirror
+### The proxy blocks huggingface.co: a mirror, chosen at the start
 
 Some tests download public data from the Hugging Face Hub: `reshard-c4-data`
 loads the C4 dataset with `datasets.load_dataset("allenai/c4", ...)`. A company
@@ -362,8 +363,19 @@ checks anything:
 ValueError: Couldn't find cache for allenai/c4 for config 'default-...'
 ```
 
-(`datasets` couldn't reach the Hub, looked for a local copy, found none.) Check
-which it is, from this machine and from a container:
+(`datasets` couldn't reach the Hub, looked for a local copy, found none.) So
+each run script checks at the start (`hf_endpoint.py`, through this machine's
+proxy, with `KODACT_HARBOR_CA_BUNDLE`). When huggingface.co answers, nothing
+changes. When it is blocked and hf-mirror.com answers, the agent and the tests
+use the mirror, and the run says so on its first lines:
+
+```
+huggingface.co is blocked from here (HTTP 403): the agent and the tests use https://hf-mirror.com, a mirror run by a third party, for public data (KODACT_HARBOR_HF_ENDPOINT=off turns this off)
+```
+
+When neither answers, the run warns that such tests will end as verifier
+errors. `KODACT_HARBOR_HF_ENDPOINT=off` never uses a mirror, and a URL picks
+another one. To check by hand, from this machine and from a container:
 
 ```bash
 curl -sI https://huggingface.co/api/datasets/allenai/c4 | grep -iE '^HTTP|^server'
@@ -378,7 +390,7 @@ same CA bundle:
 curl -sI --cacert "$KODACT_HARBOR_CA_BUNDLE" https://hf-mirror.com/api/datasets/allenai/c4 | head -1   # HTTP/2 200
 ```
 
-If it does, point the tests and the agent at it:
+The run scripts make the same two checks. To set the address yourself:
 
 ```bash
 export KODACT_HARBOR_HF_ENDPOINT=https://hf-mirror.com
@@ -393,8 +405,31 @@ will. With `KODACT_HARBOR_CA_BUNDLE` set, `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`
 and `CURL_CA_BUNDLE` point at the bundle in both. Jobs get `-hfmirror`.
 
 hf-mirror.com is run by a third party, not by Hugging Face: it sees every
-request made through it. Use it for public test data only, never for private
-models or tokens, and never as a default. Unset the variable to go back.
+request made through it. It is used only where huggingface.co is blocked, and
+only for the public data the tests and the agent download: no Hugging Face
+token is passed into the containers. Never point it at private models or
+tokens.
+
+### The tests' own download of uv fails
+
+Terminal-Bench test scripts install uv before they test anything (`curl -LsSf
+https://astral.sh/uv/0.9.5/install.sh | sh`). When that download fails behind
+a proxy, or on a DNS blip, nothing is judged:
+
+```
+curl: (6) Could not resolve host: releases.astral.sh
+/tests/test.sh: line 10: /root/.local/bin/env: No such file or directory
+/tests/test.sh: line 19: uvx: command not found
+```
+
+So after the agent's run, the agent puts this machine's uv where the installer
+would (`~/.local/bin`, with `uvx` and the `env` file), unless the container
+has one already or it doesn't run there (another libc or architecture). The
+test script then runs as after its own install, and its installer, when it
+works, replaces that uv. It is done after the agent's run, so the agent works
+in the task's own environment. What came of it is in each trial's
+`agent/uv-for-tests.txt`. `KODACT_HARBOR_UV_BIN` picks another binary, and
+`none` turns it off.
 
 ### Slow network: cache what the agent installs too
 

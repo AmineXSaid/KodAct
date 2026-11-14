@@ -15,8 +15,13 @@
 #   KODACT_HARBOR_AUTONOMOUS  0 runs kodact without --autonomous (job name gets -noauto)
 #   KODACT_HARBOR_TIME_LIMIT  seconds for --max-time (default: the task's own limit)
 #   KODACT_HARBOR_CA_BUNDLE   extra CAs to trust in containers (job name gets -hostca)
-#   KODACT_HARBOR_HF_ENDPOINT another Hugging Face Hub address for the agent and the tests, where
-#                         a proxy blocks huggingface.co (job name gets -hfmirror)
+#   KODACT_HARBOR_HF_ENDPOINT the Hugging Face Hub address for the agent and the tests. Unset:
+#                         hf-mirror.com only where this machine's proxy blocks huggingface.co
+#                         (checked at the start, and said); off: never; a URL: that one
+#                         (job name gets -hfmirror)
+#   KODACT_HARBOR_UV_BIN   the uv given to the tests when the container has none, so a test
+#                         script whose own download of uv fails still runs (default: this
+#                         machine's uv; none: off)
 #   KODACT_STATIC_BIN      use this binary as is (job name gets -custombin); by default
 #                         target-static/release/kodact is rebuilt when the source changed
 #   KODACT_NUDGES          the nudges on in every task (job name gets -n-<list>, so an A/B of
@@ -58,6 +63,7 @@ esac
 commit="$(git rev-parse --short HEAD)"
 dirty=""
 git diff --quiet HEAD -- crates Cargo.toml Cargo.lock || dirty="-dirty"
+. "$repo/evals/harbor/hf-endpoint.sh"  # which Hugging Face Hub: before the job name, which says it
 # Runs with extra trusted CAs change the task environment: label them, they're for local comparisons.
 ca=""
 [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"

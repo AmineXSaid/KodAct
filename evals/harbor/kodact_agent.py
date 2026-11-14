@@ -33,8 +33,13 @@ Configuration comes from the environment of the `harbor` process:
   changes the task environment: scores are for local comparisons only.
 - `KODACT_HARBOR_HF_ENDPOINT`: another Hugging Face Hub address (a mirror, where
   a proxy blocks huggingface.co), given to the agent here and to the tests by
-  verifier-ca.sh as `HF_ENDPOINT`. Public test data only: the mirror sees every
-  request.
+  verifier-ca.sh as `HF_ENDPOINT`. The run scripts settle it first
+  (hf_endpoint.py): unset, a mirror only where huggingface.co is blocked from this
+  machine. Public test data only: the mirror sees every request.
+- `KODACT_HARBOR_UV_BIN`: the uv put in the container for the task's tests after
+  the agent's run, when there is none (provide_uv): a test script whose own
+  download of uv fails then runs all the same. Default: this machine's `uv`;
+  `none` turns it off.
 
 The model comes from `harbor run -m provider/name`; the provider part is
 dropped, so `-m openai/deep-thinking` and `-m deep-thinking` both run `kodact --model deep-thinking`.
@@ -42,10 +47,12 @@ dropped, so `-m openai/deep-thinking` and `-m deep-thinking` both run `kodact --
 Run it through `evals/harbor/run.sh`. Written against Harbor 0.24.0.
 """
 
+import asyncio
 import inspect
 import json
 import os
 import shlex
+import shutil
 import socket
 from pathlib import Path
 from urllib.parse import urlparse
@@ -69,6 +76,34 @@ REMOTE_CA = "/tmp/kodact-extra-ca.pem"
 KEPT_CA = "/usr/local/share/kodact/ca-bundle.pem"
 # Where KODACT_HARBOR_UV_CACHE goes in the container; verifier-ca.sh points the tests' uv here.
 KEPT_UV_CACHE = "/usr/local/share/kodact/uv-cache"
+# The uv binary given to the tests (provide_uv), uploaded here, and what came of it, in the trial's logs.
+REMOTE_UV = "/tmp/kodact-uv-for-tests"
+UV_LOG = "uv-for-tests.txt"
+# Settings that turn something off.
+OFF = ("none", "off", "0", "no", "false")
+# The tests' own uv, for when their download of it fails. Terminal-Bench test scripts install uv
+# with `curl -LsSf https://astral.sh/uv/<version>/install.sh | sh`, `source $HOME/.local/bin/env`,
+# then run `uvx ... pytest`. When the download fails (a proxy, a DNS blip: "Could not resolve
+# host: releases.astral.sh"), `uvx: command not found` and nothing is judged. This puts a uv
+# where that installer would, unless one is there already or it doesn't run in this container
+# (another libc or architecture); the installer, when it works, replaces it. A uvx that is
+# `uv tool run` and an env file that puts ~/.local/bin on PATH come with it, as the installer's do.
+UV_FOR_TESTS = r"""
+src=@SRC@
+bin="$HOME/.local/bin"
+if [ -x "$bin/uv" ] || command -v uvx >/dev/null 2>&1; then
+  rm -f "$src"; echo "uv for the tests: one is there already"; exit 0
+fi
+mkdir -p "$bin" && cp "$src" "$bin/uv.kodact" && chmod 755 "$bin/uv.kodact" && rm -f "$src" || exit 0
+if ! version=$("$bin/uv.kodact" --version 2>/dev/null); then
+  rm -f "$bin/uv.kodact"; echo "uv for the tests: the uv of the machine running Harbor doesn't run here"; exit 0
+fi
+mv "$bin/uv.kodact" "$bin/uv"
+[ -e "$bin/uvx" ] || { printf '#!/bin/sh\n[ "$1" = --version ] && exec "$(dirname "$0")/uv" --version\nexec "$(dirname "$0")/uv" tool run "$@"\n' > "$bin/uvx"; chmod 755 "$bin/uvx"; }
+[ -e "$bin/env" ] || printf '%s\n' '#!/bin/sh' 'case ":${PATH}:" in' '  *:"$HOME/.local/bin":*) ;;' \
+  '  *) export PATH="$HOME/.local/bin:$PATH" ;;' 'esac' > "$bin/env"
+echo "uv for the tests: $version, from the machine running Harbor"
+"""
 # A wheelhouse of what an agent may `pip install` (Torch, made by warm_pip_cache.py); pip_cache_env()
 # points pip here, so the agent's own install comes from disk, not a slow proxy.
 KEPT_PIP = "/usr/local/share/kodact/pip-wheelhouse"
@@ -145,6 +180,34 @@ async def upload_pip_cache(agent: BaseInstalledAgent, environment: BaseEnvironme
     await agent.exec_as_root(environment, command=f"chmod -R a+rX {KEPT_PIP}")
 
 
+def uv_for_tests() -> Path | None:
+    """The uv binary given to the tests (provide_uv): KODACT_HARBOR_UV_BIN, else this machine's
+    `uv` on PATH; None with KODACT_HARBOR_UV_BIN=none, or when this machine has none."""
+    choice = os.environ.get("KODACT_HARBOR_UV_BIN", "").strip()
+    if choice.lower() in OFF:
+        return None
+    found = choice or shutil.which("uv")
+    if not found:
+        return None
+    path = Path(found).expanduser().resolve()  # docker cp copies a symlink as a link
+    if not path.is_file():
+        if choice:
+            raise RuntimeError(f"KODACT_HARBOR_UV_BIN: {choice} is not a file")
+        return None
+    return path
+
+
+async def provide_uv(agent: BaseInstalledAgent, environment: BaseEnvironment) -> None:
+    """Give the task's tests a uv when the container has none (UV_FOR_TESTS), after the agent's run:
+    the agent's environment stays the task's own. What came of it is in the trial's agent logs."""
+    uv = uv_for_tests()
+    if uv is None:
+        return
+    await environment.upload_file(uv, REMOTE_UV)
+    script = UV_FOR_TESTS.replace("@SRC@", REMOTE_UV)
+    await agent.exec_as_root(environment, command=f"mkdir -p {LOG_DIR}; {{ {script} }} > {LOG_DIR}/{UV_LOG} 2>&1")
+
+
 def pip_cache_env() -> dict[str, str]:
     """Environment that makes the agent's `pip install` prefer the uploaded wheelhouse.
 
@@ -163,7 +226,7 @@ def hf_env() -> dict[str, str]:
     KODACT_HARBOR_CA_BUNDLE, requests and curl trust the kept bundle there too. Empty otherwise.
     """
     endpoint = os.environ.get("KODACT_HARBOR_HF_ENDPOINT", "").strip().rstrip("/")
-    if not endpoint:
+    if not endpoint or endpoint.lower() in OFF:
         return {}
     env = {"HF_ENDPOINT": endpoint, "HF_HUB_DISABLE_XET": "1"}
     if os.environ.get("KODACT_HARBOR_CA_BUNDLE"):
@@ -286,6 +349,7 @@ class KodAct(BaseInstalledAgent):
             await self.exec_as_root(environment, command=f"printf '%s\\n' {shlex.quote(lines)} >> /etc/hosts")
         await upload_uv_cache(self, environment)
         await upload_pip_cache(self, environment)
+        uv_for_tests()  # a KODACT_HARBOR_UV_BIN that isn't a file stops the job here, not after a run
         ca = os.environ.get("KODACT_HARBOR_CA_BUNDLE")
         if ca:
             if not Path(ca).is_file():
@@ -333,7 +397,14 @@ class KodAct(BaseInstalledAgent):
             + f'{REMOTE_BIN} -p "$KODACT_TASK" {shlex.join(flags)} '
             f"> {LOG_DIR}/{STREAM_LOG} 2> {LOG_DIR}/{STDERR_LOG}"
         )
-        await self.exec_as_agent(environment, command=command, env=env)
+        try:
+            await self.exec_as_agent(environment, command=command, env=env)
+        finally:
+            # After the agent, also when it failed or ran out of time: the tests run next.
+            try:
+                await asyncio.wait_for(provide_uv(self, environment), timeout=120)
+            except Exception:  # the tests then fetch uv themselves, as without this
+                pass
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         """Tokens and cost from the final `result` line of the stream."""

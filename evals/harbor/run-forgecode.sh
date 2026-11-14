@@ -41,6 +41,7 @@ case "$mode" in
   *) echo "usage: $0 smoke|subset|full [harbor run args...]" >&2; exit 2 ;;
 esac
 
+. "$repo/evals/harbor/hf-endpoint.sh"  # which Hugging Face Hub: before the job name, which says it
 ca=""
 [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_UV_CACHE:-}" ] && ca="${ca}-uvcache"
