@@ -76,6 +76,9 @@ pub fn micro_candidates(messages: &[Message], already: &HashSet<String>) -> Vec<
     out
 }
 
+/// Characters to a token, in the estimate for text that has not been through the API yet.
+pub const CHARS_PER_TOKEN: usize = 4;
+
 /// Rough token estimate for text that has not been through the API yet.
 pub fn estimate_tokens(messages: &[Message]) -> u64 {
     estimate_sent_tokens(messages, true)
@@ -97,7 +100,7 @@ pub fn estimate_sent_tokens(messages: &[Message], with_reasoning: bool) -> u64 {
             _ => 200,
         })
         .sum();
-    (chars / 4) as u64
+    (chars / CHARS_PER_TOKEN) as u64
 }
 
 /// The instruction appended to the conversation to ask for a summary.

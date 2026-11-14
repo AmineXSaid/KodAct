@@ -60,6 +60,13 @@ Each pillar lists what KodAct does about it and what shows that it works.
     tool's output over 50k, keeps its head and tail. The full text is saved
     under the cache directory, which can be read back without a prompt, and
     the result names the file;
+  - reasoning a reply loses to the reply cap or the thinking time limit,
+    where the provider doesn't send it back, is handed back as far as the
+    window has room before compaction, and never less than a quarter of the
+    reply cap; when part is left out, the whole of it is saved with the tool
+    output and the reminder names the file. Paragraphs it repeats, or that an
+    earlier handback already gave, come back once (task
+    `reasoning-cutoff-resume`, `scripts/act-after-cutoff.py`);
   - no repeated reads: reading the same range of unchanged content returns a
     short note. That stops once the earlier result was cleared by compaction;
   - memory files and the task list re-attached after compaction;
@@ -75,7 +82,9 @@ Each pillar lists what KodAct does about it and what shows that it works.
     is N tokens"), after which the request goes again sized to fit, instead of
     compacting on a guessed window.
 - **Measured by:** pass rate and cost on long tasks, and context tokens per
-  turn (task `log-needle`).
+  turn (task `log-needle`); after a reasoning handback, the share of next
+  replies that act instead of reasoning to the limit again
+  (`scripts/act-after-cutoff.py`).
 
 ### 2. Failure recovery
 

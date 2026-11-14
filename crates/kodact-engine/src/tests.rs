@@ -86,6 +86,8 @@ struct Harness {
     provider: Arc<MockProvider>,
     sink: Arc<VecSink>,
     log: Arc<Mutex<Vec<String>>>,
+    /// Whether the engine's tools get a spill directory (`spill_dir()`), as a session's do.
+    spill: bool,
 }
 
 impl Harness {
@@ -95,7 +97,18 @@ impl Harness {
             provider: Arc::new(MockProvider::new(turns)),
             sink: Arc::new(VecSink::default()),
             log: Arc::new(Mutex::new(vec![])),
+            spill: false,
         }
+    }
+
+    /// The same, with a spill directory for what doesn't fit a result or a reminder.
+    fn spilling(mut self) -> Self {
+        self.spill = true;
+        self
+    }
+
+    fn spill_dir(&self) -> std::path::PathBuf {
+        self.dir.path().join("spill")
     }
 
     fn cwd(&self) -> std::path::PathBuf {
@@ -128,7 +141,11 @@ impl Harness {
         let parts = EngineParts {
             provider: self.provider.clone(),
             tools,
-            tool_ctx: ToolContext::new(&cwd),
+            tool_ctx: {
+                let mut ctx = ToolContext::new(&cwd);
+                ctx.spill_dir = self.spill.then(|| self.spill_dir());
+                ctx
+            },
             permissions: kodact_permissions::Engine::new(mode, RuleSet::default(), &cwd, &[]),
             hooks,
             prompter,
@@ -1717,8 +1734,10 @@ async fn a_reply_cut_off_while_reasoning_is_asked_to_act() {
 /// A run (9ef0955), over chat completions: three replies in a row were cut off while
 /// reasoning, and each began the same analysis of the decoder again, since that reasoning isn't
 /// sent back: "do not restart the analysis" was about an analysis the model no longer had. The
-/// reminder now carries how the reasoning began and where it stopped. Where reasoning is sent
-/// back, the reminder is as before.
+/// reminder now carries the reasoning, as much as the model's window has room for, and saves the
+/// whole of it when part is left out (2026-11-14: a fixed 8,000 characters of 110,000 lost the
+/// findings, and the next reply worked them out again). Where reasoning is sent back, the
+/// reminder is as before.
 #[tokio::test]
 async fn a_reply_that_was_all_reasoning_gets_it_back_where_it_is_not_kept() {
     use kodact_types::StopReason;
@@ -1737,9 +1756,81 @@ async fn a_reply_that_was_all_reasoning_gets_it_back_where_it_is_not_kept() {
         assert_eq!(r.result.as_deref(), Some("wrote data.comp"));
         let asked = last_user_text(&h.provider.requests()[1]);
         assert!(asked.contains(start) && asked.contains(end), "{stop:?}: how it began and where it stopped");
-        assert!(asked.contains("characters in between left out") && asked.len() < 10_000, "{}", asked.len());
-        assert!(h.transcript_text().contains(r#""reasoning_chars":8000"#));
     }
+
+    // How much comes back is the model's: a reply cap's worth of reasoning (110,000 characters,
+    // about 27,500 tokens of a 32k cap), cut off with 60,000 tokens of context. A 1M window has
+    // room for all of it; a 100k one, nearly full, gets a quarter of the cap (32,000 characters),
+    // never less, and never so much it is pushed into compacting.
+    use kodact_api::models::{configure_limits, Limits};
+    configure_limits("handback-small-window", Limits { context_window: Some(100_000), max_output: Some(32_000) });
+    configure_limits("handback-large-window", Limits { context_window: Some(1_000_000), max_output: Some(32_000) });
+    let middle = "The constant at offset 0x40 is 4.0, the scale of the grid.";
+    let long = format!(
+        "{start} {}{middle} {}{end}",
+        "Decode the next block. ".repeat(2_400),
+        "Then the shading. ".repeat(3_000)
+    );
+    for (model, whole) in [("handback-large-window", true), ("handback-small-window", false)] {
+        let h = Harness::new(vec![
+            MockTurn::blocks(vec![thought(&long)], StopReason::MaxTokens).with_usage(usage(60_000)),
+            MockTurn::text("wrote render.c"),
+        ])
+        .spilling();
+        h.provider.set_resends_reasoning(false);
+        let cfg = EngineConfig { model: model.into(), ..Default::default() };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("write render.c")).await;
+        let asked = last_user_text(&h.provider.requests()[1]);
+        assert!(asked.contains(start) && asked.contains(end), "{model}: how it began and where it stopped");
+        let saved = h.spill_dir().join("reasoning-1.txt");
+        if whole {
+            assert!(asked.contains(middle) && !asked.contains("left out"), "{model}: the whole reasoning");
+            assert!(!saved.exists() && !asked.contains("is saved at"), "{model}: nothing to save");
+            let n = long.chars().count();
+            assert!(h.transcript_text().contains(&format!(r#""reasoning_chars":{n}"#)), "{model}");
+        } else {
+            assert!(asked.contains("characters in between left out"), "{model}: cut to the room");
+            assert!(!asked.contains(middle), "{model}: the middle is not in the reminder");
+            assert!(h.transcript_text().contains(r#""reasoning_chars":32000"#), "{model}: a quarter of the cap");
+            // Nothing is lost: the whole of it is in a file the reminder names.
+            assert_eq!(std::fs::read_to_string(&saved).unwrap(), long, "{model}: saved whole");
+            assert!(asked.contains(&format!("is saved at {}", saved.display())), "{model}: {asked}");
+            assert!(h.transcript_text().contains(r#""saved":"#), "{model}: the event says where");
+        }
+    }
+
+    // Each paragraph comes back once: one the reply repeated word for word is dropped.
+    let found = "The table at offset 0x40 holds the settings: grid size, scale and the step count.";
+    let repeated = format!("Read the task.\n\n{found}\n\nCheck the units.\n\n{found}\n\nWrite render.c next.");
+    let h = Harness::new(vec![MockTurn::blocks(vec![thought(&repeated)], StopReason::MaxTokens), MockTurn::text("ok")]);
+    h.provider.set_resends_reasoning(false);
+    let mut e = h.engine();
+    e.submit(prompt("go")).await;
+    let asked = last_user_text(&h.provider.requests()[1]);
+    assert_eq!(asked.matches(found).count(), 1, "{asked}");
+    assert!(asked.contains("Write render.c next.") && asked.contains("1 paragraph that only repeats"), "{asked}");
+
+    // A second cut-off in a row doesn't hand back again what the first gave: it is still above.
+    let first = format!("{found}\n\nThe step count is 12.");
+    let second = format!("Let me restate.\n\n{found}\n\nNext: write the grid test in C, then compare.");
+    let h = Harness::new(vec![
+        MockTurn::blocks(vec![thought(&first)], StopReason::MaxTokens),
+        MockTurn::blocks(vec![thought(&second)], StopReason::MaxTokens),
+        MockTurn::text("ok"),
+    ]);
+    h.provider.set_resends_reasoning(false);
+    let mut e = h.engine();
+    e.submit(prompt("go")).await;
+    let reqs = h.provider.requests();
+    // The newest reminder: the last text of the last message, however the requests group them.
+    let reminder = |r: &kodact_types::MessagesRequest| {
+        r.messages.last().unwrap().content.iter().rev().find_map(|b| b.as_text()).unwrap().to_string()
+    };
+    assert!(reminder(&reqs[1]).contains(found));
+    let again = reminder(&reqs[2]);
+    assert!(again.contains("Next: write the grid test in C, then compare."), "{again}");
+    assert!(!again.contains(found) && again.contains("1 paragraph that only repeats"), "{again}");
 
     // Short reasoning comes back whole.
     let h = Harness::new(vec![
@@ -3595,6 +3686,21 @@ async fn a_reply_that_only_thinks_past_its_limit_is_stopped_and_its_notes_kept()
         nudges(&h.transcript_text()).into_iter().filter(|n| n["kind"] == "thinking_time_box").collect();
     assert_eq!(given.len(), 1, "{given:?}");
 
+    // Its reasoning comes back sized like a cut-off's: 20,000 characters, past the 8,000 a fixed
+    // handback kept, come back whole.
+    let notes = format!("first decode the header, {}then write it.", "check one more field, ".repeat(900));
+    let h = Harness::new(vec![
+        MockTurn::blocks(vec![thinking(&notes)], StopReason::EndTurn).with_delay(Duration::from_millis(200)),
+        MockTurn::text("done"),
+    ]);
+    let mut e =
+        h.engine_with(cfg("thinkingTimeBox"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("solve it")).await;
+    let told = last_user_text(&h.provider.requests()[1]);
+    assert!(told.contains("this step's time is up") && told.contains(&notes) && !told.contains("left out"));
+    let n = notes.chars().count();
+    assert!(nudges(&h.transcript_text()).iter().any(|g| g["reasoning_chars"] == n), "{n}");
+
     // A reply that has started its answer runs to its end, however slow.
     // Its text starts at ~200 ms; the reply ends at ~600 ms, past the 400 ms limit.
     let h = Harness::new(vec![MockTurn::text("a slow but real answer").with_delay(Duration::from_millis(100))]);
@@ -3774,6 +3880,7 @@ fn responding(turns: Vec<MockTurn>, summary: &'static str) -> Harness {
         provider: Arc::new(provider),
         sink: Arc::new(VecSink::default()),
         log: Arc::new(Mutex::new(vec![])),
+        spill: false,
     }
 }
 

@@ -14,7 +14,9 @@
 //! for cost, turns and tool errors.
 //!
 //! `setup` and `check` see `KODACT_EVAL_TASK_DIR`, so checks can use hidden
-//! files (e.g. `$KODACT_EVAL_TASK_DIR/hidden/`) the agent never sees.
+//! files (e.g. `$KODACT_EVAL_TASK_DIR/hidden/`) the agent never sees. A check
+//! can also read the run's stream, `../transcript.jsonl` from the workspace;
+//! when a task is validated there is none.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -625,6 +627,9 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         }
     }
     let _ = std::fs::write(run_dir.join("stderr.txt"), &stderr_text);
+    // A check may read the stream (`../transcript.jsonl` from the workspace): all of it is on
+    // disk before the check runs.
+    let _ = transcript.flush().await;
     let wall_secs = started.elapsed().as_secs_f64();
     let facts = parse_stream(&parsed);
 

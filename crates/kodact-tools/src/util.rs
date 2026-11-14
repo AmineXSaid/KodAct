@@ -30,13 +30,8 @@ pub fn fit_output(ctx: &crate::ToolContext, text: &str, max: usize, label: &str)
     if text.len() <= max {
         return text.to_string();
     }
-    let saved = ctx.spill_dir.as_ref().and_then(|dir| {
-        std::fs::create_dir_all(dir).ok()?;
-        let id = if ctx.tool_use_id.is_empty() { "output" } else { ctx.tool_use_id.as_str() };
-        let path = dir.join(format!("{id}-{label}.txt"));
-        std::fs::write(&path, text).ok()?;
-        Some(path)
-    });
+    let id = if ctx.tool_use_id.is_empty() { "output" } else { ctx.tool_use_id.as_str() };
+    let saved = spill_text(ctx.spill_dir.as_deref(), &format!("{id}-{label}.txt"), text);
     let body = truncate_middle(text, max);
     match saved {
         Some(p) => format!(
@@ -48,6 +43,17 @@ pub fn fit_output(ctx: &crate::ToolContext, text: &str, max: usize, label: &str)
         ),
         None => body,
     }
+}
+
+/// Save `text` as `name` in the session's spill directory (`ToolContext::spill_dir`), which the
+/// model can read back without a prompt. The file's path, or `None` with no spill directory or
+/// when the write fails.
+pub fn spill_text(dir: Option<&Path>, name: &str, text: &str) -> Option<PathBuf> {
+    let dir = dir?;
+    std::fs::create_dir_all(dir).ok()?;
+    let path = dir.join(name);
+    std::fs::write(&path, text).ok()?;
+    Some(path)
 }
 
 /// `cat -n` style numbering used by Read and in edit snippets.

@@ -405,7 +405,8 @@ def system_lines(ev: dict) -> list[str]:
         kind = str(get("kind") or "").replace("_", " ")
         chars = get("reasoning_chars")
         kept = f"; {num(chars)} characters of its reasoning handed back" if chars else ""
-        return [f"{YELLOW}⚑{RESET} {DIM}{kind}: told to act{kept}{RESET}"]
+        saved = f", the whole of it saved at {get('saved')}" if get("saved") else ""
+        return [f"{YELLOW}⚑{RESET} {DIM}{kind}: told to act{kept}{saved}{RESET}"]
     if sub == "nudge":
         rest = ", ".join(f"{k} {short(v, 40)}" for k, v in ev.items() if k not in HIDDEN | {"kind"})
         return [f"{YELLOW}⚑{RESET} {DIM}nudge: {str(get('kind') or '').replace('_', ' ')}{(' · ' + rest) if rest else ''}{RESET}"]
