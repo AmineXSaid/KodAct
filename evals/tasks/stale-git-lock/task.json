@@ -1,0 +1,8 @@
+{
+  "instruction": "greeting.txt misspells \"Hello\". Fix it and commit the change with git (any message).",
+  "setup": "git config user.email dev@example.com && git config user.name Dev && : > .git/index.lock",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "recovery",
+  "tags": ["git", "environment"],
+  "timeout_secs": 300
+}
