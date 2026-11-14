@@ -12,6 +12,7 @@ update`, `apt-get install --download-only python3-venv python3-numpy` needed 0 B
 """
 
 import ast
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -88,17 +89,23 @@ def test_the_warm_script_takes_package_names_only():
 
 def settled(home: Path, **settings: str) -> dict:
     """The cache settings after caches.sh, as the run scripts source it, with `home` as HOME."""
-    script = f'. "{HERE / "caches.sh"}"; for v in UV PIP APT; do n=KODACT_HARBOR_${{v}}_CACHE; printf "%s=%s\\n" "$n" "${{!n-unset}}"; done'
-    env = {"HOME": str(home), "PATH": "/usr/bin:/bin", **settings}
-    out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True).stdout
+    script = (f'repo="{HERE.parents[1]}"; . "{HERE / "caches.sh"}"; '
+              'for v in UV PIP APT; do n=KODACT_HARBOR_${v}_CACHE; printf "%s=%s\\n" "$n" "${!n-unset}"; done')
+    # Nothing is made here (that downloads): what is there is used.
+    env = {"HOME": str(home), "PATH": os.environ["PATH"], "KODACT_HARBOR_WARM": "0", **settings}
+    out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True,
+                         cwd=home).stdout
     return dict(line.split("=", 1) for line in out.splitlines() if "=" in line and not line.startswith("cache:"))
 
 
-def test_the_caches_are_used_whenever_their_folders_exist(tmp_path):
+def test_the_caches_are_used_whenever_their_folders_hold_something(tmp_path):
     caches = tmp_path / ".kodact-harbor"
     assert set(settled(tmp_path).values()) == {"unset"}, "no folder, no cache"
     for name in ("uv-cache", "pip-wheelhouse", "apt-cache"):
         (caches / name).mkdir(parents=True)
+    assert set(settled(tmp_path).values()) == {"unset"}, "an empty folder holds nothing to use"
+    for name in ("uv-cache", "pip-wheelhouse", "apt-cache"):
+        (caches / name / "something").write_text("x")
     assert settled(tmp_path) == {
         "KODACT_HARBOR_UV_CACHE": str(caches / "uv-cache"),
         "KODACT_HARBOR_PIP_CACHE": str(caches / "pip-wheelhouse"),

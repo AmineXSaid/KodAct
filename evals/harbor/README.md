@@ -70,7 +70,9 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | `KODACT_HARBOR_CA_BUNDLE` | | Extra CAs to trust inside containers (see below) |
 | `KODACT_HARBOR_HF_ENDPOINT` | hf-mirror.com only where huggingface.co is blocked | The Hugging Face Hub address for the agent and the tests, checked at the start; `off` never uses a mirror, a URL picks one (job name gets `-hfmirror`; see below) |
 | `KODACT_HARBOR_UV_BIN` | this machine's `uv` | The uv put in each container for the tests after the agent's run, when there is none, so a test script whose own download of uv fails still runs; `none` turns it off (see below) |
-| `KODACT_HARBOR_UV_CACHE`, `KODACT_HARBOR_PIP_CACHE`, `KODACT_HARBOR_APT_CACHE` | their folder in `~/.kodact-harbor`, when it exists | Downloads made once on this machine: the tests' packages, what an agent pip-installs (Torch), what it apt-installs when a task has no Python; `off` turns one off (see below) |
+| `KODACT_HARBOR_UV_CACHE`, `KODACT_HARBOR_PIP_CACHE`, `KODACT_HARBOR_APT_CACHE` | their folder in `~/.kodact-harbor`, made when missing | Downloads made once on this machine: the tests' packages, what an agent pip-installs (Torch), what it apt-installs when a task has no Python; `off` turns one off (see below) |
+| `KODACT_HARBOR_WARM` | `1` | Make the missing caches before a run; `0` uses only what is there |
+| `KODACT_HARBOR_TIMEOUT_MULTIPLIER` | `3` | Scales Harbor's limits for the container start, the agent's setup and the tests, never the agent's own; `1` keeps Harbor's |
 | `KODACT_HARBOR_HOSTS` | the endpoint's host | Names to resolve here and pin in each container's `/etc/hosts` (`none` turns it off) |
 | `KODACT_HARBOR_HOST_IP` | found automatically | This machine's address, used in place of a `localhost` endpoint |
 
@@ -349,9 +351,13 @@ left out of the valid-trial count, as is one whose tests run out of time
 fetching its own data, with no assertion about the agent's output
 (`pytorch-model-cli` downloads MNIST inside a test: "Name or service not
 known"). Downloading Torch through a slow proxy can take longer
-than the task's 15-minute verifier limit; give the tests more time, not the
-agent, with `--verifier-timeout-multiplier 3` after the mode. For real scores, run from a network without
-TLS inspection.
+than the task's 15-minute verifier limit. So the run scripts give Harbor's own
+limits for what a slow network stretches 3× their time: the container start
+(pulling its image), the agent's setup (copying the caches in) and the tests.
+The agent's limit stays as the task sets it. `KODACT_HARBOR_TIMEOUT_MULTIPLIER`
+changes the 3, and `1` keeps Harbor's limits; a flag after the mode
+(`--verifier-timeout-multiplier 5`) wins. For real scores, run from a network
+without TLS inspection.
 
 ### The proxy blocks huggingface.co: a mirror, chosen at the start
 
@@ -439,17 +445,25 @@ withholds Torch, so the agent runs `pip install torch`). On a slow proxy that
 download can outlast the task limit, or fall back to the multi-GB CUDA build and
 never finish. Some give the agent no Python at all (torch-tensor-parallelism's
 Ubuntu 24.04), so it first runs `apt-get install python3 python3-pip`: through
-a slow proxy that took 10 of the task's 14 minutes. Download both once and
-let every run reuse them:
+a slow proxy that took 10 of the task's 14 minutes. Both downloads happen
+once, then every run reuses them.
+
+The usual command is enough. Before a run, `caches.py` (sourced through
+`caches.sh`) makes what is missing in `~/.kodact-harbor` and says so:
+- Torch (CPU) for Python 3.12 and 3.13, while the wheelhouse holds no wheel.
+- Python's apt packages for ubuntu:24.04 and debian:bookworm, while no release
+  is cached, then for any Ubuntu or Debian release a past trial had none for.
+
+Each cache is then used whenever its folder holds something, with nothing to
+export. On a slow network the first run waits for these downloads; later runs
+don't. `KODACT_HARBOR_WARM=0` makes nothing and uses only what is there.
+`KODACT_HARBOR_PIP_CACHE=off` or `KODACT_HARBOR_APT_CACHE=off` turns one off,
+and a path picks another folder. To make or refresh one by hand:
 
 ```bash
 python3 evals/harbor/warm_pip_cache.py           # Torch CPU + deps for Python 3.12 and 3.13
 python3 evals/harbor/warm_apt_cache.py           # python3, pip, venv for ubuntu:24.04 and debian:bookworm
 ```
-
-The run scripts use each cache whenever its folder in `~/.kodact-harbor`
-exists (`caches.sh`), with nothing to export. `KODACT_HARBOR_PIP_CACHE=off` or
-`KODACT_HARBOR_APT_CACHE=off` turns one off, and a path picks another folder.
 
 - **pip:** each agent copies the wheelhouse into its container and points pip
   at it (`PIP_FIND_LINKS`), so the agent's own `pip install` comes from disk.
@@ -509,9 +523,13 @@ rewrites it at every start.
 Some tests download large packages every time they run (`pytorch-model-cli`
 installs Torch, torchvision and OpenCV). Through a slow proxy that can take
 longer than the verifier limit (torch-tensor-parallelism's tests ran out of
-their 15 minutes on 2026-11-14). Download them once on this machine; the run
-scripts then use `~/.kodact-harbor/uv-cache` whenever it exists
-(`KODACT_HARBOR_UV_CACHE=off` turns it off):
+their 15 minutes on 2026-11-14). Before each run, `caches.py` finds the tasks
+whose tests, in a past job here (`jobs/`), judged nothing: they ran out of
+time, or failed to fetch what they need (`report.py`'s verifier error). It
+downloads those tests' packages once into `~/.kodact-harbor/uv-cache`. The
+cache's lists (`.kodact-tasks`, `.kodact-no-uvx`) keep each task to once, and
+the cache, gigabytes, goes only into the containers of the tasks it holds.
+`KODACT_HARBOR_UV_CACHE=off` turns it off. To add a task by hand:
 
 ```bash
 python3 evals/harbor/warm_uv_cache.py pytorch-model-cli torch-tensor-parallelism

@@ -3,6 +3,21 @@
 ## 0.1.0 (unreleased)
 
 ### Harbor runs on a slow network: Python and Torch from disk
+- **The usual command is enough.** `KODACT_HARBOR_JOBS=6 evals/harbor/run.sh
+  subset -l 89` makes the missing caches before it starts, once, and says so:
+  - Torch for the agent.
+  - Python's apt packages.
+  - The tests' packages for each task whose tests, in a past job here, judged
+    nothing (they ran out of time, or failed to fetch what they need).
+  Later runs reuse them, and `KODACT_HARBOR_WARM=0` makes nothing. The tests'
+  cache, gigabytes, goes only into the containers of the tasks it was made
+  for.
+- **Harbor's own limits for a slow network get 3× the time:** the container
+  start (four containers took longer than 600 s with 6 trials at a time), the
+  agent's setup (copying the caches in) and the tests (torch-tensor-parallelism's
+  ran out of their 900 s). The agent's limit stays as the task sets it.
+  `KODACT_HARBOR_TIMEOUT_MULTIPLIER` changes the 3, `1` keeps Harbor's limits,
+  and a flag given to the run script wins.
 - **Python from a local apt cache.** When a task's container has no Python
   (torch-tensor-parallelism's Ubuntu 24.04), the agent runs `apt-get install
   python3 python3-pip`. Through a slow proxy that took 10 of the task's 14

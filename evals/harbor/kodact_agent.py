@@ -43,9 +43,11 @@ Configuration comes from the environment of the `harbor` process:
 - `KODACT_HARBOR_UV_CACHE`, `KODACT_HARBOR_PIP_CACHE`, `KODACT_HARBOR_APT_CACHE`:
   downloads made once on this machine (warm_*.py), copied in before the agent
   starts: the tests' packages, what the agent pip-installs (Torch), and what it
-  apt-installs when a task has no Python (upload_apt_cache). The run scripts set
-  each to its folder in ~/.kodact-harbor when that exists (caches.sh). Only the
-  download speed changes; the task still withholds the packages.
+  apt-installs when a task has no Python (upload_apt_cache). The run scripts make
+  what is missing and set each to its folder in ~/.kodact-harbor (caches.py). The
+  uv cache goes only into the containers of the tasks it was made for
+  (uv_cache_for). Only the download speed changes; the task still withholds the
+  packages.
 
 The model comes from `harbor run -m provider/name`; the provider part is
 dropped, so `-m openai/deep-thinking` and `-m deep-thinking` both run `kodact --model deep-thinking`.
@@ -198,6 +200,14 @@ def cache_dir(var: str, maker: str) -> Path | None:
     return path
 
 
+def uv_cache_for(task: str, cache: Path) -> bool:
+    """Is the uv cache for this task's tests? It is when warm_uv_cache.py put that task's packages
+    in it, as its list (.kodact-tasks) says: it holds gigabytes other tasks don't need. A cache
+    made before the list existed has none, and is for every task."""
+    listed = cache / ".kodact-tasks"
+    return not listed.is_file() or task in listed.read_text().split()
+
+
 async def upload_uv_cache(agent: BaseInstalledAgent, environment: BaseEnvironment) -> None:
     """Copy KODACT_HARBOR_UV_CACHE (made by warm_uv_cache.py) into the container for the task's tests.
 
@@ -205,6 +215,9 @@ async def upload_uv_cache(agent: BaseInstalledAgent, environment: BaseEnvironmen
     """
     path = cache_dir("KODACT_HARBOR_UV_CACHE", "warm_uv_cache.py")
     if path is None:
+        return
+    task = getattr(environment, "environment_name", None) or ""  # the task's short name in Harbor 0.24
+    if task and not uv_cache_for(task, path):
         return
     await agent.exec_as_root(environment, command=f"mkdir -p {KEPT_UV_CACHE}")
     await environment.upload_dir(path.resolve(), KEPT_UV_CACHE)

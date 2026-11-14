@@ -23,10 +23,12 @@
 #                         script whose own download of uv fails still runs (default: this
 #                         machine's uv; none: off)
 #   KODACT_HARBOR_UV_CACHE, KODACT_HARBOR_PIP_CACHE, KODACT_HARBOR_APT_CACHE
-#                         downloads made once here (warm_uv_cache.py, warm_pip_cache.py,
-#                         warm_apt_cache.py), used whenever their folder in ~/.kodact-harbor
-#                         exists (caches.sh); off: none (job name gets -uvcache, -pipcache,
-#                         -aptcache)
+#                         downloads made once here, before a run, when missing (caches.py),
+#                         then used whenever their folder in ~/.kodact-harbor holds something;
+#                         off: none (job name gets -uvcache, -pipcache, -aptcache)
+#   KODACT_HARBOR_WARM     0: make no missing cache, use only what is there
+#   KODACT_HARBOR_TIMEOUT_MULTIPLIER  Harbor's limits for the container start, the agent's setup
+#                         and the tests, never the agent's own (default 3; 1: Harbor's)
 #   KODACT_STATIC_BIN      use this binary as is (job name gets -custombin); by default
 #                         target-static/release/kodact is rebuilt when the source changed
 #   KODACT_NUDGES          the nudges on in every task (job name gets -n-<list>, so an A/B of

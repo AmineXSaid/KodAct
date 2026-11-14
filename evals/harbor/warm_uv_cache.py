@@ -77,6 +77,22 @@ def uv_version(script: str) -> str | None:
     return m.group(1) if m else None
 
 
+# The tasks whose tests' packages are in the cache, one per line: the agents copy the cache only
+# into their containers (kodact_agent.upload_uv_cache), as it holds gigabytes they don't need.
+# And the tasks found to need nothing, so caches.py doesn't ask again. A cache made before these
+# lists existed has none, and goes to every task.
+TASKS = ".kodact-tasks"
+NO_UVX = ".kodact-no-uvx"
+
+
+def record(cache: Path, name: str, tasks: list[str]) -> None:
+    """Add `tasks` to the list `name` in the cache."""
+    path = cache / name
+    have = set(path.read_text().split()) if path.is_file() else set()
+    if tasks:
+        path.write_text("".join(f"{t}\n" for t in sorted(have | set(tasks))))
+
+
 def prune_environments(cache: Path) -> int:
     """Drop what only works on this machine, keep the downloaded packages.
 
@@ -112,12 +128,13 @@ def main() -> None:
     ca = os.environ.get("KODACT_HARBOR_CA_BUNDLE")
     if ca:
         env["SSL_CERT_FILE"] = str(Path(ca).resolve())
-    failed = []
+    failed, no_uvx = [], []
     for task in tasks:
         script = test_script(task)
         words = uvx_line(script)
         if not words:
             print(f"{task}: its tests don't use uvx, nothing to cache")
+            no_uvx.append(task)
             continue
         version = uv_version(script)
         # The tests' own uv version, so the cache has the layout that version reads.
@@ -132,6 +149,8 @@ def main() -> None:
             print(f"{task}: attempt {attempt} of {ATTEMPTS} failed" + ("; trying again" if attempt < ATTEMPTS else ""), flush=True)
         else:
             failed.append(task)
+    record(cache, TASKS, [t for t in tasks if t not in failed and t not in no_uvx])
+    record(cache, NO_UVX, no_uvx)
     dropped = prune_environments(cache)
     size = sum(p.stat().st_size for p in cache.rglob("*") if p.is_file() and not p.is_symlink())
     print(f"\ncache: {cache} ({size / 1e9:.1f} GB)")
@@ -139,7 +158,7 @@ def main() -> None:
         print(f"dropped {dropped} environments built on this machine's Python (uv rebuilds them in the container)")
     if failed:
         sys.exit(f"failed: {' '.join(failed)}")
-    print(f"next: export KODACT_HARBOR_UV_CACHE={cache}")
+    print("the run scripts use it whenever it exists")
 
 
 if __name__ == "__main__":

@@ -25,6 +25,19 @@ esac
 if [ -n "${KODACT_HARBOR_UV_CACHE:-}" ]; then
   verifier_ca+=(--ve UV_CACHE_DIR=/usr/local/share/kodact/uv-cache)
 fi
+# Harbor's own time limits for what a slow network stretches, never the agent's: starting the
+# container (pulling its image), the agent's setup (copying the caches in) and the tests (installing
+# their packages). On 2026-11-14, with 6 trials at a time, four containers took longer than
+# Harbor's 600 s to start, and torch-tensor-parallelism's tests longer than their 900 s: none of
+# them was judged. KODACT_HARBOR_TIMEOUT_MULTIPLIER (default 3) scales the three, and 1 keeps
+# Harbor's. A flag given to the run script wins, as it comes later.
+harbor_multiplier="${KODACT_HARBOR_TIMEOUT_MULTIPLIER:-3}"
+if [ "$harbor_multiplier" != 1 ]; then
+  verifier_ca+=(--environment-build-timeout-multiplier "$harbor_multiplier"
+                --agent-setup-timeout-multiplier "$harbor_multiplier"
+                --verifier-timeout-multiplier "$harbor_multiplier")
+fi
+unset harbor_multiplier
 # uv gives up on a download after 30 s without data, too soon for a slow proxy.
 if [ -n "${KODACT_HARBOR_CA_BUNDLE:-}${KODACT_HARBOR_UV_CACHE:-}" ]; then
   verifier_ca+=(--ve UV_HTTP_TIMEOUT=600)
