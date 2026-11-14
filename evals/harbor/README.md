@@ -133,7 +133,10 @@ KodAct's reminders and events are named (retries, output limit, the server's
 window, compaction, nudges), then how the run ended, what KodAct's last check
 ran (`KodAct's last check passed: $ gcc -O2 -o app app.c`: that command passed,
 which isn't the task's verdict), the files the task asks for that don't exist,
-and the task's reward with the score so far. While the model thinks or a
+and the task's reward with the score so far. A trial whose tests couldn't judge
+the work shows `verifier error` and the line that shows why, as `report.py`
+names it, and is left out of the score (`0/0 passed so far, 1 verifier error
+left out`). While the model thinks or a
 command runs, a line every minute says which and for how long. Pi's events are
 shown the same way; other agents' logs (Ante, ...) as they are.
 

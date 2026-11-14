@@ -9,8 +9,9 @@ reminders and events are named; a run's error is shown once; the end says what
 KodAct's last check ran and which files the task asks for don't exist; and while the
 agent is at work with nothing new, a line says what it is waiting for, timed from the
 log's last write (or "over" when that can't be told). A trial's header comes before
-its first step. The events are cut down from real KodAct stream-json (terminal-bench
-2.0 trials).
+its first step. A trial whose tests couldn't judge the work is a verifier error, as
+report.py says, left out of the score. The events are cut down from real KodAct
+stream-json (terminal-bench 2.0 trials).
 """
 
 import json
@@ -260,3 +261,50 @@ def test_a_trial_that_starts_while_watched_shows_its_header_first(tmp_path):
     out = run_watch([str(job)], seconds=4, meanwhile=start)
     assert "time limit 14m30s" in out and "▸ step 1" in out, out
     assert out.index("time limit 14m30s") < out.index("Fix the bug") < out.index("▸ step 1"), out
+
+
+# reshard-c4-data's tests, cut down from a real trial (2026-11-14): they died loading their own
+# data from the Hugging Face Hub, behind a proxy that blocks it, before judging anything.
+HF_BLOCKED = """\
+collected 1 item
+../tests/test_outputs.py E                                               [100%]
+_____________ ERROR at setup of test_compress_decompress_workflow ______________
+E           ValueError: Couldn't find cache for allenai/c4 for config 'default-c33333bd6ac7ada4'
+---------------------------- Captured stderr setup -----------------------------
+Using the latest cached version of the dataset since allenai/c4 couldn't be found on the Hugging Face Hub
+=============================== 1 error in 5.53s ===============================
+"""
+
+
+def add_trial(job: Path, name: str, reward: str, stdout: str) -> None:
+    verifier = job / name / "verifier"
+    (job / name / "agent").mkdir(parents=True)
+    verifier.mkdir()
+    (job / name / "result.json").write_text("{}")
+    (verifier / "test-stdout.txt").write_text(stdout)
+    (verifier / "reward.txt").write_text(reward)
+
+
+def test_tests_that_could_not_judge_the_work_are_a_verifier_error_left_out_of_the_score(tmp_path):
+    events = [{"type": "result", "subtype": "success", "is_error": False, "num_turns": 2, "duration_ms": 9000}]
+    job = make_job(tmp_path, events, finished=True)
+    add_trial(job, "reshard-c4-data__AZCdwVd", "0", HF_BLOCKED)
+    out = run_watch(["--once", str(job)])
+    assert ("reward 0 · verifier error: the tests couldn't judge the work · Using the latest cached version of the "
+            "dataset since allenai/c4 couldn't be found on the Hugging Face Hub") in out, out
+    assert "✘ failed" not in out, out
+    assert "1/1 passed so far, 1 verifier error left out" in out, out
+    # Tests that ran and failed judged the work: a failure, counted.
+    add_trial(job, "gpt2-codegolf__Xy12", "0", "collected 1 item\n========== 1 failed in 0.07s ==========\n")
+    out = run_watch(["--once", str(job)])
+    assert "reward 0 ✘ failed" in out and "/2 passed so far, 1 verifier error left out" in out, out
+
+
+def test_a_package_database_left_broken_is_the_agents_failure(tmp_path):
+    # As in report.py: the agent stopped an install mid-way, and the tests' own apt-get refused.
+    (tmp_path / "test-stdout.txt").write_text(
+        "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.\n"
+    )
+    (tmp_path / "reward.txt").write_text("0")
+    verdict, line = watch.reward_line(tmp_path / "reward.txt")
+    assert verdict == "failed" and watch.ANSI.sub("", line) == "reward 0 ✘ failed: left dpkg interrupted"

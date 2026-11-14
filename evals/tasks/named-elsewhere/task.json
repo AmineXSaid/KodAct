@@ -1,0 +1,13 @@
+{
+  "instruction": "parse_rows in members.py crashes on a row with no id, and keeps rows whose id repeats. Rows with a missing and/or repeated id should be dropped (a repeated id keeps its first row), so the output has no missing/duplicate ids. `python3 -m unittest discover -s tests` must pass.",
+  "check": "python3 -m unittest discover -s tests -q && python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": [
+    "quiet",
+    "everyday",
+    "bugfix",
+    "python",
+    "constraints"
+  ],
+  "timeout_secs": 300
+}

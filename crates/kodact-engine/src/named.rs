@@ -1,9 +1,12 @@
 //! What a person's request names: the files and the commands in it, and a size limit stated
 //! for a file. Read from the request's own words, nothing else.
 //!
-//! - A **file** is a word with a path separator (`src/main.rs`, `./out/report.json`) or a name
-//!   with an extension (`answer.txt`). URLs, e-mail addresses, version numbers (`1.4.0`) and
-//!   abbreviations (`e.g.`) are not files.
+//! - A **file** is a path (`src/main.rs`, `./out/report.json`, `dist/`) or a name with an
+//!   extension (`answer.txt`). A word with a slash is a path when it says so: it is there, starts
+//!   at a root, ends with `/`, or ends with a file's name. Words joined by a slash (`and/or`,
+//!   `input/output`), URLs, e-mail addresses, version numbers (`1.4.0`) and abbreviations
+//!   (`e.g.`) are not files. A name alone (`parser.py`) that isn't at the project's root is the
+//!   file of that name elsewhere in the project (`src/parser.py`), when there is one.
 //! - A **command** is a span in backticks whose first word is a program this machine has
 //!   (on `PATH`) or a script in the project (`./build.sh`, `python3 run_tests.py`), and that
 //!   the request asks to run or to pass: "run `make test`", "make `make test` pass", "verify
@@ -168,8 +171,15 @@ impl Named {
         }
         // A limit without a file: the one new file the request asks for, or the one of its
         // type. Files there already are what the request reads, not what it asks to be made.
-        let new: Vec<&String> =
-            n.files.iter().filter(|f| !n.removed.contains(f) && !resolve(f, project).exists()).collect();
+        if unattached.is_empty() {
+            return n;
+        }
+        let located = locate(&n.files, project);
+        let new: Vec<&String> = located
+            .iter()
+            .filter(|(f, at)| !n.removed.contains(f) && !at.iter().any(|p| p.exists()))
+            .map(|(f, _)| f)
+            .collect();
         for (types, bytes, said) in unattached {
             let of_type: Vec<&&String> = new.iter().filter(|f| types.iter().any(|t| *t == extension(f))).collect();
             let file = match (new.as_slice(), of_type.as_slice()) {
@@ -272,19 +282,22 @@ pub(crate) struct Watched {
 }
 
 impl Watched {
+    /// A name alone found elsewhere in the project (`parser.py` for `src/parser.py`) is watched
+    /// there, as a file the request reads: it is not one to make.
     pub fn at_start(n: &Named, project: &Path) -> Watched {
-        let files: Vec<_> = n
-            .files
-            .iter()
-            .map(|f| {
-                let p = resolve(f, project);
-                (f.clone(), file_state(&p), p)
-            })
-            .filter(|(_, _, p)| !p.is_dir())
-            .map(|(f, st, p)| (f, p, st))
-            .collect();
-        let deliverables =
-            files.iter().filter(|(f, _, st)| st.is_none() && !n.removed.contains(f)).map(|(f, ..)| f.clone()).collect();
+        let mut files = vec![];
+        for (f, at) in locate(&n.files, project) {
+            for p in at.into_iter().filter(|p| !p.is_dir()) {
+                let st = file_state(&p);
+                files.push((f.clone(), p, st));
+            }
+        }
+        let mut deliverables = vec![];
+        for (f, _, st) in &files {
+            if st.is_none() && !n.removed.contains(f) {
+                push(&mut deliverables, f.clone());
+            }
+        }
         Watched { files, deliverables }
     }
 
@@ -300,7 +313,7 @@ impl Watched {
             let now = file_state(path);
             if now != *st {
                 *st = now;
-                out.push(name.clone());
+                push(&mut out, name.clone());
             }
         }
         out
@@ -320,7 +333,10 @@ impl Watched {
         let words = |s: &str| -> Vec<String> {
             s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 1).map(String::from).collect()
         };
-        let all: Vec<String> = self.files.iter().map(|(n, ..)| n.clone()).collect();
+        let mut all: Vec<String> = vec![];
+        for (n, ..) in &self.files {
+            push(&mut all, n.clone());
+        }
         let Some(row) = row else { return all };
         let row = words(row);
         let some: Vec<String> = all
@@ -473,6 +489,67 @@ fn resolve(f: &str, project: &Path) -> PathBuf {
     }
 }
 
+/// Where each named file is: its path when that is there; for a name alone that isn't at the
+/// project's root, the files of that name elsewhere in it ([`found_elsewhere`]); else its path,
+/// still to be made.
+fn locate(files: &[String], project: &Path) -> Vec<(String, Vec<PathBuf>)> {
+    let alone: Vec<&str> =
+        files.iter().filter(|f| !f.contains('/') && !resolve(f, project).exists()).map(String::as_str).collect();
+    let elsewhere = found_elsewhere(&alone, project);
+    files
+        .iter()
+        .map(|f| {
+            let there: Vec<PathBuf> = elsewhere.iter().filter(|(n, _)| n == f).map(|(_, p)| p.clone()).collect();
+            (f.clone(), if there.is_empty() { vec![resolve(f, project)] } else { there })
+        })
+        .collect()
+}
+
+/// The most entries a search for names alone visits: a larger tree is cut there, and a name not
+/// found by then is taken to be nowhere yet, as before the search.
+const MAX_SEARCHED: usize = 20_000;
+
+/// Folders no request means when it names a file alone: what a build or an installer made.
+const NOT_OWN: [&str; 8] =
+    ["node_modules", "site-packages", "dist-packages", "__pycache__", "target", "dist", "build", "vendor"];
+
+/// The files with these names in the project, nearest first: "fix parser.py" means
+/// `src/parser.py`. Read as a file to make, it was reported missing, the model was told to
+/// write it, and edits to the real one stopped counting as progress. Hidden folders, virtual
+/// environments and the folders in [`NOT_OWN`] are skipped: pip's own `main.py` isn't the one a
+/// request for `main.py` asks for. Walked only when a name alone isn't at the project's root.
+fn found_elsewhere(names: &[&str], project: &Path) -> Vec<(String, PathBuf)> {
+    let mut found = vec![];
+    let (mut level, mut visited) = (if names.is_empty() { vec![] } else { vec![project.to_path_buf()] }, 0usize);
+    while !level.is_empty() && visited < MAX_SEARCHED {
+        let mut next = vec![];
+        for dir in level {
+            if visited >= MAX_SEARCHED {
+                break;
+            }
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            // A folder of a million files is read only up to what is left of the budget.
+            let mut entries: Vec<_> = rd.flatten().take(MAX_SEARCHED - visited).collect();
+            entries.sort_by_key(|e| e.file_name());
+            for e in entries {
+                visited += 1;
+                let name = e.file_name().to_string_lossy().into_owned();
+                let path = e.path();
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    if !name.starts_with('.') && !NOT_OWN.contains(&name.as_str()) && !path.join("pyvenv.cfg").exists()
+                    {
+                        next.push(path);
+                    }
+                } else if names.contains(&name.as_str()) && path.is_file() {
+                    found.push((name, path));
+                }
+            }
+        }
+        level = next;
+    }
+    found
+}
+
 fn squash(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -540,17 +617,20 @@ const WRITE_WORDS: &str = concat!(
 );
 const WRITE_REACH: usize = 2;
 
-/// Is a word with the shape of a file name read as one? A path (with a folder) always is. A bare
-/// `name.ext` needs evidence: the file exists, its extension is a common file type
-/// ([`FILE_EXTENSIONS`]), one of the few words before it asks to write it ([`WRITE_WORDS`]), or
-/// it is where a sentence that writes files puts something (`Write the port to port.txt and the
-/// process ID to server.pid`: after "to", with a write word and a file earlier in the sentence,
-/// and not a numeric type: `converts the columns to np.float64`). `np.float64`, `self.data` and
-/// `math.log` have a file name's shape, not its sense: read as files, they were reported
-/// missing and the model was told to write them. `files_before`: the sentence already named one.
+/// Is a word with the shape of a file name read as one? A path (with a folder) is when it says
+/// so ([`path_evidence`]). A bare `name.ext` needs evidence: the file exists, its extension is a
+/// common file type ([`FILE_EXTENSIONS`]), one of the few words before it asks to write it
+/// ([`WRITE_WORDS`]), or it is where a sentence that writes files puts something (`Write the port
+/// to port.txt and the process ID to server.pid`: after "to", with a write word and a file earlier
+/// in the sentence, and not a numeric type: `converts the columns to np.float64`). `np.float64`,
+/// `self.data` and `math.log` have a file name's shape, not its sense: read as files, they were
+/// reported missing and the model was told to write them. `files_before`: the sentence already
+/// named one.
 fn file_evidence(w: &str, project: &Path, before: &[String], files_before: bool) -> bool {
-    if w.contains('/') || resolve(w, project).exists() || FILE_EXTENSIONS.split_whitespace().any(|e| e == extension(w))
-    {
+    if w.contains('/') {
+        return path_evidence(w, project);
+    }
+    if resolve(w, project).exists() || FILE_EXTENSIONS.split_whitespace().any(|e| e == extension(w)) {
         return true;
     }
     let asks_to_write = |b: &String| WRITE_WORDS.split_whitespace().any(|v| v == b);
@@ -561,6 +641,19 @@ fn file_evidence(w: &str, project: &Path, before: &[String], files_before: bool)
         && files_before
         && before.iter().any(asks_to_write)
         && !numeric_type(&extension(w))
+}
+
+/// Does a word with a folder in it say it is a path? It is there, it starts at a root (`/app/x`,
+/// `./x`, `../x`, `~/x`), it ends with `/` (a folder: `dist/`, not `w/`), or its last part is
+/// named like a file (`out/plan_a.jsonl`). Words joined by a slash are not paths (`and/or`,
+/// `input/output`, `missing/duplicate`): read as files, they were reported missing at the end of
+/// the turn, and the model was told to make them.
+fn path_evidence(w: &str, project: &Path) -> bool {
+    let folder = w.trim_end_matches('/').rsplit('/').next().unwrap_or_default();
+    resolve(w, project).exists()
+        || ["/", "./", "../", "~/"].iter().any(|r| w.starts_with(r))
+        || (w.ends_with('/') && folder.chars().count() > 1)
+        || named_like_file(w.rsplit('/').next().unwrap_or(w))
 }
 
 /// `float64`, `int8`, `uint16`, `bfloat16`, `complex128`: a numeric type's name, not a file type.
@@ -582,13 +675,19 @@ fn is_file_word(w: &str) -> bool {
     if w.starts_with("www.") || w.chars().all(|c| c == '/' || c == '.') {
         return false;
     }
-    let name = w.rsplit('/').next().unwrap_or(w);
     if w.contains('/') {
-        // A path: at least one part with a letter or a digit, and no spaces.
-        return w.chars().any(|c| c.is_ascii_alphanumeric()) && !w.starts_with("//");
+        // A path: at least one part with a letter or a digit, and only the characters paths are
+        // made of (`ceil(len/64)*64`, `/^a$/` and `$HOME/x` are not), no spaces.
+        return w.chars().any(|c| c.is_ascii_alphanumeric())
+            && !w.starts_with("//")
+            && w.chars().all(|c| c.is_alphanumeric() || "._-+~/:".contains(c));
     }
-    // A name with an extension: a stem with a letter, an extension of letters and digits that
-    // isn't all digits (`1.4.0`, `3.5`), and not an abbreviation (`e.g`, `i.e`).
+    named_like_file(w)
+}
+
+/// A name with an extension: a stem with a letter, an extension of letters and digits that isn't
+/// all digits (`1.4.0`, `3.5`), and not an abbreviation (`e.g`, `i.e`).
+fn named_like_file(name: &str) -> bool {
     let Some((stem, ext)) = name.rsplit_once('.') else { return false };
     let stem_ok = stem.chars().any(|c| c.is_ascii_alphabetic()) && !stem.split('.').all(|p| p.len() <= 1);
     let ext_ok = (1..=8).contains(&ext.len())
@@ -977,5 +1076,56 @@ mod tests {
         // Every named file exists: the request asks for nothing new.
         let n = Named::from_request("Fix cost_model.py.", root);
         assert!(!Watched::at_start(&n, root).asks_for_new());
+    }
+
+    #[test]
+    fn words_joined_by_a_slash_are_not_paths() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("src/bin")).unwrap();
+        let read = |t: &str| Named::from_request(t, d.path()).files;
+        // Read as files, these were reported missing and the model was told to make them.
+        for ask in [
+            "Keep it fast and/or small, with no missing/duplicate rows.",
+            "Compare the cost/latency of each input/output format.",
+            "Pad each batch to ceil(prompt_len/64)*64 tokens, or `ceil(n/64)*64`.",
+            "It works w/ Python 3, w/o a GPU, 24/7, at 30 km/h, over TCP/IP.",
+            "Use $HOME/cache for scratch, and match /^v[0-9]+$/ names.",
+        ] {
+            assert!(read(ask).is_empty(), "{ask}: {:?}", read(ask));
+        }
+        // A path says so: it is there, starts at a root, is a folder, or ends with a file's name.
+        assert_eq!(
+            read("Build src/bin, /opt/tool, ./out, ../lib and dist/, then write reports/2026/summary.json."),
+            ["src/bin", "/opt/tool", "./out", "../lib", "dist/", "reports/2026/summary.json"]
+        );
+    }
+
+    #[test]
+    fn a_file_named_alone_is_the_one_elsewhere_in_the_project() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        for (dir, file) in [
+            ("src", "parser.py"),
+            ("data/input", "requests_1.jsonl"),
+            // Not the project's own: installed packages, a virtual environment, a hidden folder.
+            ("node_modules/x", "index.js"),
+            ("venv/lib/python3.12/site-packages/pip", "main.py"),
+            (".cache", "notes.md"),
+        ] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            std::fs::write(root.join(dir).join(file), "x").unwrap();
+        }
+        std::fs::write(root.join("venv/pyvenv.cfg"), "").unwrap();
+        let ask = "Fix parser.py so it reads requests_1.jsonl, then write main.py, index.js and notes.md.";
+        let mut w = Watched::at_start(&Named::from_request(ask, root), root);
+        assert_eq!(w.still_missing(), ["main.py", "index.js", "notes.md"]);
+        // Watched where it is: an edit there is a change to a named file.
+        std::fs::write(root.join("src/parser.py"), "fixed").unwrap();
+        assert_eq!(w.changed(), ["parser.py"]);
+        // Every named file is there: the request asks for nothing new.
+        assert!(!Watched::at_start(&Named::from_request("Fix parser.py.", root), root).asks_for_new());
+        // Read, not made: a limit from a sentence that names no file isn't its.
+        let ask = "Use requests_1.jsonl. The output must be at most 10 bytes.";
+        assert!(Named::from_request(ask, root).limits.is_empty());
     }
 }

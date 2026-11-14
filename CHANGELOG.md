@@ -2,6 +2,31 @@
 
 ## 0.1.0 (unreleased)
 
+### Words aren't files, and a file named alone is the one in the project
+- **`and/or`, `input/output` and other words joined by a slash are no longer
+  read as files.** A word with a slash counts as a path only when it reads
+  as one: it exists, starts at a root (`/app/x`, `./x`, `~/x`), ends with `/`,
+  or ends with a file name (`out/plan.jsonl`). Before, `verification.missing`
+  listed such words. With `nudges.constraints`, the model was also told "It
+  names files that don't exist" and to create them. In a full Terminal-Bench
+  run on 2026-11-14, four tasks' results listed words such as
+  `missing/duplicate`, `cost/latency` and `ceil(prompt_len/64)*64`.
+- **A file named alone is the one elsewhere in the project.** "Fix
+  parser.py" means `src/parser.py` when there is no `parser.py` at the root.
+  Before, it was listed missing, the model was told to create it, and edits
+  to the real file didn't count as progress. The search skips hidden folders,
+  virtual environments, installed packages and build folders, so pip's own
+  `main.py` isn't the one a request asks for. It stops after 20,000 entries.
+  Task `named-elsewhere`, with a scripted model: before, `members.py`,
+  `and/or` and `missing/duplicate` were listed missing in 3/3 runs, and the
+  constraint reminder cost a turn. After, nothing is listed.
+- **`watch.py` says `verifier error` where `report.py` does.** A trial whose
+  tests couldn't judge the work (they couldn't fetch their data, or their
+  tools couldn't run) now shows `reward 0 · verifier error` with the line
+  that shows why, instead of `✘ failed`. Like the report, the running score
+  leaves it out. A package database the agent left broken shows `✘ failed:
+  left dpkg interrupted`.
+
 ### `verified` means a check that could have failed
 - **The Finish tool asks for `verified: true` only when a check run after
   the last change would have failed had the work been wrong**, and that check

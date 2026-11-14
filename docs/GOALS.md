@@ -182,7 +182,12 @@ Each pillar lists what KodAct does about it and what shows that it works.
     don't exist when the turn ends
     (which files are asked for is read from the request's words); a false
     finish with it was announced too (`kodact-eval` records
-    `verification_missing`, task `named-deliverables`);
+    `verification_missing`, task `named-deliverables`). Words joined by a
+    slash (`and/or`, `missing/duplicate`) aren't read as files, and a file
+    named alone (`parser.py`) is the one elsewhere in the project
+    (`src/parser.py`): both were listed missing, so the model was told to
+    make them (task `named-elsewhere`: three names listed in 3/3 scripted
+    runs before, none after);
   - a tool asked only about itself (`gcc --version`, `pytest --help`,
     `gcc -v`) is not a check and builds nothing: before, a version probe after
     an edit marked the change as tested and silenced the reminder;

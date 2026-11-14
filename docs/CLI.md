@@ -364,8 +364,13 @@ Measures the harness; see `evals/README.md`. `run` writes `report.json` and
 `verification.missing` lists the files the request asks to be made that
 don't exist when the turn ends: files it names that weren't there when the
 turn started (a file named in a sentence asking to remove something isn't
-one, and a request that isn't in English isn't read). Which files a request
-asks for is read from its words, a guess. The field is absent when nothing is
+one, and a request that isn't in English isn't read). A word with a slash is
+a file only when it reads as a path: it exists, starts at a root (`/`, `./`,
+`../`, `~/`), ends with `/`, or ends with a file name (`out/plan.jsonl`). So
+`and/or` isn't one. A file named alone (`parser.py`) that isn't at the
+project's root is the file of that name elsewhere in the project
+(`src/parser.py`), not one to make. Which files a request asks for is read
+from its words, a guess. The field is absent when nothing is
 missing, and with the verification loop off.
 
 ```bash

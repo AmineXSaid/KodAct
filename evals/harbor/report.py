@@ -110,6 +110,37 @@ def failure_text(test: dict) -> str:
     return "\n".join(lines) or trace or (test.get("message") or "")
 
 
+def tests_unjudged(reward: float | None, tests: list[dict], stdout: str) -> str:
+    """Why a trial's tests said nothing about the agent's work, from what the test phase left
+    (`tests`: json-ctrf's records; `stdout`: test-stdout.txt): "left dpkg interrupted" (the
+    agent's doing: the tests could not install what they need), "verifier error" (not the
+    agent's: the tests could not fetch what they need, or their tools could not run), or "" when
+    they judged it. watch.py shows the same, so a trial reads alike live and in the report."""
+    if (reward or 0) >= 1:
+        return ""
+    # The test phase hit a network/cert failure before it could judge the agent's output. Only
+    # count it when the tests never ran: pytest prints a "N passed"/"N failed" footer once a test
+    # body is reached, so its presence means the tests did evaluate the agent (a wrong answer),
+    # even if an unrelated cert warning scrolled past during setup. Its absence, with the infra
+    # signature, means the verifier died fetching its own dependencies or data and measured
+    # nothing.
+    tests_ran = re.search(r"\b\d+ (passed|failed)\b", stdout)
+    if not tests_ran and BROKEN_PACKAGES.search(stdout):
+        return "left dpkg interrupted"
+    # Some tests fetch their data in the test body itself (pytorch-model-cli downloads MNIST
+    # there), so they ran and failed without judging anything: each failed test's own error is a
+    # network failure, and none is an assertion about the agent's output.
+    errors = [failure_text(t) for t in tests if t.get("status") not in ("passed", "skipped")]
+    failed_fetching = bool(errors) and all(VERIFIER_INFRA.search(e) and "AssertionError" not in e for e in errors)
+    if (
+        (not tests_ran and (VERIFIER_INFRA.search(stdout) or VERIFIER_TOOLS.search(stdout)))
+        or failed_fetching
+        or VERIFIER_ENV.search(stdout)
+    ):
+        return "verifier error"
+    return ""
+
+
 def head_tail(text, n: int) -> str:
     text = str(text or "").strip()
     if len(text) <= n:
@@ -350,28 +381,9 @@ class Trial:
             if t.get("status") not in ("passed", "skipped")
         ]
         stdout = read(self.path / "verifier" / "test-stdout.txt")
-        # The agent did not pass, and the test phase hit a network/cert failure before it could
-        # judge the agent's output. Only count it when the tests never ran: pytest prints a
-        # "N passed"/"N failed" footer once a test body is reached, so its presence means the tests
-        # did evaluate the agent (a wrong answer), even if an unrelated cert warning scrolled past
-        # during setup. Its absence, with the infra signature, means the verifier died fetching its
-        # own dependencies or data and measured nothing.
-        tests_ran = re.search(r"\b\d+ (passed|failed)\b", stdout)
-        # Some tests fetch their data in the test body itself (pytorch-model-cli downloads MNIST
-        # there), so they ran and failed without judging anything: each failed test's own error is
-        # a network failure, and none is an assertion about the agent's output.
-        errors = [failure_text(t) for t in tests if t.get("status") not in ("passed", "skipped")]
-        failed_fetching = bool(errors) and all(VERIFIER_INFRA.search(e) and "AssertionError" not in e for e in errors)
-        self.broken_packages = bool((self.reward or 0) < 1 and not tests_ran and BROKEN_PACKAGES.search(stdout))
-        self.verifier_infra = bool(
-            (self.reward or 0) < 1
-            and not self.broken_packages
-            and (
-                (not tests_ran and (VERIFIER_INFRA.search(stdout) or VERIFIER_TOOLS.search(stdout)))
-                or failed_fetching
-                or VERIFIER_ENV.search(stdout)
-            )
-        )
+        unjudged = tests_unjudged(self.reward, tests, stdout)
+        self.broken_packages = unjudged == "left dpkg interrupted"
+        self.verifier_infra = unjudged == "verifier error"
         return {"summary": res.get("summary") or {}, "failed": failed, "stdout_tail": stdout.splitlines()[-VERIFIER_LINES:]}
 
     def decide(self) -> str:

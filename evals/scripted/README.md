@@ -58,3 +58,32 @@ package. B's sent SIGINT: it finished that package, then stopped. B's runs are
 20 seconds longer because KillShell and the end of the session each waited
 10 seconds for the install; a stop of anything that isn't an install costs
 nothing more.
+
+## `openai_fixes_members.py`: the `named-elsewhere` task
+
+A model that reads src/members.py, writes the fix, runs the tests the request
+names and ends. Told that files are missing, it answers that the names were
+only words and ends again. So what is measured is what KodAct reports, not what
+the model does about it.
+
+```bash
+python3 evals/scripted/openai_fixes_members.py 8795 &
+export KODACT_OPENAI_BASE_URL=http://127.0.0.1:8795/v1 KODACT_OPENAI_API_KEY=sk-test0123456789
+KODACT_NUDGES=constraints kodact-eval run --only named-elsewhere --kodact <kodact> --label <label> --repeat 3 -- --model m --permission-mode bypassPermissions
+```
+
+Measured on 2026-11-14. A is 46781c1, before the fix; B is the change that
+reads a slash between words as words, and a name alone as the file of that
+name elsewhere in the project.
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate | 3/3 | 3/3 |
+| Files reported missing (`verification.missing`) | `members.py`, `and/or`, `missing/duplicate` in 3/3 | none |
+| `constraints` reminders (`KODACT_NUDGES=constraints`) | 1 per run | 0 |
+| Turns per run (`KODACT_NUDGES=constraints`) | 5 | 4, as with reminders off |
+
+A told the model "It names files that don't exist: `members.py`, `and/or`,
+`missing/duplicate`". The file is src/members.py, and the other two are words.
+A real model may then create the files it was told are missing; the task's
+check fails a run that does. A real-model comparison still needs an API key.

@@ -17,8 +17,10 @@ seen live, how long it took), the start and end of its reasoning, what it says,
 each tool call in full (the command, the start of a file it writes, the lines an
 edit changes), each result (exit code and the first and last lines of the
 output; red when it failed), KodAct's reminders and events (retries, output
-limit, compaction, nudges), how the run ended and the task's reward. While the
-model thinks or a command runs, a line every minute says so and for how long.
+limit, compaction, nudges), how the run ended and the task's reward: passed,
+failed, or, as report.py says it, a verifier error when the tests couldn't judge
+the work, left out of the score. While the model thinks or a command runs, a
+line every minute says so and for how long.
 
 KodAct's stream-json (kodact.jsonl) and Pi's event stream (pi.jsonl, read
 through pi_stream.py) are shown this way. Any other *.jsonl / *.stdout.txt /
@@ -43,8 +45,9 @@ import time
 from pathlib import Path
 
 from pi_stream import PiStream
+from report import VERIFIER_ENV, VERIFIER_INFRA, VERIFIER_TOOLS, tests_unjudged
 
-COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+COLOR =sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
 
 def _c(code: str) -> str:
@@ -634,14 +637,40 @@ def handle(line: str, is_err: bool, chat: "Chat | None" = None, pi: PiStream | N
     return [line]
 
 
-def reward_line(path: Path) -> str:
+def reward_line(path: Path) -> tuple[str, str]:
+    """The task's reward as report.py reads it, and its line: "passed", "failed", or "verifier
+    error" when the tests couldn't judge the work (they couldn't fetch what they need, or their
+    tools couldn't run), which the report leaves out of the score. ("", "") until it's written."""
     try:
         value = float(path.read_text().strip())
     except (OSError, ValueError):
-        return ""
+        return "", ""
     if value >= 1:
-        return f"{GREEN}{BOLD}reward {value:g} ✔ passed{RESET}"
-    return f"{RED}{BOLD}reward {value:g} ✘ failed{RESET}"
+        return "passed", f"{GREEN}{BOLD}reward {value:g} ✔ passed{RESET}"
+    try:
+        tests = (json.loads((path.parent / "ctrf.json").read_text()).get("results") or {}).get("tests") or []
+    except (OSError, ValueError, AttributeError):
+        tests = []
+    try:
+        stdout = (path.parent / "test-stdout.txt").read_text(errors="replace")
+    except OSError:
+        stdout = ""
+    unjudged = tests_unjudged(value, tests, stdout)
+    if unjudged == "verifier error":
+        signs = (VERIFIER_INFRA, VERIFIER_TOOLS, VERIFIER_ENV)
+        why = next((ln.strip() for ln in stdout.splitlines() if any(s.search(ln) for s in signs)), "")
+        line = f"{YELLOW}{BOLD}reward {value:g} · verifier error{RESET}{YELLOW}: the tests couldn't judge the work"
+        return "verifier error", line + (f" · {short(why, 140)}" if why else "") + RESET
+    if unjudged:
+        return "failed", f"{RED}{BOLD}reward {value:g} ✘ failed: {unjudged}{RESET}"
+    return "failed", f"{RED}{BOLD}reward {value:g} ✘ failed{RESET}"
+
+
+def score_line(score: list[int]) -> str:
+    """How many passed of the trials the tests judged; a verifier error is left out, as in the
+    report."""
+    left_out = f", {count(score[2], 'verifier error')} left out" if score[2] else ""
+    return f"{DIM}· {score[0]}/{score[1]} passed so far{left_out}{RESET}"
 
 
 def newest_job() -> Path:
@@ -864,7 +893,7 @@ def main() -> None:
     rewarded: set[Path] = set()
     started: set[Path] = set()
     failed: set[Path] = set()
-    score = [0, 0]
+    score = [0, 0, 0]
     first_scan = True
 
     while True:
@@ -876,7 +905,7 @@ def main() -> None:
                 state.clear()
             for state in (rewarded, started, failed, guessed):
                 state.clear()
-            score = [0, 0]
+            score = [0, 0, 0]
             screen.last = None
             from_start = True
         now = time.time()
@@ -951,11 +980,13 @@ def main() -> None:
                 failed.add(trial)
                 screen.show(trial.name, [text])
             reward = trial / "verifier" / "reward.txt"
-            if reward not in rewarded and (text := reward_line(reward)):
+            if reward not in rewarded and (got := reward_line(reward))[1]:
+                verdict, text = got
                 rewarded.add(reward)
-                score[0] += "passed" in text
-                score[1] += 1
-                screen.show(trial.name, [f"{text} {DIM}· {score[0]}/{score[1]} passed so far{RESET}"])
+                score[0] += verdict == "passed"
+                score[1] += verdict != "verifier error"
+                score[2] += verdict == "verifier error"
+                screen.show(trial.name, [f"{text} {score_line(score)}"])
         first_scan = False
         if args.once:
             return
