@@ -40,6 +40,12 @@ Configuration comes from the environment of the `harbor` process:
   the agent's run, when there is none (provide_uv): a test script whose own
   download of uv fails then runs all the same. Default: this machine's `uv`;
   `none` turns it off.
+- `KODACT_HARBOR_UV_CACHE`, `KODACT_HARBOR_PIP_CACHE`, `KODACT_HARBOR_APT_CACHE`:
+  downloads made once on this machine (warm_*.py), copied in before the agent
+  starts: the tests' packages, what the agent pip-installs (Torch), and what it
+  apt-installs when a task has no Python (upload_apt_cache). The run scripts set
+  each to its folder in ~/.kodact-harbor when that exists (caches.sh). Only the
+  download speed changes; the task still withholds the packages.
 
 The model comes from `harbor run -m provider/name`; the provider part is
 dropped, so `-m openai/deep-thinking` and `-m deep-thinking` both run `kodact --model deep-thinking`.
@@ -51,6 +57,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -107,6 +114,39 @@ echo "uv for the tests: $version, from the machine running Harbor"
 # A wheelhouse of what an agent may `pip install` (Torch, made by warm_pip_cache.py); pip_cache_env()
 # points pip here, so the agent's own install comes from disk, not a slow proxy.
 KEPT_PIP = "/usr/local/share/kodact/pip-wheelhouse"
+# What an agent may `apt-get install` when a task's container has no Python (made by
+# warm_apt_cache.py, one folder per release: ubuntu-noble-amd64). Its .deb files go where apt
+# downloads to, which an apt.conf.d line moves here: the Docker images' docker-clean hook empties
+# /var/cache/apt/archives after every `apt-get update`. Its package lists go to
+# /var/lib/apt/lists only when the image has none (most delete theirs).
+KEPT_APT = "/usr/local/share/kodact/apt-archives"
+KEPT_APT_LISTS = "/usr/local/share/kodact/apt-lists"
+APT_CONF = "/etc/apt/apt.conf.d/00kodact-apt-cache"
+APT_LOG = "apt-cache.txt"
+# This container's release, as warm_apt_cache.py names its folders; nothing without apt.
+APT_RELEASE = r"""
+command -v apt-get >/dev/null 2>&1 || exit 0
+. /etc/os-release 2>/dev/null || exit 0
+printf '%s-%s-%s\n' "${ID:-}" "${VERSION_CODENAME:-}" "$(dpkg --print-architecture 2>/dev/null)"
+"""
+# No pipes: Harbor runs commands under `set -o pipefail`, where `ls | grep -q` can fail on SIGPIPE.
+USE_APT_CACHE = r"""
+archives=@ARCHIVES@
+lists=@LISTS@
+mkdir -p "$archives/partial"
+chown _apt:root "$archives/partial" 2>/dev/null || true
+chmod 700 "$archives/partial"
+printf 'Dir::Cache::Archives "%s/";\n' "$archives" > @CONF@
+seeded=""
+set -- @APT_LISTS@/*_Packages*
+if [ ! -e "$1" ] && [ -d "$lists" ]; then
+  mkdir -p @APT_LISTS@ && cp -a "$lists/." @APT_LISTS@/ && seeded=" and its package lists"
+fi
+rm -rf "$lists"
+n=0
+for f in "$archives"/*.deb; do [ -e "$f" ] && n=$((n + 1)); done
+echo "apt cache: $n packages for @RELEASE@$seeded"
+"""
 # Trust REMOTE_CA in the container: in the system store (now, and for any later
 # `update-ca-certificates`, e.g. when a test script installs curl), in existing bundle files,
 # and for uv, which test scripts use to install their tools.
@@ -145,17 +185,27 @@ chmod 644 "$kept"
 """ % (REMOTE_CA, KEPT_CA)
 
 
+def cache_dir(var: str, maker: str) -> Path | None:
+    """The folder a cache setting names, or None when it is unset or off (`none`, `off`, ...).
+    A setting that names no folder stops the job. The run scripts default each one to its folder
+    in ~/.kodact-harbor when that exists (caches.sh)."""
+    value = os.environ.get(var, "").strip()
+    if not value or value.lower() in OFF:
+        return None
+    path = Path(value).expanduser()
+    if not path.is_dir():
+        raise RuntimeError(f"{var}: {value} is not a directory (make it with {maker})")
+    return path
+
+
 async def upload_uv_cache(agent: BaseInstalledAgent, environment: BaseEnvironment) -> None:
     """Copy KODACT_HARBOR_UV_CACHE (made by warm_uv_cache.py) into the container for the task's tests.
 
     The tests then take Torch and the like from disk instead of the network (see verifier-ca.sh).
     """
-    cache = os.environ.get("KODACT_HARBOR_UV_CACHE")
-    if not cache:
+    path = cache_dir("KODACT_HARBOR_UV_CACHE", "warm_uv_cache.py")
+    if path is None:
         return
-    path = Path(cache).expanduser()
-    if not path.is_dir():
-        raise RuntimeError(f"KODACT_HARBOR_UV_CACHE: {cache} is not a directory (make it with warm_uv_cache.py)")
     await agent.exec_as_root(environment, command=f"mkdir -p {KEPT_UV_CACHE}")
     await environment.upload_dir(path.resolve(), KEPT_UV_CACHE)
     # Whatever user the tests run as, their uv takes locks and writes in its cache.
@@ -169,15 +219,60 @@ async def upload_pip_cache(agent: BaseInstalledAgent, environment: BaseEnvironme
     provide (Torch) installs from disk instead of over the network. The task still withholds it; only
     the download speed changes. Applies to every agent, so comparisons stay even.
     """
-    cache = os.environ.get("KODACT_HARBOR_PIP_CACHE")
-    if not cache:
+    path = cache_dir("KODACT_HARBOR_PIP_CACHE", "warm_pip_cache.py")
+    if path is None:
         return
-    path = Path(cache).expanduser()
-    if not path.is_dir():
-        raise RuntimeError(f"KODACT_HARBOR_PIP_CACHE: {cache} is not a directory (make it with warm_pip_cache.py)")
     await agent.exec_as_root(environment, command=f"mkdir -p {KEPT_PIP}")
     await environment.upload_dir(path.resolve(), KEPT_PIP)
     await agent.exec_as_root(environment, command=f"chmod -R a+rX {KEPT_PIP}")
+
+
+def apt_release(probe_output: str | None) -> str:
+    """This container's release as warm_apt_cache.py names its folders (`ubuntu-noble-amd64`), read
+    from APT_RELEASE's output; "" for none, or for anything else (it becomes a path here)."""
+    lines = (probe_output or "").strip().splitlines()
+    release = lines[-1].strip() if lines else ""
+    return release if re.fullmatch(r"[a-z0-9]+-[a-z0-9]+-[a-z0-9]+", release) else ""
+
+
+async def upload_apt_cache(agent: BaseInstalledAgent, environment: BaseEnvironment) -> None:
+    """Copy the KODACT_HARBOR_APT_CACHE folder for this container's release (made by
+    warm_apt_cache.py) into the container, and point apt's downloads at it (USE_APT_CACHE).
+
+    The agent's own `apt-get install python3` then takes the files from disk instead of a slow
+    mirror. The task still withholds the packages: the agent still decides to install them, and
+    only the download speed changes, for every agent alike. A container without apt, or of a
+    release with no folder, gets nothing; which one it was is in the trial's agent logs.
+    """
+    root = cache_dir("KODACT_HARBOR_APT_CACHE", "warm_apt_cache.py")
+    if root is None:
+        return
+    probe = await agent.exec_as_root(environment, command=APT_RELEASE)
+    release = apt_release(getattr(probe, "stdout", None))
+    if not release:
+        return
+    folder = root / release
+    if not (folder / "archives").is_dir():
+        note = f"apt cache: none for {release} (python3 evals/harbor/warm_apt_cache.py <its image> makes one)"
+        await agent.exec_as_root(environment, command=f"mkdir -p {LOG_DIR}; echo {shlex.quote(note)} > {LOG_DIR}/{APT_LOG}")
+        return
+    await agent.exec_as_root(environment, command=f"mkdir -p {KEPT_APT} {KEPT_APT_LISTS}")
+    await environment.upload_dir(folder / "archives", KEPT_APT)
+    if (folder / "lists").is_dir():
+        await environment.upload_dir(folder / "lists", KEPT_APT_LISTS)
+    script = use_apt_cache(release)
+    await agent.exec_as_root(environment, command=f"mkdir -p {LOG_DIR}; {{ {script} }} > {LOG_DIR}/{APT_LOG} 2>&1")
+
+
+def use_apt_cache(release: str, conf: str = APT_CONF, apt_lists: str = "/var/lib/apt/lists") -> str:
+    """USE_APT_CACHE for this release; tests point `conf` and `apt_lists` elsewhere."""
+    return (
+        USE_APT_CACHE.replace("@ARCHIVES@", KEPT_APT)
+        .replace("@LISTS@", KEPT_APT_LISTS)
+        .replace("@CONF@", conf)
+        .replace("@APT_LISTS@", apt_lists)
+        .replace("@RELEASE@", release)
+    )
 
 
 def uv_for_tests() -> Path | None:
@@ -215,7 +310,8 @@ def pip_cache_env() -> dict[str, str]:
     used without the network and anything missing still falls back to the index. The longer timeout
     and retries help that fallback survive a slow proxy. Empty when no cache was provided.
     """
-    if not os.environ.get("KODACT_HARBOR_PIP_CACHE"):
+    value = os.environ.get("KODACT_HARBOR_PIP_CACHE", "").strip()
+    if not value or value.lower() in OFF:
         return {}
     return {"PIP_FIND_LINKS": KEPT_PIP, "PIP_DEFAULT_TIMEOUT": "600", "PIP_RETRIES": "10"}
 
@@ -349,6 +445,7 @@ class KodAct(BaseInstalledAgent):
             await self.exec_as_root(environment, command=f"printf '%s\\n' {shlex.quote(lines)} >> /etc/hosts")
         await upload_uv_cache(self, environment)
         await upload_pip_cache(self, environment)
+        await upload_apt_cache(self, environment)
         uv_for_tests()  # a KODACT_HARBOR_UV_BIN that isn't a file stops the job here, not after a run
         ca = os.environ.get("KODACT_HARBOR_CA_BUNDLE")
         if ca:

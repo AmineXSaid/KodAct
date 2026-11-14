@@ -18,6 +18,10 @@ if [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ]; then
 fi
 # With KODACT_HARBOR_UV_CACHE (made by warm_uv_cache.py), the agent copies that uv cache into the
 # container; the tests' uv uses it, so Torch and the like come from disk, not through the proxy.
+# The run scripts default it to its folder when that exists (caches.sh); `off` and the like are none.
+case "$(printf '%s' "${KODACT_HARBOR_UV_CACHE:-}" | tr 'A-Z' 'a-z')" in
+  off|none|0|no|false) unset KODACT_HARBOR_UV_CACHE ;;
+esac
 if [ -n "${KODACT_HARBOR_UV_CACHE:-}" ]; then
   verifier_ca+=(--ve UV_CACHE_DIR=/usr/local/share/kodact/uv-cache)
 fi

@@ -10,7 +10,7 @@ from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_templat
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from kodact_agent import REMOTE_CA, TRUST_CA, upload_uv_cache, upload_pip_cache, pip_cache_env, container_url, record_run, settings, task_time_limit
+from kodact_agent import REMOTE_CA, TRUST_CA, upload_uv_cache, upload_pip_cache, upload_apt_cache, pip_cache_env, container_url, record_run, settings, task_time_limit
 
 ANTE_BIN = Path(os.environ.get("ANTE_BIN", str(Path.home() / ".ante/bin/ante")))
 REMOTE_BIN = "/usr/local/bin/ante"
@@ -44,6 +44,7 @@ class AnteAgent(BaseInstalledAgent):
                 )
         await upload_uv_cache(self, environment)
         await upload_pip_cache(self, environment)
+        await upload_apt_cache(self, environment)
         ca = os.environ.get("KODACT_HARBOR_CA_BUNDLE")
         if ca:
             if not Path(ca).is_file():

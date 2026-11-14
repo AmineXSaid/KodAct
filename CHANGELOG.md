@@ -2,6 +2,28 @@
 
 ## 0.1.0 (unreleased)
 
+### Harbor runs on a slow network: Python and Torch from disk
+- **Python from a local apt cache.** When a task's container has no Python
+  (torch-tensor-parallelism's Ubuntu 24.04), the agent runs `apt-get install
+  python3 python3-pip`. Through a slow proxy that took 10 of the task's 14
+  minutes, leaving no time to test anything. `warm_apt_cache.py` now
+  downloads those packages once per release. Each agent copies the folder for
+  its container's release in and points apt's downloads at it, out of reach
+  of the Docker images' `docker-clean` hook, which empties the default folder
+  after every `apt-get update`. Checked on Ubuntu 24.04: the install then
+  needed 0 B from the network.
+- **Torch wheels for the Pythons the containers have.** `warm_pip_cache.py`
+  fetched wheels only for this machine's Python, and pip ignores wheels for
+  any other version. It now fetches them for 3.12 (what Ubuntu 24.04's apt
+  installs) and 3.13 by default (`--python` picks others).
+- **The caches are used whenever their folder exists.** The run scripts no
+  longer need `KODACT_HARBOR_UV_CACHE`, `KODACT_HARBOR_PIP_CACHE` or
+  `KODACT_HARBOR_APT_CACHE` exported: each defaults to its folder in
+  `~/.kodact-harbor`, and `off` turns one off. In every case the task still
+  withholds the packages, so the agent still installs them itself; only the
+  download speed changes, for every agent alike. Jobs get `-uvcache`,
+  `-pipcache` and `-aptcache`.
+
 ### Harbor runs behind a proxy: tests that judge instead of failing to start
 - **The tests always have uv.** Terminal-Bench test scripts download uv
   before testing anything. When that download failed ("Could not resolve

@@ -97,10 +97,12 @@ fi
 export PI_BUNDLE
 
 . "$repo/evals/harbor/hf-endpoint.sh"  # which Hugging Face Hub: before the job name, which says it
+. "$repo/evals/harbor/caches.sh"  # the caches made on this machine, when their folders exist
 ca=""
 [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_UV_CACHE:-}" ] && ca="${ca}-uvcache"
 [ -n "${KODACT_HARBOR_PIP_CACHE:-}" ] && ca="${ca}-pipcache"
+[ -n "${KODACT_HARBOR_APT_CACHE:-}" ] && ca="${ca}-aptcache"
 [ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ] && ca="${ca}-hfmirror"
 model="${KODACT_HARBOR_MODEL:-deep-thinking}"
 model_tag="$(printf '%s' "${model#*/}" | tr -c 'A-Za-z0-9._-' '-')"

@@ -22,6 +22,11 @@
 #   KODACT_HARBOR_UV_BIN   the uv given to the tests when the container has none, so a test
 #                         script whose own download of uv fails still runs (default: this
 #                         machine's uv; none: off)
+#   KODACT_HARBOR_UV_CACHE, KODACT_HARBOR_PIP_CACHE, KODACT_HARBOR_APT_CACHE
+#                         downloads made once here (warm_uv_cache.py, warm_pip_cache.py,
+#                         warm_apt_cache.py), used whenever their folder in ~/.kodact-harbor
+#                         exists (caches.sh); off: none (job name gets -uvcache, -pipcache,
+#                         -aptcache)
 #   KODACT_STATIC_BIN      use this binary as is (job name gets -custombin); by default
 #                         target-static/release/kodact is rebuilt when the source changed
 #   KODACT_NUDGES          the nudges on in every task (job name gets -n-<list>, so an A/B of
@@ -64,11 +69,13 @@ commit="$(git rev-parse --short HEAD)"
 dirty=""
 git diff --quiet HEAD -- crates Cargo.toml Cargo.lock || dirty="-dirty"
 . "$repo/evals/harbor/hf-endpoint.sh"  # which Hugging Face Hub: before the job name, which says it
+. "$repo/evals/harbor/caches.sh"  # the caches made on this machine, when their folders exist
 # Runs with extra trusted CAs change the task environment: label them, they're for local comparisons.
 ca=""
 [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_UV_CACHE:-}" ] && ca="${ca}-uvcache"
 [ -n "${KODACT_HARBOR_PIP_CACHE:-}" ] && ca="${ca}-pipcache"
+[ -n "${KODACT_HARBOR_APT_CACHE:-}" ] && ca="${ca}-aptcache"
 [ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ] && ca="${ca}-hfmirror"
 [ -n "${KODACT_NUDGES:-}" ] && ca="${ca}-n-$(printf '%s' "$KODACT_NUDGES" | tr -c 'A-Za-z0-9' '.')"
 [ -n "${KODACT_HARBOR_ARGS:-}" ] && ca="${ca}-args-$(printf '%s' "$KODACT_HARBOR_ARGS" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-40)"

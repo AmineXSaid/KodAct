@@ -70,6 +70,7 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | `KODACT_HARBOR_CA_BUNDLE` | | Extra CAs to trust inside containers (see below) |
 | `KODACT_HARBOR_HF_ENDPOINT` | hf-mirror.com only where huggingface.co is blocked | The Hugging Face Hub address for the agent and the tests, checked at the start; `off` never uses a mirror, a URL picks one (job name gets `-hfmirror`; see below) |
 | `KODACT_HARBOR_UV_BIN` | this machine's `uv` | The uv put in each container for the tests after the agent's run, when there is none, so a test script whose own download of uv fails still runs; `none` turns it off (see below) |
+| `KODACT_HARBOR_UV_CACHE`, `KODACT_HARBOR_PIP_CACHE`, `KODACT_HARBOR_APT_CACHE` | their folder in `~/.kodact-harbor`, when it exists | Downloads made once on this machine: the tests' packages, what an agent pip-installs (Torch), what it apt-installs when a task has no Python; `off` turns one off (see below) |
 | `KODACT_HARBOR_HOSTS` | the endpoint's host | Names to resolve here and pin in each container's `/etc/hosts` (`none` turns it off) |
 | `KODACT_HARBOR_HOST_IP` | found automatically | This machine's address, used in place of a `localhost` endpoint |
 
@@ -436,19 +437,41 @@ in the task's own environment. What came of it is in each trial's
 Some tasks withhold a package the agent then installs itself (`pytorch-model-cli`
 withholds Torch, so the agent runs `pip install torch`). On a slow proxy that
 download can outlast the task limit, or fall back to the multi-GB CUDA build and
-never finish. Download the CPU wheels once and let every run reuse them:
+never finish. Some give the agent no Python at all (torch-tensor-parallelism's
+Ubuntu 24.04), so it first runs `apt-get install python3 python3-pip`: through
+a slow proxy that took 10 of the task's 14 minutes. Download both once and
+let every run reuse them:
 
 ```bash
-python3 evals/harbor/warm_pip_cache.py           # Torch CPU + deps, ~180 MB
-export KODACT_HARBOR_PIP_CACHE=~/.kodact-harbor/pip-wheelhouse
+python3 evals/harbor/warm_pip_cache.py           # Torch CPU + deps for Python 3.12 and 3.13
+python3 evals/harbor/warm_apt_cache.py           # python3, pip, venv for ubuntu:24.04 and debian:bookworm
 ```
 
-Each agent then copies the wheelhouse into its container and points pip at it
-(`PIP_FIND_LINKS`), so the agent's own `pip install` comes from disk; anything
-not cached still falls back to the index. The task still withholds the package
-and every agent gets the same cache, so the comparison stays even; only the
-download speed changes. Jobs get `-pipcache`. This is a local-comparison aid,
-not for the leaderboard.
+The run scripts use each cache whenever its folder in `~/.kodact-harbor`
+exists (`caches.sh`), with nothing to export. `KODACT_HARBOR_PIP_CACHE=off` or
+`KODACT_HARBOR_APT_CACHE=off` turns one off, and a path picks another folder.
+
+- **pip:** each agent copies the wheelhouse into its container and points pip
+  at it (`PIP_FIND_LINKS`), so the agent's own `pip install` comes from disk.
+  Anything not cached still falls back to the index. pip takes only wheels for
+  its own Python, so the wheels are fetched for each Python a container may
+  have (`--python`, default 3.12, as Ubuntu 24.04's apt gives, and 3.13).
+- **apt:** `warm_apt_cache.py` runs each image once in Docker and keeps the
+  downloaded packages and the package lists, one folder per release
+  (`ubuntu-noble-amd64/`). Each agent copies the folder for its container's
+  release in and points apt's downloads at it with an `apt.conf.d` line. The
+  default folder won't do: the Docker images' `docker-clean` hook empties
+  `/var/cache/apt/archives` after every `apt-get update`. The lists go in only
+  when the image has none. Checked on Ubuntu 24.04: after `apt-get update`,
+  the install needed 0 B from the network. A package the mirror has updated
+  since is downloaded as before, so run the script again now and then. What
+  each trial got is in its `agent/apt-cache.txt`. For another release, name
+  its image: `warm_apt_cache.py ubuntu:22.04`.
+
+The task still withholds the packages, so the agent still installs them
+itself. Every agent gets the same caches, so the comparison stays even; only
+the download speed changes. Jobs get `-pipcache` and `-aptcache`. This is a
+local-comparison aid, not for the leaderboard.
 
 ### Containers can't resolve names
 
@@ -485,12 +508,13 @@ rewrites it at every start.
 
 Some tests download large packages every time they run (`pytorch-model-cli`
 installs Torch, torchvision and OpenCV). Through a slow proxy that can take
-longer than the verifier limit. Download them once on this machine, then let
-every run reuse them:
+longer than the verifier limit (torch-tensor-parallelism's tests ran out of
+their 15 minutes on 2026-11-14). Download them once on this machine; the run
+scripts then use `~/.kodact-harbor/uv-cache` whenever it exists
+(`KODACT_HARBOR_UV_CACHE=off` turns it off):
 
 ```bash
-python3 evals/harbor/warm_uv_cache.py pytorch-model-cli
-export KODACT_HARBOR_UV_CACHE=~/.kodact-harbor/uv-cache
+python3 evals/harbor/warm_uv_cache.py pytorch-model-cli torch-tensor-parallelism
 ```
 
 `warm_uv_cache.py` reads each named task's own test script and runs its `uvx`

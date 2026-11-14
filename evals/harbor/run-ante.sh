@@ -27,9 +27,11 @@ model_tag="$(printf '%s' "${model#*/}" | tr -c 'A-Za-z0-9._-' '-')"
 provider="${ANTE_PROVIDER:-openai-compatible}"
 install="${ANTE_INSTALL_ARGS:-}"
 . "$repo/evals/harbor/hf-endpoint.sh"  # which Hugging Face Hub: before the job name, which says it
+. "$repo/evals/harbor/caches.sh"  # the caches made on this machine, when their folders exist
 ca=""; [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_UV_CACHE:-}" ] && ca="${ca}-uvcache"
 [ -n "${KODACT_HARBOR_PIP_CACHE:-}" ] && ca="${ca}-pipcache"
+[ -n "${KODACT_HARBOR_APT_CACHE:-}" ] && ca="${ca}-aptcache"
 [ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ] && ca="${ca}-hfmirror"
 job="ante-${mode}-${model_tag}-${install:-stable}${ca}-$(date +%Y%m%d-%H%M%S)"
 echo "job: $job"
