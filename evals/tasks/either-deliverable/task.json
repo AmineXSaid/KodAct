@@ -1,0 +1,7 @@
+{
+  "instruction": "Count the words in words.txt and write the count to either out/count.txt or out/count.json (one file is enough; in the JSON form use {\"words\": N}).",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["deliverables"],
+  "timeout_secs": 300
+}

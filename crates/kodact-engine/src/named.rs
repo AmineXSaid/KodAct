@@ -39,6 +39,9 @@ pub(crate) struct Named {
     pub limits: Vec<(String, u64, String)>,
     /// Files named in a sentence that asks to delete or remove something.
     pub removed: Vec<String>,
+    /// Files named as alternatives, `a.txt or b.toml` (`either … or …`): one of them is asked
+    /// for, not each.
+    pub either: Vec<(String, String)>,
 }
 
 /// Words that turn a sentence into a prohibition, or set aside what it names: whole words,
@@ -142,6 +145,7 @@ impl Named {
                             push(&mut n.commands, cmd);
                         }
                     } else if is_file_word(&span) && file_evidence(&span, project, &before, !files_here.is_empty()) {
+                        note_either(&mut n.either, &files_here, &before, &span);
                         push(&mut files_here, span.clone());
                     }
                     before.push(span.to_lowercase());
@@ -150,6 +154,7 @@ impl Named {
                 for word in part.split_whitespace() {
                     let w = trim_word(word);
                     if is_file_word(w) && file_evidence(w, project, &before, !files_here.is_empty()) {
+                        note_either(&mut n.either, &files_here, &before, w);
                         push(&mut files_here, w.to_string());
                     }
                     before.push(w.to_lowercase());
@@ -279,6 +284,8 @@ pub(crate) struct Watched {
     files: Vec<(String, PathBuf, Option<FileState>)>,
     /// The named files that didn't exist when the turn started, as the request names them.
     deliverables: Vec<String>,
+    /// Alternatives (`a.txt or b.toml`): either one existing is the other one made.
+    either: Vec<(String, String)>,
 }
 
 impl Watched {
@@ -298,7 +305,7 @@ impl Watched {
                 push(&mut deliverables, f.clone());
             }
         }
-        Watched { files, deliverables }
+        Watched { files, deliverables, either: n.either.clone() }
     }
 
     /// The request names files that didn't exist when the turn started.
@@ -358,10 +365,16 @@ impl Watched {
     /// Of the files the request asks to be made, those that still don't exist. A named file that
     /// was there when the turn started is never among them: gone now, it was renamed or removed
     /// (`Rename helper.py to utils.py` leaves no `helper.py`), not left unmade.
+    ///
+    /// Of two alternatives (`requirements.txt or pyproject.toml`), one existing is enough: the
+    /// other is not missing.
     pub fn still_missing(&self) -> Vec<String> {
+        let exists = |name: &str| self.files.iter().any(|(n, p, _)| n == name && p.exists());
+        let covered =
+            |name: &str| self.either.iter().any(|(a, b)| (a == name && exists(b)) || (b == name && exists(a)));
         self.files
             .iter()
-            .filter(|(n, p, _)| self.deliverables.contains(n) && !p.exists())
+            .filter(|(n, p, _)| self.deliverables.contains(n) && !p.exists() && !covered(n))
             .map(|(n, ..)| n.clone())
             .collect()
     }
@@ -472,6 +485,15 @@ fn looks_english(text: &str) -> bool {
     let english = prose.iter().filter(|w| ENGLISH.contains(&w.as_str())).count();
     let foreign = prose.iter().filter(|w| FOREIGN.contains(&w.as_str())).count();
     prose.is_empty() || (english > foreign && english * 5 >= prose.len())
+}
+
+/// `file` named right after `<the previous file> or`: the two are alternatives.
+fn note_either(either: &mut Vec<(String, String)>, files_here: &[String], before: &[String], file: &str) {
+    let [.., prev_word, or] = before else { return };
+    let Some(prev) = files_here.last() else { return };
+    if or == "or" && *prev_word == prev.to_lowercase() && prev != file {
+        either.push((prev.clone(), file.to_string()));
+    }
 }
 
 fn push(v: &mut Vec<String>, s: String) {
@@ -1076,6 +1098,32 @@ mod tests {
         // Every named file exists: the request asks for nothing new.
         let n = Named::from_request("Fix cost_model.py.", root);
         assert!(!Watched::at_start(&n, root).asks_for_new());
+    }
+
+    /// modernize-scientific-stack: "`/app/requirements.txt` OR `/app/pyproject.toml`". Making
+    /// one left the other reported missing in the result of a run that was right.
+    #[test]
+    fn of_two_files_named_as_alternatives_one_is_enough() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        for ask in [
+            "2. `deps/requirements.txt` OR `deps/pyproject.toml` - Dependency file",
+            "Write the dependencies to either deps/requirements.txt or deps/pyproject.toml.",
+        ] {
+            let _ = std::fs::remove_dir_all(root.join("deps"));
+            std::fs::create_dir(root.join("deps")).unwrap();
+            let n = Named::from_request(ask, root);
+            let w = Watched::at_start(&n, root);
+            assert_eq!(w.still_missing(), ["deps/requirements.txt", "deps/pyproject.toml"], "{ask}: none made yet");
+            std::fs::write(root.join("deps/requirements.txt"), "numpy>=1.26\n").unwrap();
+            assert!(w.still_missing().is_empty(), "{ask}: {:?}", w.still_missing());
+        }
+        // `and` asks for both.
+        let n = Named::from_request("Write deps/requirements.txt and deps/pyproject.toml.", root);
+        std::fs::remove_file(root.join("deps/requirements.txt")).unwrap();
+        let w = Watched::at_start(&n, root);
+        std::fs::write(root.join("deps/requirements.txt"), "x").unwrap();
+        assert_eq!(w.still_missing(), ["deps/pyproject.toml"]);
     }
 
     #[test]

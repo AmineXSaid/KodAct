@@ -369,7 +369,9 @@ a file only when it reads as a path: it exists, starts at a root (`/`, `./`,
 `../`, `~/`), ends with `/`, or ends with a file name (`out/plan.jsonl`). So
 `and/or` isn't one. A file named alone (`parser.py`) that isn't at the
 project's root is the file of that name elsewhere in the project
-(`src/parser.py`), not one to make. Which files a request asks for is read
+(`src/parser.py`), not one to make. Two files named as alternatives
+(`requirements.txt or pyproject.toml`) are one deliverable: when either
+exists, neither is listed. Which files a request asks for is read
 from its words, a guess. The field is absent when nothing is
 missing, and with the verification loop off.
 

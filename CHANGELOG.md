@@ -2,6 +2,15 @@
 
 ## 0.1.0 (unreleased)
 
+### "a or b" asks for one file, not both
+- **`verification.missing` no longer lists the other alternative**: a request
+  naming "`requirements.txt` OR `pyproject.toml`" got both files listed as
+  missing until both existed, so a run that made one (and was right) said a
+  file was missing, and a script gating on `.verification.missing == null`
+  rejected it. Files named as `a or b` (`either a or b`) are now one
+  deliverable: either existing is enough. `/goal`'s check and the opt-in
+  `nudges.constraints` note read the same list (task `either-deliverable`).
+
 ### Words aren't files, and a file named alone is the one in the project
 - **`and/or`, `input/output` and other words joined by a slash are no longer
   read as files.** A word with a slash counts as a path only when it reads
