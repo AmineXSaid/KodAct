@@ -1,0 +1,11 @@
+#!/bin/sh
+# The repair for an install of ./tools/apt-get that was killed halfway: `./tools/dpkg --configure -a`.
+db="$(cd "$(dirname "$0")/.." && pwd)/.pkgdb"
+[ "$1 $2" = "--configure -a" ] || { echo "dpkg: only --configure -a is supported here" >&2; exit 2; }
+if [ -e "$db/journal" ]; then
+  p=$(cat "$db/journal")
+  echo "Setting up $p ..."
+  echo installed > "$db/$p"
+  rm -f "$db/journal" "$db/running"
+fi
+exit 0
