@@ -2,9 +2,14 @@
   "instruction": "The 48 bytes below are twelve little-endian IEEE-754 float32 values, in this order: sphere centre x, y and z; sphere radius; light direction x, y and z; floor height; first floor colour; second floor colour; ambient light; gamma. Write scene.json: one JSON object with the keys centre_x, centre_y, centre_z, radius, light_x, light_y, light_z, floor_y, colour_a, colour_b, ambient and gamma, each value rounded to 4 decimal places.\n\n00 00 40 3f 00 00 00 bf 00 00 88 c0 00 00 90 3f 2e f9 e4 3e 2e f9 64 3f cd cc 4c be 00 00 c0 bf 66 66 66 3f 33 33 b3 3e ec 51 38 3e cd cc 0c 40",
   "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
   "pillar": "context",
-  "tags": ["reasoning", "analysis", "cutoff"],
+  "tags": [
+    "reasoning",
+    "analysis",
+    "cutoff"
+  ],
   "timeout_secs": 600,
   "env": {
-    "KODACT_MAX_OUTPUT_TOKENS": "2000"
+    "KODACT_MAX_OUTPUT_TOKENS": "4000",
+    "KODACT_CONTEXT_WINDOW": "20000"
   }
 }

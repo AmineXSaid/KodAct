@@ -17,6 +17,7 @@ use serde_json::{json, Map, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::events::{EngineEvent, EventSink, NoticeLevel, PermissionPrompter};
+use crate::handback::{self, Handback};
 use crate::request::{apply_cache_breakpoints, normalize};
 use crate::snapshot::{EngineSnapshot, RequestParts, TurnProgress};
 use crate::{INTERRUPT_MARKER, INTERRUPT_MARKER_TOOLS};
@@ -299,21 +300,6 @@ const ACT_PROMPT: &str = "<system-reminder>\nYour reply reached the output token
 const ACT_CUTOFF: &str = "Your reply reached the output token limit while you were still reasoning, before you \
                           answered or took any action.";
 const EMPTY_REPLY: &str = "Your reply ended without an answer or an action: it had no text and no tool call.";
-/// The least reasoning an act reminder hands back, in characters, where the provider doesn't keep
-/// it. How much more comes from the model ([`Engine::handback_chars`]): a fixed 8,000 kept under a
-/// tenth of a 70,000 to 110,000-character analysis on a 524k window, the middle with the findings
-/// was lost, and the next reply began it again ("Let me restate the reverse-engineered logic") and
-/// was cut off again (2026-11-14).
-const MIN_HANDBACK_CHARS: usize = 8_000;
-/// When the reasoning is longer than the handback: one part in this many goes to how it began (the
-/// reading of the task), the rest to where it stopped (the latest step). The whole of it is saved
-/// in the spill directory.
-const HANDBACK_HEAD_SHARE: usize = 5;
-/// A paragraph of handed-back reasoning shorter than this is kept even when it repeats: short
-/// ones ("Wait.", a closing brace, a code fence) recur naturally and carry the structure of a draft.
-const MIN_REPEAT_CHARS: usize = 40;
-/// The tags around reasoning in an act reminder: whole, or how it began and where it stopped.
-const HANDBACK_TAGS: [&str; 3] = ["reasoning", "reasoning_start", "reasoning_end"];
 /// For a reply that ended normally with no text and no tool call (only reasoning, or nothing).
 /// Taken as the end of the turn, it leaves the work undone and the person with an empty answer:
 /// seen ending unattended runs that had only started (06eba3b, ce92502).
@@ -2911,14 +2897,10 @@ impl Engine {
                          action: this step's time is up."
                     );
                     let h = if reasoning.trim().is_empty() {
-                        Handback {
-                            text: format!(
-                                "<system-reminder>\n{what} Act on what you have now: take the next concrete step (run a \
-                                 command, make an edit, or give your answer), then continue from its result.\n</system-reminder>"
-                            ),
-                            kept: 0,
-                            saved: None,
-                        }
+                        Handback::plain(format!(
+                            "<system-reminder>\n{what} Act on what you have now: take the next concrete step (run a \
+                             command, make an edit, or give your answer), then continue from its result.\n</system-reminder>"
+                        ))
                     } else {
                         // Not kept in the conversation, whatever the provider: always handed back.
                         self.reasoning_notes(&what, &model, &reasoning)
@@ -3778,111 +3760,23 @@ impl Engine {
     /// three cut-off replies in a row and wrote nothing. There, the reminder carries the reasoning.
     fn act_reminder(&self, plain: &str, what: &str, model: &str, reasoning: &str) -> Handback {
         if reasoning.trim().is_empty() || self.shared.provider.resends_reasoning(model) {
-            return Handback { text: plain.to_string(), kept: 0, saved: None };
+            return Handback::plain(plain);
         }
         self.reasoning_notes(what, model, reasoning)
     }
 
-    /// How many characters of a reply's reasoning the next request can take back, from the
-    /// model's limits. One reply's reasoning is at most one reply cap, so a quarter of the cap is
-    /// always given (32,000 characters on a 32k cap). Past that, half the room left before
-    /// compaction once the next reply has its budget, so the handback can't be what compacts it
-    /// away: a large window takes the whole reasoning back, a nearly full small one the quarter.
-    fn handback_chars(&self, model: &str) -> usize {
+    /// `what` happened, with the reasoning handed back as far as the model's limits allow
+    /// ([`handback::budget_chars`]): the reply cap, and the room before the next request compacts
+    /// (the threshold already keeps the reply's room). What doesn't fit is saved whole in the
+    /// spill directory, under a name no other writer can take.
+    fn reasoning_notes(&self, what: &str, model: &str, reasoning: &str) -> Handback {
         let info = kodact_api::models::model_info_or_default(model);
         let cap = u64::from(self.output_cap.unwrap_or(self.cfg.max_output_tokens).min(info.max_output));
-        let room = self
-            .autocompact_at(model)
-            .saturating_sub(self.projected_context_tokens())
-            .saturating_sub(u64::from(self.reply_budget(model)));
-        let tokens = usize::try_from((cap / 4).max(room / 2)).unwrap_or(usize::MAX);
-        tokens.saturating_mul(kodact_compact::CHARS_PER_TOKEN).max(MIN_HANDBACK_CHARS)
-    }
-
-    /// `what` happened, with the reasoning handed back and the ask to go on from it and act. Each
-    /// paragraph comes back once, and none that an earlier reminder handed back since the model
-    /// last acted (it is still in the conversation). What doesn't fit [`Self::handback_chars`]
-    /// keeps how it began and where it stopped, and the whole reasoning is saved in the spill
-    /// directory, so nothing of it is lost on any window.
-    fn reasoning_notes(&self, what: &str, model: &str, reasoning: &str) -> Handback {
-        let reasoning = reasoning.trim();
-        let total = reasoning.chars().count();
-        let (text, dropped) = without_repeats(reasoning, self.handed_back_paragraphs());
-        let n = text.chars().count();
-        let room = self.handback_chars(model);
-        let repeats = match dropped {
-            0 => String::new(),
-            1 => "1 paragraph that only repeats earlier reasoning (this reply's or what was handed back above) is \
-                  dropped. "
-                .to_string(),
-            k => format!(
-                "{k} paragraphs that only repeat earlier reasoning (this reply's or what was handed back above) are \
-                 dropped. "
-            ),
-        };
-        let (shown, kept, saved) = if n == 0 {
-            ("It only repeated reasoning already handed back above.".to_string(), 0, None)
-        } else if n <= room {
-            (format!("{repeats}Here it is:\n\n<reasoning>\n{text}\n</reasoning>"), n, None)
-        } else {
-            let head_len = room / HANDBACK_HEAD_SHARE;
-            let head: String = text.chars().take(head_len).collect();
-            let tail: String = text.chars().skip(n - (room - head_len)).collect();
-            let gap = n - room;
-            let saved = self.save_reasoning(reasoning);
-            let file = saved.as_ref().map_or(String::new(), |p| {
-                format!(
-                    "\n\nThe full reasoning ({total} characters) is saved at {}. Grep it, or Read it with offset \
-                     and limit, instead of working it out again.",
-                    p.display()
-                )
-            });
-            (
-                format!(
-                    "{repeats}Here is how it began and where it stopped ({gap} characters in between left out):\n\n\
-                     <reasoning_start>\n{head}\n</reasoning_start>\n\n<reasoning_end>\n{tail}\n</reasoning_end>{file}"
-                ),
-                room,
-                saved,
-            )
-        };
-        let text = format!(
-            "<system-reminder>\n{what} Your reasoning is not kept from one reply to the next. {shown}\n\n\
-             Go on from where it stopped instead of starting over, and act now: take the next concrete step \
-             (run a command, make an edit, or give your answer), then continue from its result.\n</system-reminder>"
-        );
-        Handback { text, kept, saved }
-    }
-
-    /// The paragraphs of reasoning that act reminders handed back since the model last called a
-    /// tool. Read from the conversation itself, so a reminder that compaction or a rewind took out
-    /// no longer counts.
-    fn handed_back_paragraphs(&self) -> HashSet<String> {
-        let mut seen = HashSet::new();
-        for m in self.state.messages.iter().rev() {
-            if m.role == kodact_types::Role::Assistant && m.tool_uses().next().is_some() {
-                break;
-            }
-            if m.role != kodact_types::Role::User {
-                continue;
-            }
-            for text in m.content.iter().filter_map(|b| b.as_text()).filter(|t| t.contains("<system-reminder>")) {
-                for tag in HANDBACK_TAGS {
-                    for part in tagged(text, &format!("<{tag}>\n"), &format!("\n</{tag}>")) {
-                        seen.extend(repeatable(part).map(str::to_string));
-                    }
-                }
-            }
-        }
-        seen
-    }
-
-    /// Save a reply's whole reasoning in the session's spill directory, as the first free
-    /// `reasoning-<n>.txt`. Its path, or `None` without a spill directory.
-    fn save_reasoning(&self, reasoning: &str) -> Option<std::path::PathBuf> {
-        let dir = self.shared.tool_ctx.spill_dir.as_deref()?;
-        let n = (1u32..).find(|n| !dir.join(format!("reasoning-{n}.txt")).exists())?;
-        kodact_tools::spill_text(Some(dir), &format!("reasoning-{n}.txt"), reasoning)
+        let room = self.autocompact_at(model).saturating_sub(self.projected_context_tokens());
+        let above = handback::handed_back(&self.state.messages);
+        handback::notes(what, reasoning, &above, handback::budget_chars(cap, room), |whole| {
+            kodact_tools::spill_numbered(self.shared.tool_ctx.spill_dir.as_deref(), "reasoning", whole)
+        })
     }
 
     /// Is this tool's result decided by the call and the files alone? Then a call that failed
@@ -4604,87 +4498,6 @@ fn reasoning_of(content: &[ContentBlock]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// What an act reminder hands back of a reply's reasoning.
-struct Handback {
-    /// The reminder.
-    text: String,
-    /// Characters of reasoning it carries.
-    kept: usize,
-    /// Where the whole reasoning was saved, when part of it was left out.
-    saved: Option<std::path::PathBuf>,
-}
-
-impl Handback {
-    /// The act reminder's transcript event: its kind, how much reasoning it carried, and where
-    /// the rest went.
-    fn event(&self, kind: &str) -> Value {
-        let mut e = json!({"kind": kind, "reasoning_chars": self.kept});
-        if let Some(p) = &self.saved {
-            e["saved"] = json!(p.display().to_string());
-        }
-        e
-    }
-}
-
-/// `text`'s paragraphs (separated by blank lines), as slices without their line breaks.
-fn paragraphs(text: &str) -> Vec<&str> {
-    let mut out = vec![];
-    let (mut start, mut end, mut pos) = (None, 0, 0);
-    for line in text.split_inclusive('\n') {
-        if line.trim().is_empty() {
-            if let Some(s) = start.take() {
-                out.push(&text[s..end]);
-            }
-        } else {
-            start.get_or_insert(pos);
-            end = pos + line.trim_end_matches(['\n', '\r']).len();
-        }
-        pos += line.len();
-    }
-    if let Some(s) = start {
-        out.push(&text[s..end]);
-    }
-    out
-}
-
-/// The paragraphs of `text` long enough to count as a repeat, trimmed.
-fn repeatable(text: &str) -> impl Iterator<Item = &str> {
-    paragraphs(text).into_iter().map(str::trim).filter(|p| p.chars().count() >= MIN_REPEAT_CHARS)
-}
-
-/// `text` without the paragraphs that repeat an earlier one or one in `seen`, and how many were
-/// dropped. With none dropped, `text` as it is.
-fn without_repeats(text: &str, mut seen: HashSet<String>) -> (String, usize) {
-    let mut kept = vec![];
-    let mut dropped = 0;
-    for p in paragraphs(text) {
-        let key = p.trim();
-        if key.chars().count() >= MIN_REPEAT_CHARS && !seen.insert(key.to_string()) {
-            dropped += 1;
-        } else {
-            kept.push(p);
-        }
-    }
-    if dropped == 0 {
-        (text.to_string(), 0)
-    } else {
-        (kept.join("\n\n"), dropped)
-    }
-}
-
-/// The parts of `text` between each `open` and the `close` after it.
-fn tagged<'a>(text: &'a str, open: &str, close: &str) -> Vec<&'a str> {
-    let mut out = vec![];
-    let mut rest = text;
-    while let Some(i) = rest.find(open) {
-        let after = &rest[i + open.len()..];
-        let Some(j) = after.find(close) else { break };
-        out.push(&after[..j]);
-        rest = &after[j + close.len()..];
-    }
-    out
 }
 
 /// Two names for one model: equal, or the same once aliases resolve, or one

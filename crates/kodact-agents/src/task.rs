@@ -45,6 +45,9 @@ pub struct AgentRuntime {
     pub extra_tools: Vec<Arc<dyn Tool>>,
     /// Where sub-agent transcripts go (`None` = not persisted).
     pub store: Option<SessionStore>,
+    /// The session's spill directory: what doesn't fit a sub-agent's results or reminders is
+    /// saved there too, where the session reads it without a prompt.
+    pub spill_dir: Option<PathBuf>,
     pub session_id: String,
     pub hooks: HookRunner,
     /// The main session's sink; sub-agent messages are forwarded with `parent_tool_use_id`.
@@ -142,6 +145,7 @@ impl AgentRuntime {
         tool_ctx.sandbox = self.sandbox.clone();
         tool_ctx.shell = self.shell.clone();
         tool_ctx.session_id = self.session_id.clone();
+        tool_ctx.spill_dir = self.spill_dir.clone();
         if let Some(turn) = spec.checkpoint_turn {
             tool_ctx.checkpointer = Some(Arc::new(TurnCheckpointer { history: parent.history.clone(), turn }));
         }

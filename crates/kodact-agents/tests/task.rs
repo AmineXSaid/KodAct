@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use kodact_agents::{builtin_agents, AgentRuntime, ParentLink, TaskTool};
+use kodact_agents::{builtin_agents, AgentRuntime, ChildSpec, ParentLink, TaskTool};
 use kodact_api::{MockProvider, MockTurn};
 use kodact_engine::{DenyPrompter, Engine, EngineConfig, EngineEvent, EngineParts, VecSink};
 use kodact_hooks::{HookBase, HookRunner, HooksConfig};
@@ -26,6 +26,7 @@ struct Setup {
     sink: Arc<VecSink>,
     engine: Engine,
     provider: Arc<MockProvider>,
+    rt: Arc<AgentRuntime>,
 }
 
 fn setup(responder: impl Fn(&MessagesRequest) -> MockTurn + Send + Sync + 'static, hooks: serde_json::Value) -> Setup {
@@ -55,6 +56,7 @@ fn setup(responder: impl Fn(&MessagesRequest) -> MockTurn + Send + Sync + 'stati
         agent_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         extra_tools: vec![],
         store: Some(SessionStore::new(dir.path().join("agents"))),
+        spill_dir: Some(dir.path().join("spill")),
         session_id: SID.into(),
         hooks: hooks.clone(),
         sink: sink.clone(),
@@ -83,7 +85,7 @@ fn setup(responder: impl Fn(&MessagesRequest) -> MockTurn + Send + Sync + 'stati
     )
     .unwrap();
     let _ = rt.parent.set(ParentLink { handle: engine.handle(), prompter: engine.prompter(), history });
-    Setup { _dir: dir, cwd, sink, engine, provider }
+    Setup { _dir: dir, cwd, sink, engine, provider, rt }
 }
 
 fn results(e: &Engine) -> Vec<(String, bool)> {
@@ -316,4 +318,25 @@ async fn isolation_outside_a_repository_is_refused_with_the_way_out() {
     e.submit(MessageContent::Text("go".into())).await;
     let res = results(&e);
     assert!(res[0].1 && res[0].0.contains("needs a git repository"), "{res:?}");
+}
+
+/// A sub-agent saves what doesn't fit its results and reminders where the session does: long
+/// output, and reasoning a cut-off reply loses, are never dropped for good in a sub-agent either.
+#[tokio::test]
+async fn a_child_saves_what_does_not_fit_in_the_sessions_spill_directory() {
+    let s = setup(|_| MockTurn::text("ok"), json!({}));
+    let child =
+        s.rt.child(ChildSpec {
+            cfg: EngineConfig::default(),
+            tools: ToolRegistry::new(),
+            system: vec![],
+            prompter: Arc::new(DenyPrompter),
+            sink: s.sink.clone(),
+            seed: None,
+            checkpoint_turn: None,
+            dir: None,
+        })
+        .unwrap();
+    assert!(s.rt.spill_dir.is_some());
+    assert_eq!(child.engine.tool_ctx().spill_dir, s.rt.spill_dir);
 }

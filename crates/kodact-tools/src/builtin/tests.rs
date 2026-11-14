@@ -748,6 +748,20 @@ async fn long_output_is_saved_in_full_and_pointed_to() {
     assert!(text.contains("5000 lines"));
 }
 
+#[test]
+fn numbered_spills_take_the_next_free_name() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("spill");
+    let first = crate::spill_numbered(Some(&dir), "reasoning", "one").unwrap();
+    std::fs::write(dir.join("reasoning-2.txt"), "someone else's").unwrap();
+    let next = crate::spill_numbered(Some(&dir), "reasoning", "three").unwrap();
+    assert_eq!(first, dir.join("reasoning-1.txt"));
+    assert_eq!(next, dir.join("reasoning-3.txt"), "a name already taken is skipped, not overwritten");
+    assert_eq!(std::fs::read_to_string(dir.join("reasoning-2.txt")).unwrap(), "someone else's");
+    assert_eq!(std::fs::read_to_string(&next).unwrap(), "three");
+    assert!(crate::spill_numbered(None, "reasoning", "x").is_none());
+}
+
 /// Serves fixed responses: path -> (status, content-type, extra header, body).
 async fn web_server() -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

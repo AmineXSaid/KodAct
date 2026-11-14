@@ -62,11 +62,13 @@ Each pillar lists what KodAct does about it and what shows that it works.
     the result names the file;
   - reasoning a reply loses to the reply cap or the thinking time limit,
     where the provider doesn't send it back, is handed back as far as the
-    window has room before compaction, and never less than a quarter of the
-    reply cap; when part is left out, the whole of it is saved with the tool
-    output and the reminder names the file. Paragraphs it repeats, or that an
-    earlier handback already gave, come back once (task
-    `reasoning-cutoff-resume`, `scripts/act-after-cutoff.py`);
+    room before compaction holds (half of it, and at least a quarter of the
+    reply cap when it fits), never so much that the next request compacts it
+    away; when part is left out, the whole of it is saved with the tool
+    output, by sub-agents too, and the reminder names the file. A paragraph
+    it repeats comes back once, at its last place, and one an earlier
+    handback gave is marked, not repeated (task `reasoning-cutoff-resume`,
+    `scripts/act-after-cutoff.py`);
   - no repeated reads: reading the same range of unchanged content returns a
     short note. That stops once the earlier result was cleared by compaction;
   - memory files and the task list re-attached after compaction;

@@ -1138,6 +1138,7 @@ pub fn build_session(
             .chain(opts.mcp.as_ref().map(|m| m.tools()).unwrap_or_default())
             .collect(),
         store: agent_store,
+        spill_dir: tool_ctx.spill_dir.clone(),
         session_id: session_id.clone(),
         hooks: hooks.clone(),
         sink: sink.clone(),

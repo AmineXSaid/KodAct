@@ -1759,9 +1759,11 @@ async fn a_reply_that_was_all_reasoning_gets_it_back_where_it_is_not_kept() {
     }
 
     // How much comes back is the model's: a reply cap's worth of reasoning (110,000 characters,
-    // about 27,500 tokens of a 32k cap), cut off with 60,000 tokens of context. A 1M window has
-    // room for all of it; a 100k one, nearly full, gets a quarter of the cap (32,000 characters),
-    // never less, and never so much it is pushed into compacting.
+    // about 27,500 tokens of a 32k cap). A 1M window has room for all of it. A 100k window
+    // (compaction at 62,500 tokens) with 50,000 tokens of context gets a quarter of the cap
+    // (32,000 characters); with 60,000 it gets only what fits before the next request would
+    // compact, since compacting would take the reminder away. Either way the rest is saved whole,
+    // the reminder names the file, and the reply after it is the one that acts.
     use kodact_api::models::{configure_limits, Limits};
     configure_limits("handback-small-window", Limits { context_window: Some(100_000), max_output: Some(32_000) });
     configure_limits("handback-large-window", Limits { context_window: Some(1_000_000), max_output: Some(32_000) });
@@ -1771,36 +1773,48 @@ async fn a_reply_that_was_all_reasoning_gets_it_back_where_it_is_not_kept() {
         "Decode the next block. ".repeat(2_400),
         "Then the shading. ".repeat(3_000)
     );
-    for (model, whole) in [("handback-large-window", true), ("handback-small-window", false)] {
+    for (model, context, kept) in [
+        ("handback-large-window", 60_000, None),
+        ("handback-small-window", 50_000, Some(32_000)),
+        ("handback-small-window", 60_000, Some((62_500 - 60_000 - 512) * 4)),
+    ] {
         let h = Harness::new(vec![
-            MockTurn::blocks(vec![thought(&long)], StopReason::MaxTokens).with_usage(usage(60_000)),
+            MockTurn::blocks(vec![thought(&long)], StopReason::MaxTokens).with_usage(usage(context)),
             MockTurn::text("wrote render.c"),
         ])
         .spilling();
         h.provider.set_resends_reasoning(false);
         let cfg = EngineConfig { model: model.into(), ..Default::default() };
         let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-        e.submit(prompt("write render.c")).await;
-        let asked = last_user_text(&h.provider.requests()[1]);
-        assert!(asked.contains(start) && asked.contains(end), "{model}: how it began and where it stopped");
+        let r = e.submit(prompt("write render.c")).await;
+        let reqs = h.provider.requests();
+        let case = format!("{model} at {context}");
+        // The reminder reaches the model: no summary in between, and the reply after it acts.
+        assert_eq!(r.result.as_deref(), Some("wrote render.c"), "{case}");
+        assert!(reqs[1].tool_choice.is_none() && !h.transcript_text().contains("compact_boundary"), "{case}");
+        let asked = last_user_text(&reqs[1]);
+        assert!(asked.contains(start) && asked.contains(end), "{case}: how it began and where it stopped");
         let saved = h.spill_dir().join("reasoning-1.txt");
-        if whole {
-            assert!(asked.contains(middle) && !asked.contains("left out"), "{model}: the whole reasoning");
-            assert!(!saved.exists() && !asked.contains("is saved at"), "{model}: nothing to save");
-            let n = long.chars().count();
-            assert!(h.transcript_text().contains(&format!(r#""reasoning_chars":{n}"#)), "{model}");
-        } else {
-            assert!(asked.contains("characters in between left out"), "{model}: cut to the room");
-            assert!(!asked.contains(middle), "{model}: the middle is not in the reminder");
-            assert!(h.transcript_text().contains(r#""reasoning_chars":32000"#), "{model}: a quarter of the cap");
-            // Nothing is lost: the whole of it is in a file the reminder names.
-            assert_eq!(std::fs::read_to_string(&saved).unwrap(), long, "{model}: saved whole");
-            assert!(asked.contains(&format!("is saved at {}", saved.display())), "{model}: {asked}");
-            assert!(h.transcript_text().contains(r#""saved":"#), "{model}: the event says where");
+        match kept {
+            None => {
+                assert!(asked.contains(middle) && !asked.contains("left out"), "{case}: the whole reasoning");
+                assert!(!saved.exists() && !asked.contains("is saved at"), "{case}: nothing to save");
+                let n = long.chars().count();
+                assert!(h.transcript_text().contains(&format!(r#""reasoning_chars":{n}"#)), "{case}");
+            }
+            Some(kept) => {
+                assert!(asked.contains("characters in between left out"), "{case}: cut to the room");
+                assert!(!asked.contains(middle), "{case}: the middle is not in the reminder");
+                assert!(h.transcript_text().contains(&format!(r#""reasoning_chars":{kept}"#)), "{case}");
+                // Nothing is lost: the whole of it is in a file the reminder names.
+                assert_eq!(std::fs::read_to_string(&saved).unwrap(), long, "{case}: saved whole");
+                assert!(asked.contains(&format!("is saved at {}", saved.display())), "{case}: {asked}");
+                assert!(h.transcript_text().contains(r#""saved":"#), "{case}: the event says where");
+            }
         }
     }
 
-    // Each paragraph comes back once: one the reply repeated word for word is dropped.
+    // A repeated paragraph comes back once, at its last place, and leaves a marker where it was.
     let found = "The table at offset 0x40 holds the settings: grid size, scale and the step count.";
     let repeated = format!("Read the task.\n\n{found}\n\nCheck the units.\n\n{found}\n\nWrite render.c next.");
     let h = Harness::new(vec![MockTurn::blocks(vec![thought(&repeated)], StopReason::MaxTokens), MockTurn::text("ok")]);
@@ -1809,7 +1823,8 @@ async fn a_reply_that_was_all_reasoning_gets_it_back_where_it_is_not_kept() {
     e.submit(prompt("go")).await;
     let asked = last_user_text(&h.provider.requests()[1]);
     assert_eq!(asked.matches(found).count(), 1, "{asked}");
-    assert!(asked.contains("Write render.c next.") && asked.contains("1 paragraph that only repeats"), "{asked}");
+    let kept_last = format!("Read the task.\n\n[a paragraph repeated below]\n\nCheck the units.\n\n{found}\n\nWrite");
+    assert!(asked.contains(&kept_last), "{asked}");
 
     // A second cut-off in a row doesn't hand back again what the first gave: it is still above.
     let first = format!("{found}\n\nThe step count is 12.");
@@ -1829,8 +1844,8 @@ async fn a_reply_that_was_all_reasoning_gets_it_back_where_it_is_not_kept() {
     };
     assert!(reminder(&reqs[1]).contains(found));
     let again = reminder(&reqs[2]);
-    assert!(again.contains("Next: write the grid test in C, then compare."), "{again}");
-    assert!(!again.contains(found) && again.contains("1 paragraph that only repeats"), "{again}");
+    let marked = "Let me restate.\n\n[a paragraph handed back above]\n\nNext: write the grid test in C, then compare.";
+    assert!(again.contains(marked) && !again.contains(found), "{again}");
 
     // Short reasoning comes back whole.
     let h = Harness::new(vec![

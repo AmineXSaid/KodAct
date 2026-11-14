@@ -10,25 +10,38 @@
   32k cap, that was under a tenth of a 70,000 to 110,000-character analysis.
   The middle, with the findings, was lost, and the next reply spent minutes
   working them out again and was cut off again. The handback is now half the
-  room left before compaction once the next reply has its budget, and at
-  least a quarter of the reply cap (32,000 characters on a 32k cap): a large
-  window gets the whole reasoning back, a nearly full 100k one 32,000
-  characters, from its start and its end.
-- **Nothing of it is lost on a small window.** When part is left out, the
-  whole reasoning is saved in the session's spill directory, where long tool
-  output already goes and which is read without a prompt, and the reminder
-  names the file to Grep or Read instead of working it out again.
-- **Repeats come back once.** A paragraph the reasoning repeats word for word
-  is handed back once, and a second cut-off in a row doesn't hand back again
-  what the first one gave, which is still in the conversation.
+  room left before compaction, at least a quarter of the reply cap (32,000
+  characters on a 32k cap) and at least 8,000 characters, but never more
+  than that room holds: a handback that set off compaction would be
+  summarized away before the model saw it. A large window gets the whole
+  reasoning back; a nearly full small one gets what fits, from its start and
+  its end.
+- **Nothing of it is lost.** When part is left out, the whole reasoning is
+  saved in the session's spill directory, where long tool output already
+  goes and which is read without a prompt, and the reminder names the file
+  to Grep or Read instead of working it out again. Sub-agents now save there
+  too, their long tool output included, and each file name is claimed with
+  an exclusive create, so two writers never share one.
+- **Repeats come back once, and drafts stay whole.** A paragraph the
+  reasoning repeats word for word comes back at its last place, so a revised
+  draft keeps all of its parts; where an earlier copy was, a short marker
+  says it is repeated below. A second cut-off in a row doesn't hand back
+  again what the first one gave, which is still in the conversation: a
+  marker says it was handed back above.
+- **What it costs.** A turn with no such reply: nothing. When it fires, the
+  reasoning handed back stays in the conversation until compaction, up to
+  about one reply cap of tokens per reminder (at most three in a row), sent
+  again with each later request, where re-deriving it cost as many output
+  tokens and minutes of generation.
 - **Measured by** `scripts/act-after-cutoff.py`: for each handback in a run's
-  stream, whether the next reply acted or reasoned to the limit again,
-  whether the saved file was read, and how much came back. Task
-  `reasoning-cutoff-resume` caps the reply at 2,000 tokens so a reasoning
-  model is cut off mid-analysis, and passes only if the reply after the
-  handback acts. kodact-eval now flushes a run's stream before its check, so
-  a check can read it (`../transcript.jsonl`). The before/after comparison on
-  a reasoning model is still owed.
+  stream, whether the next reply acted, answered, or reasoned to the limit
+  again, whether the saved file was read, and how much came back. Task
+  `reasoning-cutoff-resume` caps the reply at 4,000 tokens and sets a
+  20,000-token window, so a reasoning model is cut off mid-analysis and part
+  of its reasoning comes back with the rest saved, and passes only if the
+  reply after the handback acts or answers. kodact-eval now flushes a run's
+  stream before its check, so a check can read it (`../transcript.jsonl`).
+  The before/after comparison on a reasoning model is still owed.
 
 ### Harbor runs on a slow network: Python and Torch from disk
 - **The usual command is enough.** `KODACT_HARBOR_JOBS=6 evals/harbor/run.sh

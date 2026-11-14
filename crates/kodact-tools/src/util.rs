@@ -56,6 +56,24 @@ pub fn spill_text(dir: Option<&Path>, name: &str, text: &str) -> Option<PathBuf>
     Some(path)
 }
 
+/// Save `text` in the spill directory as the first free `<stem>-<n>.txt`. The name is claimed
+/// with an exclusive create, so two writers (a session and its sub-agents, or two processes on
+/// one session) never share a file. The file's path, or `None` as for [`spill_text`].
+pub fn spill_numbered(dir: Option<&Path>, stem: &str, text: &str) -> Option<PathBuf> {
+    use std::io::Write;
+    let dir = dir?;
+    std::fs::create_dir_all(dir).ok()?;
+    for n in 1u32.. {
+        let path = dir.join(format!("{stem}-{n}.txt"));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => return f.write_all(text.as_bytes()).ok().map(|()| path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 /// `cat -n` style numbering used by Read and in edit snippets.
 /// What to try when `path` is not there (GOALS pillar 4: an error that says the next step):
 /// the nearest directory that exists, and the entries in it whose names are close to the one

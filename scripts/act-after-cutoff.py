@@ -8,10 +8,11 @@ whole of it is saved in the session's spill directory. This reads stream-json tr
 (`kodact -p --output-format stream-json`: a Harbor run's kodact.jsonl, a kodact-eval run's
 transcript.jsonl) and reports, for each handback:
 
-  - what the next reply did: called a tool ("acted"), reasoned to another reminder ("again"),
-    or ended the turn ("ended");
+  - what the next reply did: called a tool ("acted"), answered in text ("answered"), reasoned to
+    another reminder or to the limit again ("again"), or the turn ended ("ended");
   - whether a later tool call read the saved file;
-  - how many characters of reasoning were handed back.
+  - how many characters of reasoning were handed back (0 where the provider sends reasoning
+    back itself: those are counted apart, as reminders without a handback).
 
 Needs no package. Usage:
 
@@ -52,33 +53,48 @@ def events(path):
     return out
 
 
+KINDS = ("reasoning_cutoff", "empty_reply")
+
+
 def handback(ev):
-    """The kind of handback this event is, or None."""
+    """The kind of reminder this event is, when it is one for a reply that was all reasoning."""
     if ev.get("type") != "system":
         return None
-    if ev.get("subtype") == "act_reminder":
-        return ev.get("kind") or "act_reminder"
+    if ev.get("subtype") == "act_reminder" and ev.get("kind") in KINDS:
+        return ev["kind"]
     if ev.get("subtype") == "nudge" and ev.get("kind") == "thinking_time_box":
         return "thinking_time_box"
     return None
 
 
+def top_level(ev):
+    return ev.get("type") == "assistant" and not ev.get("parent_tool_use_id")
+
+
+def blocks(ev, kind):
+    content = (ev.get("message") or {}).get("content") or []
+    return [b for b in content if isinstance(b, dict) and b.get("type") == kind]
+
+
 def calls(ev):
     """The tool calls of a top-level assistant event."""
-    if ev.get("type") != "assistant" or ev.get("parent_tool_use_id"):
-        return []
-    content = (ev.get("message") or {}).get("content") or []
-    return [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+    return blocks(ev, "tool_use") if top_level(ev) else []
 
 
 def after(evs, i):
-    """What the next reply did after the handback at `i`, and the first tool call it made."""
+    """What the next reply did after the reminder at `i`, and the first tool call it made."""
     for ev in evs[i + 1 :]:
         if handback(ev):
             return "again", None
         c = calls(ev)
         if c:
             return "acted", c[0].get("name")
+        if top_level(ev):
+            if any(str(b.get("text") or "").strip() for b in blocks(ev, "text")):
+                return "answered", None
+            # Past the last reminder in a row, a reply that reasons to the limit gets none.
+            if (ev.get("message") or {}).get("stop_reason") == "max_tokens":
+                return "again", None
         if ev.get("type") == "result":
             return "ended", None
     return "ended", None
@@ -117,12 +133,15 @@ def main():
     ap.add_argument("paths", nargs="+")
     ap.add_argument("--json", action="store_true", help="print one JSON object per transcript")
     args = ap.parse_args()
-    total = {"handbacks": 0, "acted": 0, "again": 0, "ended": 0, "saved": 0, "read_saved": 0}
+    total = {"handbacks": 0, "plain": 0, "acted": 0, "answered": 0, "again": 0, "ended": 0, "saved": 0, "read_saved": 0}
     found = False
     for path in transcripts(args.paths):
         found = True
         rows = report(path)
         for r in rows:
+            if not r["reasoning_chars"]:
+                total["plain"] += 1
+                continue
             total["handbacks"] += 1
             total[r["next"]] += 1
             total["saved"] += bool(r["saved"])
@@ -134,20 +153,23 @@ def main():
             continue
         print(path)
         for n, r in enumerate(rows, 1):
-            what = {"acted": f"acted ({r['first_call']})", "again": "no action before the next reminder"}.get(
-                r["next"], "the turn ended"
-            )
+            what = {
+                "acted": f"acted ({r['first_call']})",
+                "answered": "answered",
+                "again": "reasoned to another reminder or the limit again",
+            }.get(r["next"], "the turn ended")
             saved = ""
             if r["saved"]:
                 saved = f" · saved {os.path.basename(r['saved'])}, read: {'yes' if r['read_saved'] else 'no'}"
-            print(f"  #{n} {r['kind']}: {r['reasoning_chars']:,} characters handed back{saved} → {what}")
+            chars = f"{r['reasoning_chars']:,} characters handed back" if r["reasoning_chars"] else "nothing handed back"
+            print(f"  #{n} {r['kind']}: {chars}{saved} → {what}")
     if not found:
         sys.exit("no transcript found")
     if not args.json:
         print(
-            f"{total['handbacks']} handbacks: {total['acted']} acted next, {total['again']} reached another "
-            f"reminder first, {total['ended']} ended the turn; {total['read_saved']} of {total['saved']} saved "
-            "files read"
+            f"{total['handbacks']} handbacks: {total['acted']} acted next, {total['answered']} answered, "
+            f"{total['again']} reasoned again, {total['ended']} ended the turn; {total['read_saved']} of "
+            f"{total['saved']} saved files read. {total['plain']} reminders handed nothing back."
         )
 
 
