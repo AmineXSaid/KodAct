@@ -381,8 +381,11 @@ after `kodact` exits.
 
 An unattended run (`--autonomous`) ends with the Finish tool, and the
 result says so in `finish`: the model's summary and its claim of whether
-this run's tool output showed the requirements met. `verified` is the
-model's word, not a check KodAct ran:
+this run's tool output showed the requirements met. The model is asked to
+claim `verified` only when a check it ran would have failed had the work
+been wrong, naming that check in the summary, and otherwise to name its
+guess there. `verified` is
+still the model's word, not a check KodAct ran:
 
 ```json
 "finish": {"summary": "Fixed both bugs; the tests pass.", "verified": true}

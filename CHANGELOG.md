@@ -2,6 +2,18 @@
 
 ## 0.1.0 (unreleased)
 
+### `verified` means a check that could have failed
+- **The Finish tool asks for `verified: true` only when a check run after
+  the last change would have failed had the work been wrong**, and that check
+  is named in the summary, so a reader can judge the claim. A check that
+  passes whatever was chosen (a sample every option handles alike, a test of
+  a part that didn't change) verifies nothing: the model is asked to set
+  `false` and name its guess in the summary. In 8 pytorch-model-cli runs, 7
+  claimed `verified` after checks that passed whatever input scaling had been
+  guessed; the 3 whose hidden test ran all failed it. A script reading
+  `finish` sees the guess instead of a false "done". The scores don't change:
+  the guess is still a guess. Task `finish-guess`.
+
 ### Stopping an install without breaking the machine, and what a stop left
 - **An install or removal KodAct stops is sent SIGINT, not SIGTERM**: apt,
   dpkg, apk, pacman, dnf, yum and zypper, read from the command line or, on

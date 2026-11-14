@@ -3,6 +3,11 @@
 //! result (`finish`). It is the model's word: the result carries no verdict of KodAct's own on
 //! the last check (`verification.status` was removed; a pass there proved unreliable).
 //!
+//! `verified` is asked for only when a check would have failed had the work been wrong. In 8
+//! Terminal-Bench runs of pytorch-model-cli (2026-11-14), 7 claimed it after checks that passed
+//! whatever input scaling the model had guessed; the 3 whose hidden test ran all failed it. A
+//! check that can't tell the options apart verifies none of them (task `finish-guess`).
+//!
 //! The idea comes from Cline's `submit_and_exit` (Apache-2.0), described in
 //! docs/research/harness-study/05-cline.md; this is KodAct's own form of it. A call alone
 //! ends the reply as text would, through the same end-of-turn checks: KodAct's reminders can
@@ -31,9 +36,12 @@ impl Tool for Finish {
 
     fn description(&self) -> String {
         "End the run, once the work is done. `summary` is your final answer: what you changed and how you \
-         checked it. Set `verified` to true only if tool output in this run shows every requirement met (the \
-         tests or the program run after your last change, the files where they were asked for); otherwise \
-         false, and say in the summary what was not checked. Call it on its own, not with other tools."
+         checked it. Set `verified` to true only if a check you ran after your last change would have failed \
+         had the work been wrong, and name that check in the summary: tests or a program run whose result \
+         depends on what you chose. A check that \
+         passes whatever you chose (a sample every option handles alike, a test of a part you didn't change) \
+         verifies nothing: then set false, and name in the summary what you guessed and what was not checked. \
+         Call it on its own, not with other tools."
             .into()
     }
 
@@ -41,8 +49,8 @@ impl Tool for Finish {
         json!({
             "type": "object",
             "properties": {
-                "summary": {"type": "string", "description": "The final answer: what changed and how it was checked"},
-                "verified": {"type": "boolean", "description": "True only if this run's tool output shows the requirements met"}
+                "summary": {"type": "string", "description": "The final answer: what changed, how it was checked, and any guess no check could tell apart"},
+                "verified": {"type": "boolean", "description": "True only if a check run after the last change would have failed had the work been wrong"}
             },
             "required": ["summary", "verified"],
             "additionalProperties": false
@@ -70,4 +78,21 @@ pub(crate) fn claim(input: &Value) -> Value {
         "summary": input.get("summary").and_then(Value::as_str).unwrap_or_default(),
         "verified": input.get("verified").and_then(Value::as_bool).unwrap_or(false),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `verified` is defined by a check that could have failed; a guess no check could tell
+    /// apart is named in the summary instead.
+    #[test]
+    fn verified_asks_for_a_check_that_could_have_failed() {
+        let d = Finish.description();
+        assert!(d.contains("would have failed had the work been wrong, and name that check"), "{d}");
+        assert!(d.contains("passes whatever you chose") && d.contains("name in the summary what you guessed"), "{d}");
+        let schema = Finish.input_schema();
+        let verified = schema["properties"]["verified"]["description"].as_str().unwrap();
+        assert!(verified.contains("would have failed had the work been wrong"), "{verified}");
+    }
 }
