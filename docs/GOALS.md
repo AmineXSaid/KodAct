@@ -128,8 +128,28 @@ Each pillar lists what KodAct does about it and what shows that it works.
     tool calls returned nothing and to look at the real state before
     continuing, instead of trusting or repeating them (`system/turn_recovered`).
     A turn that ended, an interrupt included, says nothing.
+  - A stop doesn't break the machine where a gentler one avoids it: an install
+    or removal KodAct stops (KillShell, `/tasks stop`, an interrupt,
+    `--max-time`, the end of a sub-agent or of the session) is sent SIGINT and
+    finishes the step it is on, with nothing forcing it; KillShell waits up to
+    10 s and says how it ended, and asked again stops it at once with the
+    repair. On a real apt install stopped mid-configure through KodAct's stop
+    (`real_apt_stopped_by_kodact_keeps_its_database`, root, apt 2.8.3, dpkg
+    1.22.6): the previous stop (SIGTERM, then SIGKILL) left 3 unmerged dpkg
+    journal files and the packages unpacked and half-configured, so the next
+    install failed with "dpkg was interrupted"; SIGINT left them installed.
+    At the end of the session the person is told what was cut short (task
+    `stopped-install`; CLI.md, "Stopping a command");
+  - what a command's output says is left broken or locked is told with what
+    the session knows, whatever the exit code (`apt-get … | tail` ends 0): the
+    repair for "dpkg was interrupted" and the stop that caused it, a package
+    lock held by the session's own background install or by another program,
+    git's stale `index.lock` or one a running git command of the session holds,
+    and pacman's lock; a stopped git command that left its lock is named with
+    it (git removes it on SIGTERM; SIGKILL leaves it, measured).
 - **Measured by:** recovery rate, and turns wasted after the first error
-  (tasks `build-recovery`, `makefile-tabs`, `resume-after-kill`).
+  (tasks `build-recovery`, `makefile-tabs`, `resume-after-kill`,
+  `stopped-install`).
 
 ### 3. Verification
 

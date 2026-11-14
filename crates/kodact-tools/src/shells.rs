@@ -274,7 +274,31 @@ pub struct BackgroundShell {
     /// Where the shell writes its final directory (Bash calls only).
     cwd_file: Option<PathBuf>,
     tree: Option<ProcessTree>,
+    /// The directory it started in.
+    pub cwd: PathBuf,
+    /// It installs or removes packages and was asked to stop with SIGINT: it may still be
+    /// finishing the step it is on.
+    stop_asked: AtomicBool,
+    /// It was stopped at once while it installed or removed packages: their database may be
+    /// half-updated.
+    forced_mid_change: AtomicBool,
 }
+
+/// How [`BackgroundShell::stop`] stopped a command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// It had already ended.
+    NotRunning,
+    /// Stopped at once (SIGTERM, then SIGKILL), as every command is that doesn't change packages,
+    /// and an install stopped a second time. `change`: it was installing or removing packages, so
+    /// their database may be half-updated.
+    Stopped { change: Option<PackageChange> },
+    /// It was installing or removing packages, so it was asked to stop with SIGINT: it finishes
+    /// the step it is on, then ends by itself.
+    Asked { change: PackageChange },
+}
+
+pub use crate::builtin::exit_hints::PackageChange;
 
 impl BackgroundShell {
     /// Its ID in the session (`bash_3`); empty while it runs as a Bash call.
@@ -335,6 +359,7 @@ impl BackgroundShell {
         result
     }
 
+    /// Stop it at once: SIGTERM to its process group, SIGKILL 300 ms later.
     pub fn kill(&self) {
         let mut st = self.status.lock().unwrap();
         if *st == ShellStatus::Running {
@@ -343,6 +368,68 @@ impl BackgroundShell {
             }
             *st = ShellStatus::Killed;
         }
+    }
+
+    /// Stop it. A command that installs or removes packages is asked to stop with SIGINT, the
+    /// signal a person's Ctrl-C sends: apt and dpkg stop on it without breaking their database,
+    /// where SIGTERM and SIGKILL leave it half-updated, so it finishes the step it is on and then
+    /// ends by itself, with nothing forcing it. Asked again, it is stopped at once. Any other
+    /// command is stopped at once, as before (SIGTERM, then SIGKILL).
+    pub fn stop(&self) -> Stop {
+        self.stop_inner(true)
+    }
+
+    /// As [`stop`](Self::stop), but an install already asked to stop is left to finish: the end
+    /// of a session doesn't force what a stop already asked.
+    pub fn stop_for_exit(&self) -> Stop {
+        self.stop_inner(false)
+    }
+
+    fn stop_inner(&self, force_if_asked: bool) -> Stop {
+        if self.status() != ShellStatus::Running {
+            return Stop::NotRunning;
+        }
+        let change = self.package_change();
+        if let Some(c) = change {
+            let asked = self.stop_asked.load(Ordering::SeqCst);
+            // Windows has no SIGINT for a windowless console: an install is stopped at once there.
+            if !asked && cfg!(unix) {
+                self.stop_asked.store(true, Ordering::SeqCst);
+                if let Some(t) = &self.tree {
+                    t.interrupt();
+                }
+                return Stop::Asked { change: c };
+            }
+            if asked && !force_if_asked {
+                return Stop::Asked { change: c };
+            }
+            self.forced_mid_change.store(true, Ordering::SeqCst);
+        }
+        self.kill();
+        Stop::Stopped { change }
+    }
+
+    /// The packages it installs or removes, if it does: read from its command line, or on Linux
+    /// from the programs running in it (a `./setup.sh` that runs apt-get).
+    pub fn package_change(&self) -> Option<PackageChange> {
+        crate::builtin::exit_hints::package_change(&self.command).or_else(|| {
+            let tree = self.tree.as_ref()?;
+            let members = tree.members();
+            members
+                .iter()
+                .filter(|p| p.pid != tree.pid())
+                .find_map(|p| crate::builtin::exit_hints::package_change(&p.cmdline))
+        })
+    }
+
+    /// Asked to stop with SIGINT, and maybe still finishing.
+    pub fn stop_asked(&self) -> bool {
+        self.stop_asked.load(Ordering::SeqCst)
+    }
+
+    /// The process group it runs in (its first process).
+    pub fn pid(&self) -> Option<u32> {
+        self.tree.as_ref().map(|t| t.pid())
     }
 
     /// The model knows how it ended: no exit notice is due.
@@ -368,11 +455,24 @@ impl Drop for BackgroundShell {
     }
 }
 
+/// How long KillShell and the end of a session wait for an install asked to stop to finish the
+/// step it is on, before saying it is still doing that. apt stops at the end of the dpkg run it is
+/// in, which for an install of a few packages takes seconds.
+pub const STOP_WAIT: Duration = Duration::from_secs(10);
+
 /// Background shells of a session.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ShellManager {
     shells: Mutex<HashMap<String, Arc<BackgroundShell>>>,
     counter: AtomicU32,
+    /// How long a stop waits for an install asked to stop ([`STOP_WAIT`]; shorter in tests).
+    pub stop_wait: Duration,
+}
+
+impl Default for ShellManager {
+    fn default() -> Self {
+        ShellManager { shells: Mutex::default(), counter: AtomicU32::new(0), stop_wait: STOP_WAIT }
+    }
 }
 
 impl ShellManager {
@@ -431,12 +531,106 @@ impl ShellManager {
         self.list().into_iter().filter(|s| s.is_awaited() && s.status() == ShellStatus::Running).collect()
     }
 
-    /// Kill every running shell (session end).
-    pub fn kill_all(&self) {
+    /// Stop every running shell, without waiting (a sub-agent that ended): an install is asked to
+    /// stop and finishes the step it is on; see [`BackgroundShell::stop_for_exit`].
+    pub fn stop_all(&self) {
         for s in self.list() {
-            s.kill();
+            s.stop_for_exit();
         }
     }
+
+    /// The end of the session: stop every running shell, wait up to [`ShellManager::stop_wait`]
+    /// for installs asked to stop to finish the step they are on, and say, for the person, what
+    /// was cut short and what may be left: an install that ended or is still finishing, and git
+    /// lock files a stopped git command left. Nothing for anything else.
+    pub async fn end_session(&self) -> Vec<String> {
+        let mut installs = vec![];
+        let mut gits = vec![];
+        for s in self.list() {
+            let git = s.status() == ShellStatus::Running && crate::builtin::exit_hints::runs_git(&s.command);
+            match s.stop_for_exit() {
+                Stop::Asked { change } => installs.push((s, change)),
+                Stop::Stopped { change: Some(change) } => installs.push((s, change)),
+                Stop::Stopped { change: None } if git => gits.push(s),
+                _ => {}
+            }
+        }
+        let deadline = tokio::time::Instant::now() + self.stop_wait;
+        for (s, _) in &installs {
+            let _ = tokio::time::timeout_at(deadline, s.wait()).await;
+        }
+        for s in &gits {
+            let _ = tokio::time::timeout(Duration::from_secs(1), s.wait()).await;
+        }
+        let mut notes = vec![];
+        for (s, change) in &installs {
+            let what = format!("`{}` was installing or removing packages when the session ended", one_line(&s.command));
+            notes.push(if s.status() != ShellStatus::Running {
+                if s.forced_mid_change.load(Ordering::SeqCst) {
+                    format!("{what}, and it was stopped at once. {}", change.forced_note())
+                } else {
+                    format!(
+                        "{what}. It was stopped with SIGINT, which {} stops on without breaking its package database: \
+                         it finished the step it was on, so packages it hadn't reached are not installed.",
+                        change.manager
+                    )
+                }
+            } else {
+                format!(
+                    "{what}. It was sent SIGINT and is still finishing the step it is on (process {}); it ends by \
+                     itself and holds the package lock until then. Stopping it by force can leave the package \
+                     database half-updated; if that happens, {}.",
+                    s.pid().map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
+                    change.repair
+                )
+            });
+        }
+        for s in &gits {
+            let locks = crate::builtin::exit_hints::git_locks_left(&s.cwd);
+            if let Some(n) = crate::builtin::exit_hints::git_locks_note(&locks) {
+                notes.push(format!("`{}` was stopped when the session ended. {n}", one_line(&s.command)));
+            }
+        }
+        notes
+    }
+
+    /// The ID of this session's running shell a process belongs to: in its process group, or
+    /// started from one (Linux).
+    pub fn owner_of(&self, pid: u32) -> Option<String> {
+        self.list().into_iter().find_map(|s| {
+            let group = s.pid()?;
+            (s.status() == ShellStatus::Running && kodact_platform::process::descends_from_group(pid, group))
+                .then(|| s.id().to_string())
+        })
+    }
+
+    /// What a command's output says is broken or locked on this machine, with what this session
+    /// knows about it ([`exit_hints::state_hint`](crate::builtin::exit_hints::state_hint)).
+    /// Nothing is looked up unless the output has one of the messages it reads.
+    pub fn state_hint(&self, text: &str) -> Option<String> {
+        if !crate::builtin::exit_hints::mentions_state(text) {
+            return None;
+        }
+        let shells = self.list();
+        let running: Vec<(String, String)> = shells
+            .iter()
+            .filter(|s| s.status() == ShellStatus::Running && !s.id().is_empty())
+            .map(|s| (s.id().to_string(), s.command.clone()))
+            .collect();
+        let forced: Vec<String> =
+            shells.iter().filter(|s| s.forced_mid_change.load(Ordering::SeqCst)).map(|s| s.command.clone()).collect();
+        crate::builtin::exit_hints::state_hint(text, &running, |pid| self.owner_of(pid), &forced)
+    }
+}
+
+/// A command line on one line, at most 100 characters.
+fn one_line(command: &str) -> String {
+    let first = command.trim().lines().next().unwrap_or_default();
+    let mut s: String = first.chars().take(100).collect();
+    if s.len() < first.len() || command.trim().lines().count() > 1 {
+        s.push_str(" …");
+    }
+    s
 }
 
 /// Start a command whose output is collected as it arrives, without listing it in a session:
@@ -470,6 +664,9 @@ pub fn start(
         awaited: AtomicBool::new(false),
         cwd_file,
         tree,
+        cwd: cwd.to_path_buf(),
+        stop_asked: AtomicBool::new(false),
+        forced_mid_change: AtomicBool::new(false),
     });
     let pump = |mut r: Box<dyn AsyncRead + Unpin + Send>, sh: Arc<BackgroundShell>, is_err: bool| async move {
         let mut buf = vec![0u8; 64 * 1024];

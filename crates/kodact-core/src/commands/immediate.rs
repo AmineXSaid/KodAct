@@ -240,10 +240,19 @@ fn tasks(v: &SessionView, args: &str) -> Exec {
             return ok(msg);
         }
         return match shells.get(id) {
-            Some(sh) => {
-                sh.kill();
-                ok(format!("Stopped {id}."))
-            }
+            Some(sh) => match sh.stop() {
+                kodact_tools::shells::Stop::Asked { change } => ok(format!(
+                    "Asked {id} to stop. It is installing or removing packages, so it was sent SIGINT, which {} \
+                     stops on without breaking its package database: it finishes the step it is on, then ends by \
+                     itself. `/tasks stop {id}` again stops it at once, which can leave the package database \
+                     half-updated.",
+                    change.manager
+                )),
+                kodact_tools::shells::Stop::Stopped { change: Some(c) } => {
+                    ok(format!("Stopped {id}. {}", c.forced_note()))
+                }
+                _ => ok(format!("Stopped {id}.")),
+            },
             None => err(format!("No background task {id}.")),
         };
     }

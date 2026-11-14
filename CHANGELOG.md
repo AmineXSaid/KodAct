@@ -2,6 +2,45 @@
 
 ## 0.1.0 (unreleased)
 
+### Stopping an install without breaking the machine, and what a stop left
+- **An install or removal KodAct stops is sent SIGINT, not SIGTERM**: apt,
+  dpkg, apk, pacman, dnf, yum and zypper, read from the command line or, on
+  Linux, from the programs running in the command (`./setup.sh` that runs
+  apt-get). It finishes the step it is on and ends with its database
+  consistent; nothing forces it. Measured on a real apt install stopped
+  mid-configure through KodAct's own stop (apt 2.8.3, dpkg 1.22.6): the
+  previous stop left dpkg's journal unmerged and the packages half-configured,
+  so every later install failed with "dpkg was interrupted", for the person as
+  much as the session; SIGINT left them installed. apt runs dpkg in a session
+  of its own, so the process-group SIGKILL never reached dpkg anyway: it died
+  later, mid-run.
+- **KillShell on an install** waits up to 10 seconds and says whether it ended
+  (packages it hadn't reached are not installed) or is still finishing (the
+  model is told when it exits, and not to start another install meanwhile).
+  KillShell again stops it at once and names the repair. `/tasks stop` works
+  the same way.
+- **An interrupt or `--max-time`** stops an install in a call the same way,
+  waits up to 5 seconds, and leaves one still finishing as a background shell.
+- **At the end of the session** KodAct waits up to 10 seconds for an install
+  asked to stop and tells you on stderr what was cut short: an install that
+  ended, or one still finishing, with its process ID and the repair if you
+  stop it by force. Ordinary commands are stopped silently, as before.
+- **Output that says something is left broken or locked gets a note**, read
+  from the text whatever the exit code (`apt-get … | tail` ends 0): "dpkg was
+  interrupted" (repair before going on, `dpkg --configure -a` then
+  `apt-get install -f`, and the stop that caused it when this session made it),
+  a package lock held by one of the session's background installs (wait for
+  it) or by another program, git's "Unable to create '…index.lock': File
+  exists" (stale: remove that file; or held by a running git command of the
+  session) and pacman's `db.lck`.
+- **A stopped git command that left its lock files** is named with them. git
+  removes its locks on SIGTERM and SIGINT (measured); SIGKILL, an
+  out-of-memory kill or a crash leaves `index.lock`, and every later git
+  command that writes fails until it is removed.
+- Task `stopped-install`: a stand-in apt with apt's handling of signals, an
+  install the person asks to stop midway, and a check that the package
+  database is consistent at the end.
+
 ### Stopping a package manager mid-install is said, with the repair
 - **KillShell on `apt-get install` names what it may have broken**: a
   package install that ran past its wait moves to the background, and a model

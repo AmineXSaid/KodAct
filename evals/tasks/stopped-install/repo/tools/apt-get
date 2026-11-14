@@ -1,0 +1,41 @@
+#!/bin/sh
+# Installs this project's toolchain into .pkgdb/, one package at a time.
+#
+# A stand-in for apt-get with apt's handling of signals (measured with apt 2.8 and dpkg 1.22):
+# on SIGINT it finishes the package it is setting up, then stops with the database consistent;
+# killed (SIGTERM, SIGKILL) while it sets one up, it leaves the database half-updated, and every
+# later run refuses to start until `./tools/dpkg --configure -a` repairs it.
+db="$(cd "$(dirname "$0")/.." && pwd)/.pkgdb"
+mkdir -p "$db"
+if [ -e "$db/journal" ]; then
+  echo "E: dpkg was interrupted, you must manually run './tools/dpkg --configure -a' to correct the problem." >&2
+  exit 100
+fi
+[ "$1" = install ] || { echo "E: Invalid operation $1" >&2; exit 100; }
+shift
+echo $$ > "$db/running"
+stop=0
+trap 'stop=1' INT
+# apt and dpkg go on when nobody reads their output any more (KodAct exited): so does this.
+trap '' PIPE
+interrupted() {
+  echo "W: Operation was interrupted before it could finish"
+  rm -f "$db/running"
+  exit 100
+}
+for p in "$@"; do
+  case "$p" in -*) continue ;; esac
+  [ "$stop" = 1 ] && interrupted
+  if [ -e "$db/$p" ]; then echo "$p is already the newest version."; continue; fi
+  echo "Get: $p"
+  sleep 1
+  [ "$stop" = 1 ] && interrupted
+  echo "Setting up $p ..."
+  echo "$p" > "$db/journal"
+  (trap '' INT; sleep 45)
+  echo installed > "$db/$p"
+  rm -f "$db/journal"
+done
+[ "$stop" = 1 ] && interrupted
+rm -f "$db/running"
+echo "Done."

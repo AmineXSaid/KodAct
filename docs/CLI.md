@@ -831,8 +831,38 @@ fails its `shell` row with the places it looked, and the Bash tool answers
 every call with that message and tells the model not to retry, instead of
 failing with an OS error.
 
+**Stopping a command.** KillShell, `/tasks stop`, an interrupt, `--max-time`
+and the end of a session stop a command with everything it started: SIGTERM,
+then SIGKILL 300 ms later. A command that installs or removes packages (apt,
+dpkg, apk, pacman, dnf, yum, zypper, read from the command line or, on Linux,
+from the programs running in it, so a `./setup.sh` that runs apt-get counts)
+is sent SIGINT instead, the stop a person's Ctrl-C makes: apt finishes the
+dpkg run it is in and dpkg the maintainer script it runs, so the package
+database stays consistent, where SIGTERM leaves it half-updated and every later
+install fails with "dpkg was interrupted". Nothing forces it after that:
+- KillShell waits up to 10 seconds and says whether it ended or is still
+  finishing (the model is told when it exits); KillShell again, or
+  `/tasks stop` again, stops it at once and names the repair;
+- an interrupted or timed-out call waits up to 5 seconds, then the install
+  goes on as a background shell until it has stopped;
+- at the end of the session KodAct waits up to 10 seconds for it and tells
+  you on stderr what was cut short: an install that ended (packages it hadn't
+  reached are not installed), or one still finishing, with its process ID and
+  the repair if you stop it by force. KodAct doesn't wait longer and doesn't
+  force it.
+
+A command's output that says something is left broken or locked gets a note
+with what the session knows, whatever its exit code: apt's "dpkg was
+interrupted" (the repair, and the stop that caused it when this session made
+it), a package lock held by one of the session's background installs or by
+another program, git's "Unable to create '…index.lock': File exists" (stale,
+or held by a git command of the session) and pacman's lock. A git command
+stopped while it held a lock removes it itself; one killed before it could
+(SIGKILL, out of memory) leaves it, and the stop's result names the file.
+
 On Windows, a command is stopped with everything it started (a job object), so
-the timeout, Esc and KillShell end it; paths are shown without the `\\?\`
+the timeout, Esc and KillShell end it, at once (there is no SIGINT for a
+windowless console); paths are shown without the `\\?\`
 prefix; and Git Bash paths (`/c/Users/me`) are understood by the file tools
 and permission rules, which compare paths without regard to case.
 

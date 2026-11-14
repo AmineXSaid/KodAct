@@ -301,7 +301,7 @@ impl Subtasks {
             let started = Instant::now();
             let result = run(&mut child, prompt, &token).await;
             // Its background shells (its own) can't be read by anyone now.
-            child.tool_ctx().shells.kill_all();
+            child.tool_ctx().shells.stop_all();
             done.set(Outcome::of(&result, started.elapsed()));
         });
         let task = task.to_string();

@@ -28,3 +28,33 @@ Measured on 2026-10-13. A is 1610f82, before the OpenAI document fix; B is that 
 Before the fix, the Read result reached the model as the PDF's base64, so it could never find the figure.
 
 A real-model comparison still needs an API key.
+
+## `openai_stops_install.py`: the `stopped-install` task
+
+A model that starts the install in the background, reads its output once,
+stops it with KillShell, writes `skipped` into status.txt and ends. It never
+repairs anything, so only KodAct's stop decides what state the package
+database is left in. Each reply takes 3 seconds, as a real model's does, so the
+stop lands while a package is being set up.
+
+```bash
+python3 evals/scripted/openai_stops_install.py 8793 &
+export KODACT_OPENAI_BASE_URL=http://127.0.0.1:8793/v1 KODACT_OPENAI_API_KEY=sk-test0123456789
+kodact-eval run --only stopped-install --kodact <kodact> --label <label> --repeat 3 -- --model m --permission-mode bypassPermissions
+```
+
+Measured on 2026-11-14. A is a889576, before the gentle stop; B is the change
+that sends an install SIGINT.
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate | 0/3 | 3/3 |
+| Package database left half-updated | 3/3 | 0/3 |
+| False-finish rate | 3/3 | 0/3 |
+| Time per run | 18 s | 38 s |
+
+A's KillShell sent SIGTERM: the stand-in died while setting up its first
+package. B's sent SIGINT: it finished that package, then stopped. B's runs are
+20 seconds longer because KillShell and the end of the session each waited
+10 seconds for the install; a stop of anything that isn't an install costs
+nothing more.

@@ -110,7 +110,7 @@ async fn finished_bash_calls_are_not_listed_as_background_shells() {
     // The next background shell is still bash_1.
     let out = Bash::default().call(json!({"command": "sleep 5", "run_in_background": true}), &c).await;
     assert!(out.text_content().contains("bash_1"), "{}", out.text_content());
-    c.shells.kill_all();
+    c.shells.stop_all();
 }
 
 #[tokio::test]
@@ -170,26 +170,265 @@ async fn background_shell_output_and_kill() {
     assert!(!k.is_error);
     assert!(!k.text_content().contains("package"), "an ordinary command gets no note: {}", k.text_content());
     assert_eq!(c.shells.get("bash_1").unwrap().status(), crate::shells::ShellStatus::Killed);
+}
 
-    // Stopping a package manager mid-run is said, with the repair: `apt-get` here is a stand-in
-    // that only sleeps, found first on PATH, so nothing is installed by the test.
-    let bin = d.path().join("bin");
+/// A stand-in `apt-get` first on PATH, so nothing is installed by a test: `body` is its script.
+#[cfg(unix)]
+fn fake_program(dir: &std::path::Path, name: &str, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::write(bin.join("apt-get"), "#!/bin/sh\nsleep 20\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(bin.join("apt-get"), std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let cmd = format!("PATH='{}':$PATH apt-get install -y gcc", bin.display());
-    let out = Bash::default().call(json!({"command": cmd, "run_in_background": true}), &c).await;
-    assert!(out.text_content().contains("bash_2"), "{}", out.text_content());
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let k = KillShell.call(json!({"shell_id": "bash_2"}), &c).await;
+    std::fs::write(bin.join(name), format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+    format!("PATH='{}':$PATH", bin.display())
+}
+
+/// A context whose stops wait `wait` for an install asked to stop, instead of ten seconds.
+#[cfg(unix)]
+fn ctx_waiting(dir: &std::path::Path, wait: Duration) -> ToolContext {
+    let mut c = ctx(dir);
+    let mut shells = crate::shells::ShellManager::default();
+    shells.stop_wait = wait;
+    c.shells = Arc::new(shells);
+    c
+}
+
+/// apt's handling of signals, as measured: on SIGINT it finishes the step it is on and ends
+/// with the database consistent; on SIGTERM it dies mid-step.
+#[cfg(unix)]
+const APT_LIKE: &str = "trap 'sleep 0.5; echo \"W: Operation was interrupted before it could finish\"; exit 100' INT\n\
+                        trap 'echo GOT-TERM; exit 143' TERM\necho installing\nwhile :; do sleep 0.1; done";
+
+/// KillShell on an install sends SIGINT, the stop apt and dpkg survive, not SIGTERM: it
+/// finishes its step and ends, and the model is told what that means.
+#[cfg(unix)]
+#[tokio::test]
+async fn killshell_asks_an_install_to_stop_and_waits_for_it() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx_waiting(d.path(), Duration::from_secs(5));
+    let path = fake_program(d.path(), "apt-get", APT_LIKE);
+    let cmd = format!("{path} apt-get install -y gcc");
+    Bash::default().call(json!({"command": cmd, "run_in_background": true}), &c).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let started = Instant::now();
+    let k = KillShell.call(json!({"shell_id": "bash_1"}), &c).await;
+    let text = k.text_content();
+    assert!(text.contains("Successfully killed shell: bash_1") && text.contains("stopped with SIGINT"), "{text}");
+    assert!(!text.contains("dpkg --configure -a"), "a clean stop needs no repair: {text}");
+    assert!(started.elapsed() < Duration::from_secs(4), "it waited for the stop, not for the limit");
+    let sh = c.shells.get("bash_1").unwrap();
+    assert_eq!(sh.status(), crate::shells::ShellStatus::Completed(Some(100)));
+    let (out, _) = sh.take_new_output();
+    assert!(out.contains("Operation was interrupted") && !out.contains("GOT-TERM"), "{out}");
+    // Stopped again once it has ended: nothing was cut short this time.
+    let k = KillShell.call(json!({"shell_id": "bash_1"}), &c).await;
+    assert!(!k.text_content().contains("SIGINT") && !k.text_content().contains("dpkg"), "{}", k.text_content());
+}
+
+/// An install that goes on after SIGINT (dpkg in a maintainer script ignores it) is left to
+/// finish; a second KillShell stops it at once and gives the repair, and an apt error read
+/// later names the stop that caused it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_second_killshell_forces_an_install_and_its_repair_is_named() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx_waiting(d.path(), Duration::from_millis(300));
+    let path = fake_program(d.path(), "apt-get", "trap '' INT\nsleep 30");
+    let cmd = format!("{path} apt-get install -y gcc");
+    Bash::default().call(json!({"command": cmd, "run_in_background": true}), &c).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let k = KillShell.call(json!({"shell_id": "bash_1"}), &c).await;
+    let text = k.text_content();
+    assert!(text.starts_with("Asked shell bash_1 to stop") && text.contains("still doing that"), "{text}");
+    assert!(text.contains("KillShell bash_1 again stops it at once"), "{text}");
+    assert_eq!(c.shells.get("bash_1").unwrap().status(), crate::shells::ShellStatus::Running);
+    let k = KillShell.call(json!({"shell_id": "bash_1"}), &c).await;
     assert!(k.text_content().contains("dpkg --configure -a"), "{}", k.text_content());
-    // Stopped again once it is already dead: nothing was cut short this time.
-    let k = KillShell.call(json!({"shell_id": "bash_2"}), &c).await;
-    assert!(!k.text_content().contains("dpkg"), "{}", k.text_content());
+    assert_eq!(c.shells.get("bash_1").unwrap().status(), crate::shells::ShellStatus::Killed);
+
+    // apt's own error, in a pipeline that ends 0, gets the repair and the stop that caused it.
+    let apt_error =
+        "echo \"E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.\"";
+    let out = Bash::default().call(json!({"command": format!("{apt_error} | tail -1")}), &c).await;
+    let text = out.text_content();
+    assert!(!out.is_error && text.contains("this session stopped `PATH="), "{text}");
+    assert!(text.contains("`dpkg --configure -a`, then `apt-get install -f`"), "{text}");
+}
+
+/// A lock held by the session's own background install is named as such.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_lock_held_by_the_sessions_own_install_is_named() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx_waiting(d.path(), Duration::from_millis(300));
+    let path = fake_program(d.path(), "apt-get", "sleep 30");
+    Bash::default()
+        .call(json!({"command": format!("{path} apt-get install -y gcc"), "run_in_background": true}), &c)
+        .await;
+    let lock = "echo 'E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 1 (apt-get)'; exit 100";
+    let out = Bash::default().call(json!({"command": lock}), &c).await;
+    assert!(out.is_error && out.text_content().contains("own command bash_1"), "{}", out.text_content());
+    c.shells.get("bash_1").unwrap().kill();
+}
+
+/// An interrupted call (Ctrl-C, or `--max-time`) stops an install the same gentle way, and one
+/// still finishing goes on as a background shell the session follows.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_interrupted_install_is_stopped_gently() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx_waiting(d.path(), Duration::from_millis(300));
+    let path = fake_program(d.path(), "apt-get", APT_LIKE);
+    let cancel = c.cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        cancel.cancel();
+    });
+    let out = Bash::default().call(json!({"command": format!("{path} apt-get install -y gcc")}), &c).await;
+    let text = out.text_content();
+    assert!(out.is_error && text.contains(crate::INTERRUPTED) && text.contains("stopped with SIGINT"), "{text}");
+    assert!(text.contains("Operation was interrupted") && !text.contains("GOT-TERM"), "{text}");
+
+    let c = ctx_waiting(d.path(), Duration::from_millis(300));
+    let path = fake_program(d.path(), "apt-get", "trap '' INT\nsleep 30");
+    let cancel = c.cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        cancel.cancel();
+    });
+    let out = Bash::default().call(json!({"command": format!("{path} apt-get install -y gcc")}), &c).await;
+    let text = out.text_content();
+    assert!(text.contains("It goes on as bash_1 until it has stopped"), "{text}");
+    let sh = c.shells.get("bash_1").expect("followed as a background shell");
+    assert!(sh.stop_asked() && sh.status() == crate::shells::ShellStatus::Running);
+    sh.kill();
+}
+
+/// At the end of the session the person is told what an install stopped then left: one that
+/// finished its step, and one still finishing, with its process to look for.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_end_of_a_session_says_what_installs_were_cut_short() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx_waiting(d.path(), Duration::from_millis(1500));
+    let path = fake_program(d.path(), "apt-get", APT_LIKE);
+    Bash::default()
+        .call(json!({"command": format!("{path} apt-get install -y gcc"), "run_in_background": true}), &c)
+        .await;
+    Bash::default().call(json!({"command": "sleep 30", "run_in_background": true}), &c).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let notes = c.shells.end_session().await;
+    assert_eq!(notes.len(), 1, "an ordinary command is stopped silently: {notes:?}");
+    assert!(
+        notes[0].contains("when the session ended") && notes[0].contains("finished the step it was on"),
+        "{notes:?}"
+    );
+    assert_eq!(c.shells.get("bash_2").unwrap().status(), crate::shells::ShellStatus::Killed);
+
+    let c = ctx_waiting(d.path(), Duration::from_millis(300));
+    let path = fake_program(d.path(), "apt-get", "trap '' INT\nsleep 30");
+    Bash::default()
+        .call(json!({"command": format!("{path} apt-get install -y gcc"), "run_in_background": true}), &c)
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let notes = c.shells.end_session().await;
+    assert!(notes[0].contains("still finishing the step it is on (process "), "{notes:?}");
+    assert!(notes[0].contains("dpkg --configure -a"), "the repair if it gets forced: {notes:?}");
+    c.shells.get("bash_1").unwrap().kill();
+}
+
+/// The measurement behind the gentle stop, on a real apt install, through KodAct's own stop: run
+/// as root on a Debian-like system with `cargo test -p kodact-tools -- --ignored real_apt`. It
+/// installs, then purges, two dummy packages whose post-install script sleeps 8 s, and stops the
+/// install while the first script runs: the old stop (SIGTERM, then SIGKILL) and the new one
+/// (SIGINT for an install). Measured with apt 2.8.3 and dpkg 1.22.6 on Ubuntu 24.04: the old
+/// stop leaves dpkg's journal unmerged and the packages unpacked and half-configured (the next
+/// install fails with "dpkg was interrupted"); the new one leaves both installed.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "needs root and apt; installs and purges two dummy packages"]
+async fn real_apt_stopped_by_kodact_keeps_its_database() {
+    let d = tempfile::tempdir().unwrap();
+    for n in ["a", "b"] {
+        let root = d.path().join(format!("pkg-{n}"));
+        std::fs::create_dir_all(root.join("DEBIAN")).unwrap();
+        std::fs::write(
+            root.join("DEBIAN/control"),
+            format!(
+                "Package: kodact-slow-{n}\nVersion: 1.0\nArchitecture: all\nMaintainer: t <t@example.invalid>\n\
+                 Description: a test package whose post-install script is slow\n"
+            ),
+        )
+        .unwrap();
+        let postinst = root.join("DEBIAN/postinst");
+        std::fs::write(&postinst, "#!/bin/sh\nsleep 8\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&postinst, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let built = std::process::Command::new("dpkg-deb")
+            .arg("--build")
+            .arg(&root)
+            .arg(d.path().join(format!("kodact-slow-{n}.deb")))
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{built:?}");
+    }
+    let sh = |args: &str| std::process::Command::new("sh").arg("-c").arg(args).output().unwrap();
+    let running = |name: &str| {
+        std::fs::read_dir("/proc")
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
+            .any(|pid| kodact_platform::process::proc_info(pid).is_some_and(|p| p.name == name || p.cmdline == name))
+    };
+    let mut results = vec![];
+    for gentle in [false, true] {
+        let _ = sh("dpkg --purge kodact-slow-a kodact-slow-b");
+        let c = ctx(d.path());
+        let cmd = format!("apt-get install -y {0}/kodact-slow-a.deb {0}/kodact-slow-b.deb", d.path().display());
+        Bash::default().call(json!({"command": cmd, "run_in_background": true}), &c).await;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !running("sleep 8") && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let shell = c.shells.get("bash_1").unwrap();
+        if gentle {
+            assert!(matches!(shell.stop(), crate::shells::Stop::Asked { .. }));
+        } else {
+            shell.kill();
+        }
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while (running("dpkg") || shell.status() == crate::shells::ShellStatus::Running) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let journal = std::fs::read_dir("/var/lib/dpkg/updates").unwrap().count();
+        let state = sh("dpkg-query -W -f='${db:Status-Abbrev}' kodact-slow-a kodact-slow-b");
+        let state = String::from_utf8_lossy(&state.stdout).split_whitespace().collect::<Vec<_>>().join(" ");
+        results.push((gentle, journal, state));
+        let _ = sh("dpkg --configure -a; dpkg --purge kodact-slow-a kodact-slow-b");
+    }
+    eprintln!("(gentle, unmerged journal files, package states): {results:?}");
+    let (_, old_journal, old_state) = &results[0];
+    assert!(*old_journal > 0 && old_state != "ii ii", "the old stop broke it, as measured: {results:?}");
+    assert_eq!((results[1].1, results[1].2.as_str()), (0, "ii ii"), "the new stop keeps it: {results:?}");
+}
+
+/// A git command killed before it can clean up leaves its lock: stopping one says so when the
+/// lock is still there (a stand-in that doesn't remove it, as git killed by SIGKILL doesn't).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_git_lock_left_by_a_stopped_git_command_is_named() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx_waiting(d.path(), Duration::from_millis(300));
+    std::fs::create_dir_all(d.path().join(".git")).unwrap();
+    let path = fake_program(d.path(), "git", "touch .git/index.lock\nsleep 30");
+    Bash::default().call(json!({"command": format!("{path} git rebase main"), "run_in_background": true}), &c).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let k = KillShell.call(json!({"shell_id": "bash_1"}), &c).await;
+    assert!(k.text_content().contains("index.lock is still there"), "{}", k.text_content());
+    // And git's own error about it, later, says no git command of the session runs.
+    let lock = d.path().canonicalize().unwrap().join(".git/index.lock");
+    let msg = format!("echo \"fatal: Unable to create '{}': File exists.\" >&2; exit 128", lock.display());
+    let out = Bash::default().call(json!({"command": msg}), &c).await;
+    assert!(out.text_content().contains("None of this session's commands is running git"), "{}", out.text_content());
 }
 
 #[test]
@@ -441,7 +680,7 @@ async fn sandbox_confines_writes_and_network() {
     let free = json!({"command": "sleep 5", "run_in_background": true, "dangerouslyDisableSandbox": true});
     let out = Bash::default().call(free, &c).await;
     assert!(!out.is_error && !out.text_content().contains("sandbox"), "{}", out.text_content());
-    c.shells.kill_all();
+    c.shells.stop_all();
     let out = Bash::default().call(input, &c).await;
     assert!(!out.is_error, "{out:?}");
     assert!(c.project_dir.join("made.txt").exists());

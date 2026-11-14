@@ -3682,7 +3682,7 @@ impl Engine {
         if refresh {
             self.verify.fingerprint = self.worktree_fingerprint().await;
         }
-        kodact_tools::builtin::exit_notice(&exited)
+        kodact_tools::builtin::exit_notice_with(&exited, &self.shared.tool_ctx.shells)
     }
 
     /// Before the turn ends: wait for commands that outlived their Bash timeout and still run,
@@ -4493,7 +4493,9 @@ impl Engine {
         }
     }
 
-    /// End the session: SessionEnd hooks, background shells.
+    /// End the session: SessionEnd hooks, background shells. An install still running is asked to
+    /// stop with SIGINT and given a moment to finish the step it is on, and the person is told
+    /// what was cut short and what may be left (the model can't be any more).
     pub async fn end_session(&self, reason: &str) {
         let c = CancellationToken::new();
         let _ = tokio::time::timeout(
@@ -4501,7 +4503,9 @@ impl Engine {
             self.shared.hooks.run(HookEvent::SessionEnd, None, self.mode_str(), json!({"reason": reason}), &c),
         )
         .await;
-        self.shared.tool_ctx.shells.kill_all();
+        for note in self.shared.tool_ctx.shells.end_session().await {
+            self.notice(NoticeLevel::Warning, note);
+        }
     }
 }
 

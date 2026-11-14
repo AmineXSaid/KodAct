@@ -5,7 +5,7 @@ use kodact_permissions::Subject;
 use serde_json::{json, Value};
 
 use super::str_arg;
-use crate::shells::{BackgroundShell, ShellChoice, ShellKind, ShellStatus, StartError};
+use crate::shells::{BackgroundShell, ShellChoice, ShellKind, ShellStatus, StartError, Stop};
 use crate::{fit_output, truncate_middle, Tool, ToolContext, ToolOutput, INTERRUPTED};
 use kodact_platform::shell::Os;
 
@@ -265,7 +265,10 @@ impl Tool for Bash {
             Ok(sh) => sh,
             Err(e) => return start_failed(&e),
         };
-        let _guard = StopUnlessMoved(sh.clone());
+        let _guard = StopUnlessMoved(sh.clone(), ctx.shells.clone());
+        // An interrupt or `--max-time` ended the call: what the stop may have left.
+        let mut stopped_note: Option<String> = None;
+        let mut cancelled = false;
         tokio::select! {
             _ = sh.wait() => {}
             _ = tokio::time::sleep(Duration::from_millis(ms)) => {
@@ -274,11 +277,29 @@ impl Tool for Bash {
                 return moved_to_background(&sh, ms, ctx);
             }
             _ = ctx.cancel.cancelled() => {
-                sh.kill();
-                let _ = tokio::time::timeout(Duration::from_secs(2), sh.wait()).await;
+                cancelled = true;
+                let git = crate::builtin::exit_hints::runs_git(&command);
+                match sh.stop() {
+                    Stop::Asked { change } => {
+                        if tokio::time::timeout(INTERRUPT_WAIT, sh.wait()).await.is_err() {
+                            return still_finishing(&sh, change, ctx);
+                        }
+                        stopped_note = Some(change.ended_note());
+                    }
+                    Stop::Stopped { change } => {
+                        let _ = tokio::time::timeout(Duration::from_secs(2), sh.wait()).await;
+                        stopped_note = change.map(|c| c.forced_note());
+                        if git && stopped_note.is_none() {
+                            let locks = crate::builtin::exit_hints::git_locks_left(&sh.cwd);
+                            stopped_note = crate::builtin::exit_hints::git_locks_note(&locks);
+                        }
+                    }
+                    Stop::NotRunning => {}
+                }
             }
         }
-        let res = sh.result(&ctx.shell);
+        let mut res = sh.result(&ctx.shell);
+        res.interrupted |= cancelled;
 
         let mut note = String::new();
         if let Some(dir) = &res.final_cwd {
@@ -305,14 +326,22 @@ impl Tool for Bash {
             "exitCode": res.code,
         });
         if res.interrupted {
-            return ToolOutput::error(format!("{text}\n{INTERRUPTED}").trim_start().to_string())
-                .with_structured(structured);
+            let mut msg = format!("{text}\n{INTERRUPTED}").trim_start().to_string();
+            if let Some(n) = stopped_note {
+                msg.push_str(&format!("\n\n{n}"));
+            }
+            return ToolOutput::error(msg).with_structured(structured);
         }
         text.push_str(&note);
+        // Read from the output whatever the exit code: `apt-get install … | tail` ends 0.
+        let state = ctx.shells.state_hint(&text);
         match res.code {
             Some(0) => {
                 if text.trim().is_empty() {
                     text = "(no output)".into();
+                }
+                if let Some(hint) = state {
+                    text.push_str(&format!("\n\n{hint}"));
                 }
                 ToolOutput::text(text).with_structured(structured)
             }
@@ -327,20 +356,49 @@ impl Tool for Bash {
                 if let Some(hint) = super::exit_hints::explain(exit, &text, found) {
                     msg.push_str(&format!("\n\n{hint}"));
                 }
+                if let Some(hint) = state {
+                    msg.push_str(&format!("\n\n{hint}"));
+                }
                 ToolOutput::error(msg).with_structured(structured)
             }
         }
     }
 }
 
+/// How long an interrupted call waits for an install asked to stop to finish the step it is on,
+/// before the call ends and the install is left to finish in the background.
+const INTERRUPT_WAIT: Duration = Duration::from_secs(5);
+
+/// The result of an interrupted call whose install, asked to stop, is still finishing the step it
+/// is on: it is listed as a background shell, so the session follows it and says when it ends.
+fn still_finishing(sh: &Arc<BackgroundShell>, change: crate::shells::PackageChange, ctx: &ToolContext) -> ToolOutput {
+    let id = ctx.shells.adopt(sh);
+    let (out, err) = sh.take_new_output();
+    let so_far = [out.trim_end(), err.trim_end()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>();
+    let mut text = so_far.join("\n");
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(INTERRUPTED);
+    text.push_str(&format!(
+        "\n\nIt goes on as {id} until it has stopped. {}",
+        change.finishing_note(&id, INTERRUPT_WAIT)
+    ));
+    ToolOutput::error(text)
+        .with_structured(json!({"backgroundTaskId": id, "stdout": out, "stderr": err, "interrupted": true}))
+}
+
 /// Stops a Bash call's command if the call goes away while it runs (the session ends, the turn is
-/// dropped), unless it moved to the background: then it belongs to the session's shells.
-struct StopUnlessMoved(Arc<BackgroundShell>);
+/// dropped), unless it moved to the background: then it belongs to the session's shells. An
+/// install asked to stop is listed there too, so the end of the session can say how it ended.
+struct StopUnlessMoved(Arc<BackgroundShell>, Arc<crate::shells::ShellManager>);
 
 impl Drop for StopUnlessMoved {
     fn drop(&mut self) {
         if self.0.id().is_empty() {
-            self.0.kill();
+            if let Stop::Asked { .. } = self.0.stop() {
+                self.1.adopt(&self.0);
+            }
         }
     }
 }
@@ -400,12 +458,34 @@ fn last_lines(text: &str, lines: usize, max: usize) -> String {
     tail.chars().skip(skip).collect()
 }
 
+/// A note for the model on background commands that exited: how they ended, their last unread
+/// output, and what that output says is left broken or locked (`shells`'s view of it). `None`
+/// when there are none.
+pub fn exit_notice_with(exited: &[Arc<BackgroundShell>], shells: &crate::shells::ShellManager) -> Option<String> {
+    let mut parts = exit_parts(exited);
+    if parts.is_empty() {
+        return None;
+    }
+    let unread: Vec<String> = exited
+        .iter()
+        .map(|sh| {
+            let (out, err) = sh.unread_output();
+            format!("{out}\n{err}")
+        })
+        .collect();
+    parts.extend(shells.state_hint(&unread.join("\n")));
+    Some(format!("<system-reminder>\n{}\n</system-reminder>", parts.join("\n\n")))
+}
+
 /// A note for the model on background commands that exited: how they ended and their last
 /// unread output. `None` when there are none.
 pub fn exit_notice(exited: &[Arc<BackgroundShell>]) -> Option<String> {
-    if exited.is_empty() {
-        return None;
-    }
+    let parts = exit_parts(exited);
+    (!parts.is_empty()).then(|| format!("<system-reminder>\n{}\n</system-reminder>", parts.join("\n\n")))
+}
+
+/// One part per exited command for [`exit_notice`]: how it ended and its last unread output.
+fn exit_parts(exited: &[Arc<BackgroundShell>]) -> Vec<String> {
     let mut parts = vec![];
     for sh in exited {
         let how = match sh.status() {
@@ -429,7 +509,7 @@ pub fn exit_notice(exited: &[Arc<BackgroundShell>]) -> Option<String> {
         }
         parts.push(part);
     }
-    Some(format!("<system-reminder>\n{}\n</system-reminder>", parts.join("\n\n")))
+    parts
 }
 
 /// A note for the model on commands still running after the turn waited for them.
@@ -512,8 +592,9 @@ impl Tool for BashOutput {
             ShellStatus::Completed(Some(c)) => format!("\n<exit_code>{c}</exit_code>"),
             _ => String::new(),
         };
+        let hint = ctx.shells.state_hint(&format!("{out}\n{err}")).map(|h| format!("\n\n{h}")).unwrap_or_default();
         ToolOutput::text(format!(
-            "<status>{}</status>{code}\n<stdout>\n{}\n</stdout>\n<stderr>\n{}\n</stderr>",
+            "<status>{}</status>{code}\n<stdout>\n{}\n</stdout>\n<stderr>\n{}\n</stderr>{hint}",
             status.label(),
             truncate_middle(out.trim_end(), ctx.max_output_chars),
             truncate_middle(err.trim_end(), ctx.max_output_chars)
@@ -544,19 +625,35 @@ impl Tool for KillShell {
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> ToolOutput {
         let id = str_arg(&input, "shell_id");
-        match ctx.shells.get(id) {
-            Some(sh) => {
-                // Only a command that was still running was cut short.
-                let running = sh.status() == crate::shells::ShellStatus::Running;
-                sh.kill();
-                sh.mark_reported();
-                let note = running.then(|| super::exit_hints::stopped_package_manager(&sh.command)).flatten();
-                ToolOutput::text(match note {
-                    Some(n) => format!("Successfully killed shell: {id} ({})\n\n{n}", sh.command),
-                    None => format!("Successfully killed shell: {id} ({})", sh.command),
-                })
+        let Some(sh) = ctx.shells.get(id) else { return ToolOutput::error(format!("No shell found with ID: {id}")) };
+        let killed = format!("Successfully killed shell: {id} ({})", sh.command);
+        let git = sh.status() == ShellStatus::Running && super::exit_hints::runs_git(&sh.command);
+        let note = match sh.stop() {
+            Stop::NotRunning => None,
+            Stop::Stopped { change: Some(c) } => Some(c.forced_note()),
+            Stop::Stopped { change: None } if git => {
+                // Git removes its locks when stopped this way; one still there is left for good.
+                let _ = tokio::time::timeout(Duration::from_secs(1), sh.wait()).await;
+                super::exit_hints::git_locks_note(&super::exit_hints::git_locks_left(&sh.cwd))
             }
-            None => ToolOutput::error(format!("No shell found with ID: {id}")),
-        }
+            Stop::Stopped { change: None } => None,
+            Stop::Asked { change } => {
+                let waited = ctx.shells.stop_wait;
+                if tokio::time::timeout(waited, sh.wait()).await.is_err() {
+                    // Not reported: the model is told when it exits.
+                    return ToolOutput::text(format!(
+                        "Asked shell {id} to stop ({}).\n\n{}",
+                        sh.command,
+                        change.finishing_note(id, waited)
+                    ));
+                }
+                Some(change.ended_note())
+            }
+        };
+        sh.mark_reported();
+        ToolOutput::text(match note {
+            Some(n) => format!("{killed}\n\n{n}"),
+            None => killed,
+        })
     }
 }

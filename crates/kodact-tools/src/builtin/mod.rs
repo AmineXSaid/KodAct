@@ -2,7 +2,7 @@
 
 pub(crate) mod bash;
 mod edit;
-mod exit_hints;
+pub(crate) mod exit_hints;
 mod glob;
 mod grep;
 mod interact;
@@ -18,7 +18,7 @@ mod write;
 
 use std::sync::Arc;
 
-pub use bash::{exit_notice, still_running_notice, Bash, BashOutput, KillShell};
+pub use bash::{exit_notice, exit_notice_with, still_running_notice, Bash, BashOutput, KillShell};
 pub use edit::{apply_edit, apply_edit_near, apply_line_edit, Edit, MultiEdit};
 pub use glob::Glob;
 pub use grep::Grep;
