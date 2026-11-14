@@ -39,10 +39,15 @@ pub fn micro_threshold(window: u64, max_output: u32) -> u64 {
     autocompact_threshold(window, max_output) / 2
 }
 
-/// Is this user message a person's turn (not just tool results)?
+/// Is this user message a person's turn: text of their own, not only tool results or the
+/// harness's reminders (`<system-reminder>`)? Counted as turns, a few reminders in a row (the
+/// act reminders after replies cut off while reasoning) pushed the person's current turn out of
+/// the turns kept, and its file reads were cleared just as the model was told to act on them.
 fn is_user_turn(m: &Message) -> bool {
     m.role == Role::User
-        && m.content.iter().any(|b| matches!(b, ContentBlock::Text { .. }))
+        && m.content.iter().any(
+            |b| matches!(b, ContentBlock::Text { text, .. } if !text.trim_start().starts_with("<system-reminder>")),
+        )
         && !m.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
 }
 
@@ -76,8 +81,10 @@ pub fn micro_candidates(messages: &[Message], already: &HashSet<String>) -> Vec<
     out
 }
 
-/// Characters to a token, in the estimate for text that has not been through the API yet.
-pub const CHARS_PER_TOKEN: usize = 4;
+/// UTF-8 bytes to a token, in the estimate for text that has not been through the API yet (a
+/// character of English is one byte, of Chinese three): what the context is measured with
+/// against the window and the compaction thresholds.
+pub const BYTES_PER_TOKEN: usize = 4;
 
 /// Rough token estimate for text that has not been through the API yet.
 pub fn estimate_tokens(messages: &[Message]) -> u64 {
@@ -100,7 +107,7 @@ pub fn estimate_sent_tokens(messages: &[Message], with_reasoning: bool) -> u64 {
             _ => 200,
         })
         .sum();
-    (chars / CHARS_PER_TOKEN) as u64
+    (chars / BYTES_PER_TOKEN) as u64
 }
 
 /// The instruction appended to the conversation to ask for a summary.
@@ -259,6 +266,28 @@ mod tests {
         assert_eq!(again, vec!["big_mcp".to_string()]);
         // Too few turns: nothing is old enough.
         assert!(micro_candidates(&msgs[..msgs.len() - 3], &HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn reminders_are_not_turns_and_keep_no_read_from_its_turn() {
+        // The person's turn, its read, then three reminders (replies cut off while reasoning):
+        // the read is still in one of the last turns, so it stays.
+        let mut msgs = vec![Message::user_text("turn 1"), Message::user_text("turn 2"), Message::user_text("turn 3")];
+        msgs.extend(tool_round("current_read", "Read", 20_000));
+        for _ in 0..3 {
+            msgs.push(Message::user_text(
+                "<system-reminder>\nYour reply reached the output token limit.\n</system-reminder>",
+            ));
+        }
+        assert!(micro_candidates(&msgs, &HashSet::new()).is_empty());
+        // A person's message that carries reminders alongside their own text is a turn.
+        msgs.push(Message::user(vec![
+            ContentBlock::text("<system-reminder>\ncontext from a hook\n</system-reminder>"),
+            ContentBlock::text("turn 4"),
+        ]));
+        msgs.push(Message::user_text("turn 5"));
+        msgs.push(Message::user_text("turn 6"));
+        assert_eq!(micro_candidates(&msgs, &HashSet::new()), vec!["current_read".to_string()]);
     }
 
     #[test]

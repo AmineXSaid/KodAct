@@ -64,7 +64,12 @@ def again(ev):
 stream = os.path.join(os.path.dirname(os.getcwd()), "transcript.jsonl")
 if not os.path.exists(stream):
     sys.exit(0)
-events = [json.loads(line) for line in open(stream, encoding="utf-8") if line.strip().startswith("{")]
+events = []
+for line in open(stream, encoding="utf-8", errors="replace"):
+    try:
+        events.append(json.loads(line))
+    except ValueError:
+        pass  # a line cut short when the run timed out
 first = next(
     (i for i, ev in enumerate(events) if ev.get("subtype") == "act_reminder" and ev.get("kind") == "reasoning_cutoff"),
     None,

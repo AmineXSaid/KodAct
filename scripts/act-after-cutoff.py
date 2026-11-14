@@ -111,10 +111,11 @@ def report(path):
         saved = ev.get("saved")
         read = None
         if saved:
-            # Read at any point later in the run, by any tool (Read, Grep, a shell command).
-            name = os.path.basename(saved)
+            # Read at any point later in the run, by any tool (Read, Grep, a shell command), by
+            # its path, its name, or a search of its directory.
+            name, folder = os.path.basename(saved), os.path.dirname(saved)
             later = [json.dumps(c.get("input")) for e in evs[i + 1 :] for c in calls(e)]
-            read = any(saved in text or name in text for text in later)
+            read = any(saved in text or name in text or (folder and folder in text) for text in later)
         rows.append(
             {
                 "kind": kind,
@@ -139,7 +140,7 @@ def main():
         found = True
         rows = report(path)
         for r in rows:
-            if not r["reasoning_chars"]:
+            if not r["reasoning_chars"] and not r["saved"]:
                 total["plain"] += 1
                 continue
             total["handbacks"] += 1
@@ -161,7 +162,9 @@ def main():
             saved = ""
             if r["saved"]:
                 saved = f" · saved {os.path.basename(r['saved'])}, read: {'yes' if r['read_saved'] else 'no'}"
-            chars = f"{r['reasoning_chars']:,} characters handed back" if r["reasoning_chars"] else "nothing handed back"
+            chars = f"{r['reasoning_chars']:,} characters handed back" if r["reasoning_chars"] else (
+                "no room to hand it back" if r["saved"] else "nothing handed back"
+            )
             print(f"  #{n} {r['kind']}: {chars}{saved} → {what}")
     if not found:
         sys.exit("no transcript found")

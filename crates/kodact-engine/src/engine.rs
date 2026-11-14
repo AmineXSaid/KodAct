@@ -3766,7 +3766,7 @@ impl Engine {
     }
 
     /// `what` happened, with the reasoning handed back as far as the model's limits allow
-    /// ([`handback::budget_chars`]): the reply cap, and the room before the next request compacts
+    /// ([`handback::budget_bytes`]): the reply cap, and the room before the next request compacts
     /// (the threshold already keeps the reply's room). What doesn't fit is saved whole in the
     /// spill directory, under a name no other writer can take.
     fn reasoning_notes(&self, what: &str, model: &str, reasoning: &str) -> Handback {
@@ -3774,7 +3774,7 @@ impl Engine {
         let cap = u64::from(self.output_cap.unwrap_or(self.cfg.max_output_tokens).min(info.max_output));
         let room = self.autocompact_at(model).saturating_sub(self.projected_context_tokens());
         let above = handback::handed_back(&self.state.messages);
-        handback::notes(what, reasoning, &above, handback::budget_chars(cap, room), |whole| {
+        handback::notes(what, reasoning, &above, handback::budget_bytes(cap, room), |whole| {
             kodact_tools::spill_numbered(self.shared.tool_ctx.spill_dir.as_deref(), "reasoning", whole)
         })
     }

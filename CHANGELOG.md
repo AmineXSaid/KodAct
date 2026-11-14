@@ -11,28 +11,36 @@
   The middle, with the findings, was lost, and the next reply spent minutes
   working them out again and was cut off again. The handback is now half the
   room left before compaction, at least a quarter of the reply cap (32,000
-  characters on a 32k cap) and at least 8,000 characters, but never more
-  than that room holds: a handback that set off compaction would be
-  summarized away before the model saw it. A large window gets the whole
-  reasoning back; a nearly full small one gets what fits, from its start and
-  its end.
+  bytes on a 32k cap) and at least 8,000 bytes, but never more than that room
+  holds: a handback that set off compaction would be summarized away before
+  the model saw it. It is measured in bytes, as the context estimate is, so
+  reasoning in Chinese (three bytes a character) fits the same room. A large
+  window gets the whole reasoning back; a nearly full small one gets what
+  fits, from its start and its end.
 - **Nothing of it is lost.** When part is left out, the whole reasoning is
   saved in the session's spill directory, where long tool output already
   goes and which is read without a prompt, and the reminder names the file
-  to Grep or Read instead of working it out again. Sub-agents now save there
-  too, their long tool output included, and each file name is claimed with
-  an exclusive create, so two writers never share one.
+  to Grep or Read instead of working it out again; its long lines are
+  wrapped, since Read cuts lines past 2,000 characters. Sub-agents now save
+  there too, their long tool output included, and each file name is claimed
+  with an exclusive create, so two writers never share one.
 - **Repeats come back once, and drafts stay whole.** A paragraph the
-  reasoning repeats word for word comes back at its last place, so a revised
-  draft keeps all of its parts; where an earlier copy was, a short marker
-  says it is repeated below. A second cut-off in a row doesn't hand back
-  again what the first one gave, which is still in the conversation: a
-  marker says it was handed back above.
+  reasoning repeats word for word is shown at the last place the reminder
+  shows it, so a revised draft keeps all of its parts; where an earlier copy
+  was, a short marker says it is repeated below. A second cut-off in a row
+  doesn't hand back again what the first one gave, which is still in the
+  conversation: a marker says it was handed back above. Code inside fences
+  always comes back as written.
+- **Reminders no longer count as the person's turns** for micro-compaction,
+  which keeps the tool results of the last three turns: a few act reminders
+  in a row had pushed the person's current turn out, and its file reads
+  were cleared just as the model was told to act on them.
 - **What it costs.** A turn with no such reply: nothing. When it fires, the
   reasoning handed back stays in the conversation until compaction, up to
-  about one reply cap of tokens per reminder (at most three in a row), sent
-  again with each later request, where re-deriving it cost as many output
-  tokens and minutes of generation.
+  about one reply cap of tokens per reminder (three in a row for cut-off or
+  empty replies, two more for the thinking time limit), sent again with each
+  later request, where re-deriving it cost as many output tokens and minutes
+  of generation.
 - **Measured by** `scripts/act-after-cutoff.py`: for each handback in a run's
   stream, whether the next reply acted, answered, or reasoned to the limit
   again, whether the saved file was read, and how much came back. Task

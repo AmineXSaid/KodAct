@@ -1807,12 +1807,32 @@ async fn a_reply_that_was_all_reasoning_gets_it_back_where_it_is_not_kept() {
                 assert!(!asked.contains(middle), "{case}: the middle is not in the reminder");
                 assert!(h.transcript_text().contains(&format!(r#""reasoning_chars":{kept}"#)), "{case}");
                 // Nothing is lost: the whole of it is in a file the reminder names.
-                assert_eq!(std::fs::read_to_string(&saved).unwrap(), long, "{case}: saved whole");
+                let file = std::fs::read_to_string(&saved).unwrap();
+                assert_eq!(file.replace('\n', ""), long, "{case}: saved whole, long lines wrapped for Read");
                 assert!(asked.contains(&format!("is saved at {}", saved.display())), "{case}: {asked}");
                 assert!(h.transcript_text().contains(r#""saved":"#), "{case}: the event says where");
             }
         }
     }
+
+    // Text the context estimate counts at more than a byte a character (Chinese: three) is
+    // measured the same way: at 50,000 tokens the 100k window gets 32,000 bytes of it, and still
+    // no summary comes between.
+    let cjk = format!("开始推理。{}最后一步。", "继续推理这一步。".repeat(5_000));
+    let h = Harness::new(vec![
+        MockTurn::blocks(vec![thought(&cjk)], StopReason::MaxTokens).with_usage(usage(50_000)),
+        MockTurn::text("wrote render.c"),
+    ])
+    .spilling();
+    h.provider.set_resends_reasoning(false);
+    let cfg = EngineConfig { model: "handback-small-window".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("write render.c")).await;
+    let reqs = h.provider.requests();
+    assert_eq!(r.result.as_deref(), Some("wrote render.c"));
+    assert!(reqs[1].tool_choice.is_none() && !h.transcript_text().contains("compact_boundary"));
+    let asked = last_user_text(&reqs[1]);
+    assert!(asked.contains("开始推理。") && asked.contains("最后一步。") && asked.len() < 34_000, "{}", asked.len());
 
     // A repeated paragraph comes back once, at its last place, and leaves a marker where it was.
     let found = "The table at offset 0x40 holds the settings: grid size, scale and the step count.";
