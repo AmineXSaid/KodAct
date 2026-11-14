@@ -546,9 +546,15 @@ impl Tool for KillShell {
         let id = str_arg(&input, "shell_id");
         match ctx.shells.get(id) {
             Some(sh) => {
+                // Only a command that was still running was cut short.
+                let running = sh.status() == crate::shells::ShellStatus::Running;
                 sh.kill();
                 sh.mark_reported();
-                ToolOutput::text(format!("Successfully killed shell: {id} ({})", sh.command))
+                let note = running.then(|| super::exit_hints::stopped_package_manager(&sh.command)).flatten();
+                ToolOutput::text(match note {
+                    Some(n) => format!("Successfully killed shell: {id} ({})\n\n{n}", sh.command),
+                    None => format!("Successfully killed shell: {id} ({})", sh.command),
+                })
             }
             None => ToolOutput::error(format!("No shell found with ID: {id}")),
         }

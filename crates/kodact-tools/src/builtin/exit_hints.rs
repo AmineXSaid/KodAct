@@ -78,6 +78,76 @@ pub fn explain(code: Option<i32>, text: &str, found: impl Fn(&str) -> bool) -> O
     }
 }
 
+/// A package manager stopped while it was changing the system: what it may have left behind and
+/// the command that repairs it. `None` for anything else, and for runs that only read
+/// (`apt-get update`, `apt list`, `dnf search`). Said when KodAct itself stops such a command:
+/// a half-configured package database fails every later install, on the person's own machine
+/// too, until it is repaired by hand.
+pub fn stopped_package_manager(command: &str) -> Option<String> {
+    const CHANGES: &[&str] = &[
+        "install",
+        "reinstall",
+        "remove",
+        "purge",
+        "autoremove",
+        "upgrade",
+        "dist-upgrade",
+        "full-upgrade",
+        "update",
+        "add",
+        "del",
+        "erase",
+        "downgrade",
+        "groupinstall",
+        "build-dep",
+    ];
+    for part in kodact_permissions::split_compound(command) {
+        let mut words = part.split_whitespace().peekable();
+        // `sudo`, `env`, `VAR=value`, `timeout 600`, `nohup`, `time`, `nice` in front.
+        while let Some(w) = words.peek() {
+            let wrapper = matches!(*w, "sudo" | "env" | "nohup" | "time" | "nice" | "command" | "exec" | "timeout");
+            let number = w.chars().all(|c| c.is_ascii_digit() || c == '.');
+            if wrapper || number || w.contains('=') || w.starts_with('-') {
+                words.next();
+            } else {
+                break;
+            }
+        }
+        let Some(prog) = words.next().map(|w| w.rsplit('/').next().unwrap_or(w)) else { continue };
+        let args: Vec<&str> = words.collect();
+        let sub = args.iter().find(|a| !a.starts_with('-')).copied().unwrap_or("");
+        let changes = CHANGES.contains(&sub);
+        let (what, repair) = match prog {
+            // `apt-get update` only refreshes the package lists: nothing to repair.
+            "apt-get" | "apt" | "aptitude" if changes && sub != "update" => {
+                ("apt", "run `dpkg --configure -a`, then `apt-get install -f`")
+            }
+            "dpkg"
+                if args.iter().any(|a| {
+                    matches!(*a, "-i" | "--install" | "--configure" | "-r" | "--remove" | "-P" | "--purge" | "--unpack")
+                }) =>
+            {
+                ("dpkg", "run `dpkg --configure -a`")
+            }
+            "apk" if (changes && sub != "update") || sub == "fix" => ("apk", "run `apk fix`"),
+            "pacman" if args.iter().any(|a| a.starts_with("-S") || a.starts_with("-R") || a.starts_with("-U")) => {
+                ("pacman", "remove the stale lock `/var/lib/pacman/db.lck` if no pacman is running, then run it again")
+            }
+            "dnf" | "yum" | "zypper" | "microdnf" if changes => (
+                "the package manager",
+                "run the same command again and read what it reports before relying on what is installed",
+            ),
+            _ => continue,
+        };
+        return Some(format!(
+            "It was stopped while {what} was installing or removing packages, which can leave the package database \
+             half-updated so that later installs fail (for anyone using this machine, not only this session). \
+             Before anything else, {repair}."
+        ));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +181,40 @@ mod tests {
         assert_eq!(explain(Some(1), "assertion failed", none), None);
         assert_eq!(explain(Some(2), "bash: xxd: command not found", none), None);
         assert!(explain(Some(127), "bash: xxd: command not found", |p| p == "od").unwrap().contains("od"));
+    }
+
+    #[test]
+    fn a_stopped_package_manager_names_its_repair() {
+        for (cmd, repair) in [
+            ("apt-get install -y gcc g++ make", "dpkg --configure -a"),
+            (
+                "apt-get update -qq 2>&1 | tail -2 && apt-get install -y -qq gcc 2>&1 | tail -5; command -v gcc",
+                "dpkg --configure -a",
+            ),
+            ("sudo DEBIAN_FRONTEND=noninteractive apt install -y curl", "dpkg --configure -a"),
+            ("timeout 600 apt-get -y dist-upgrade", "dpkg --configure -a"),
+            ("dpkg -i ./tool.deb", "dpkg --configure -a"),
+            ("apk add --no-cache build-base", "apk fix"),
+            ("pacman -Syu --noconfirm", "db.lck"),
+            ("dnf install -y gcc", "run the same command again"),
+        ] {
+            let note = stopped_package_manager(cmd).unwrap_or_else(|| panic!("a note for: {cmd}"));
+            assert!(note.contains(repair) && note.contains("half-updated"), "{cmd}: {note}");
+        }
+        for quiet in [
+            "apt-get update",
+            "apt list --installed",
+            "apk update",
+            "apt-cache search gcc",
+            "dpkg -l | grep gcc",
+            "dnf search gcc",
+            "python3 -m http.server 8000",
+            "npm install",
+            "pip install numpy",
+            "echo apt-get install gcc",
+            "sleep 20",
+        ] {
+            assert_eq!(stopped_package_manager(quiet), None, "nothing to repair after: {quiet}");
+        }
     }
 }

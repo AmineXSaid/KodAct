@@ -2,6 +2,21 @@
 
 ## 0.1.0 (unreleased)
 
+### Stopping a package manager mid-install is said, with the repair
+- **KillShell on `apt-get install` names what it may have broken**: a
+  package install that ran past its wait moves to the background, and a model
+  that then stopped it left dpkg half-configured: every later `apt-get
+  install` fails with "dpkg was interrupted", on the person's own machine too,
+  until it is repaired by hand. When KodAct stops a command that was installing
+  or removing packages (apt, dpkg, apk, pacman, dnf, yum, zypper), the result
+  now says so and gives the repair (`dpkg --configure -a`, `apk fix`, the stale
+  pacman lock). A command that only reads (`apt-get update`, `apt list`), one
+  that had already ended, and any other command get nothing added.
+- `evals/harbor/report.py`: a trial whose tests could not start because dpkg
+  was left interrupted is `left dpkg interrupted` (the agent's failure, still
+  a valid trial), no longer a "false success"; tests whose own tools were
+  missing (`uvx: command not found`) are a verifier error.
+
 ### The result no longer says a check passed
 - **`verification.status` is gone from the result** (`passed`, `failed`,
   `unchecked`, `read_back`, `no_changes`, with `command` and `files`). In

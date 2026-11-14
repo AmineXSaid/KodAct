@@ -151,6 +151,32 @@ def test_a_wrong_answer_beside_a_network_failure_stays_the_agents(tmp_path):
     assert t.verdict == "false success"
 
 
+# pytorch-model-cli (a889576): the agent stopped `apt-get install` mid-run, the tests' own
+# `apt-get install curl` then refused to run, and no test started. Reward 0 was read as a false
+# success; it is a failure with its own cause, and still a valid trial.
+DPKG_INTERRUPTED = """\
+Hit:1 http://deb.debian.org/debian bookworm InRelease
+Reading package lists...
+E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem.
+/tests/test.sh: line 8: curl: command not found
+/tests/test.sh: line 9: /root/.local/bin/env: No such file or directory
+/tests/test.sh: line 18: uvx: command not found
+"""
+
+
+def test_tests_that_could_not_start_after_an_interrupted_dpkg_are_the_agents_failure(tmp_path):
+    t = make_trial(tmp_path, "pytorch-model-cli", "0", DPKG_INTERRUPTED, ran_tests=None)
+    assert t.verdict == "left dpkg interrupted"
+    assert t.verifier_infra is False
+    assert not t.verdict.startswith(("api error", "verifier error")), "it counts as a valid trial"
+
+
+def test_test_tools_that_were_not_there_are_a_verifier_error(tmp_path):
+    stdout = "Reading package lists...\n/tests/test.sh: line 18: uvx: command not found\n"
+    t = make_trial(tmp_path, "pytorch-model-cli", "0", stdout, ran_tests=None)
+    assert t.verdict == "verifier error"
+
+
 def test_verifier_timeout_is_verifier_error(tmp_path):
     # The tests ran out of time (e.g. downloading Torch through a slow proxy) and wrote no reward:
     # nothing about the agent was measured.

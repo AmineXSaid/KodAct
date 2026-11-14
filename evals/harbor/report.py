@@ -74,6 +74,14 @@ VERIFIER_INFRA = re.compile(
 # valgrind in the agent's own run once the limit was lowered).
 VERIFIER_ENV = re.compile(r"Valgrind: FATAL: Private file creation failed")
 
+# The tests never started because the container's package database was left half-configured:
+# their own `apt-get install` refuses to run. That is the agent's doing (it stopped a package
+# manager mid-install), so the trial counts, as a failure with its real cause named.
+BROKEN_PACKAGES = re.compile(r"dpkg was interrupted, you must manually run")
+# The test script's own tools were not there to run (`/tests/test.sh: line 18: uvx: command not
+# found`): nothing was judged.
+VERIFIER_TOOLS = re.compile(r"(?m)^/tests/\S+: line \d+: \S+: (command not found|No such file or directory)")
+
 REFUSAL = re.compile(r"(?i)\b(i can.?t help with|i cannot help with|i can.?t assist|i won.?t (help|assist)|against (my|the) polic)")
 GIVE_UP = re.compile(
     r"(?i)(i.?m sorry|unfortunately|not (realistic|feasible|possible|practical)|can.?t (reliably|realistically)|"
@@ -354,10 +362,14 @@ class Trial:
         # a network failure, and none is an assertion about the agent's output.
         errors = [failure_text(t) for t in tests if t.get("status") not in ("passed", "skipped")]
         failed_fetching = bool(errors) and all(VERIFIER_INFRA.search(e) and "AssertionError" not in e for e in errors)
+        self.broken_packages = bool((self.reward or 0) < 1 and not tests_ran and BROKEN_PACKAGES.search(stdout))
         self.verifier_infra = bool(
             (self.reward or 0) < 1
+            and not self.broken_packages
             and (
-                (not tests_ran and VERIFIER_INFRA.search(stdout)) or failed_fetching or VERIFIER_ENV.search(stdout)
+                (not tests_ran and (VERIFIER_INFRA.search(stdout) or VERIFIER_TOOLS.search(stdout)))
+                or failed_fetching
+                or VERIFIER_ENV.search(stdout)
             )
         )
         return {"summary": res.get("summary") or {}, "failed": failed, "stdout_tail": stdout.splitlines()[-VERIFIER_LINES:]}
@@ -372,6 +384,10 @@ class Trial:
             return "timeout"
         if api_error:
             return "api error before any work" if not self.turns else "api error"
+        if getattr(self, "broken_packages", False):
+            # The agent's work was never judged, but by its own doing: it left dpkg interrupted
+            # and the tests could not install what they need. A failure, with its cause.
+            return "left dpkg interrupted"
         if getattr(self, "verifier_infra", False) or self.exception == "VerifierTimeoutError":
             # The tests could not judge the agent's work: they failed to fetch what they need,
             # or ran out of time (often the same thing on a slow proxy). Not the agent failing.

@@ -168,7 +168,28 @@ async fn background_shell_output_and_kill() {
     assert!(!o.text_content().contains("started"), "output is only returned once");
     let k = KillShell.call(json!({"shell_id": "bash_1"}), &c).await;
     assert!(!k.is_error);
+    assert!(!k.text_content().contains("package"), "an ordinary command gets no note: {}", k.text_content());
     assert_eq!(c.shells.get("bash_1").unwrap().status(), crate::shells::ShellStatus::Killed);
+
+    // Stopping a package manager mid-run is said, with the repair: `apt-get` here is a stand-in
+    // that only sleeps, found first on PATH, so nothing is installed by the test.
+    let bin = d.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("apt-get"), "#!/bin/sh\nsleep 20\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(bin.join("apt-get"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let cmd = format!("PATH='{}':$PATH apt-get install -y gcc", bin.display());
+    let out = Bash::default().call(json!({"command": cmd, "run_in_background": true}), &c).await;
+    assert!(out.text_content().contains("bash_2"), "{}", out.text_content());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let k = KillShell.call(json!({"shell_id": "bash_2"}), &c).await;
+    assert!(k.text_content().contains("dpkg --configure -a"), "{}", k.text_content());
+    // Stopped again once it is already dead: nothing was cut short this time.
+    let k = KillShell.call(json!({"shell_id": "bash_2"}), &c).await;
+    assert!(!k.text_content().contains("dpkg"), "{}", k.text_content());
 }
 
 #[test]
