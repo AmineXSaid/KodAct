@@ -415,6 +415,16 @@ def record_run(task_var: str, meta: dict) -> str:
     )
 
 
+def model_limits_flags(model: str, extra: list[str]) -> list[str]:
+    """kodact's `--settings` giving the run's model its reply limit as `modelLimits`, from
+    KODACT_HARBOR_MAX_OUTPUT (settled by max-output.sh). None when there is no limit, no model,
+    or the flags given already carry their own `--settings`."""
+    limit = os.environ.get("KODACT_HARBOR_MAX_OUTPUT", "").strip()
+    if not limit or not model or "--settings" in extra:
+        return []
+    return ["--settings", json.dumps({"modelLimits": {model: {"maxOutputTokens": int(limit)}}})]
+
+
 def settings(env: dict) -> dict:
     """The settings passed to the agent, with the values of keys and tokens left out."""
     return {k: ("<set>" if any(s in k.upper() for s in SECRET) else v) for k, v in sorted(env.items()) if not k.endswith("_TASK")}
@@ -490,6 +500,7 @@ class KodAct(BaseInstalledAgent):
         limit = task_time_limit()
         if limit and "--max-time" not in extra:
             flags += ["--max-time", str(max(60, int(limit) - TIME_MARGIN))]
+        flags += model_limits_flags(model, extra)
         flags += extra
         meta = {
             "harness": "kodact",

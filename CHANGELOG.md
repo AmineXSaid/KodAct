@@ -2,6 +2,17 @@
 
 ## 0.1.0 (unreleased)
 
+### Harbor: deep-thinking runs give the model a 65,536-token reply limit
+- **`KODACT_HARBOR_MAX_OUTPUT`** gives the run's model a reply limit, passed
+  to `kodact` as `modelLimits` through `--settings`, and the job name gets
+  `-maxout<N>`. It defaults to 65,536 for `deep-thinking`: that alias is
+  served by vLLM, which bounds a reply only by its window and states no
+  reply limit, so KodAct kept its 32,000 default and cut a reply that was
+  still reasoning at 32,000 (three times in the run of 2026-11-15). Other
+  models get none unless it is set; `0` gives none; a `--settings` of the
+  person's own in `KODACT_HARBOR_ARGS` wins (`max-output.sh`).
+- Nothing changes in KodAct itself: this is the Terminal-Bench runner.
+
 ### A model's reply limit is learned from its endpoint
 - **A refusal that names the limit is learned.** An endpoint that caps
   replies below KodAct's 32,000-token default refused every request, and the

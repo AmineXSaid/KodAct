@@ -14,6 +14,9 @@
 #   KODACT_HARBOR_PROBE    0 skips asking the endpoint which model it serves and its window
 #   KODACT_HARBOR_AUTONOMOUS  0 runs kodact without --autonomous (job name gets -noauto)
 #   KODACT_HARBOR_TIME_LIMIT  seconds for --max-time (default: the task's own limit)
+#   KODACT_HARBOR_MAX_OUTPUT  the run's model's reply limit, given to kodact as modelLimits
+#                         (default 65536 for deep-thinking, none for other models; 0: none)
+#                         (job name gets -maxout<N>)
 #   KODACT_HARBOR_CA_BUNDLE   extra CAs to trust in containers (job name gets -hostca)
 #   KODACT_HARBOR_HF_ENDPOINT the Hugging Face Hub address for the agent and the tests. Unset:
 #                         hf-mirror.com only where this machine's proxy blocks huggingface.co
@@ -72,6 +75,7 @@ dirty=""
 git diff --quiet HEAD -- crates Cargo.toml Cargo.lock || dirty="-dirty"
 . "$repo/evals/harbor/hf-endpoint.sh"  # which Hugging Face Hub: before the job name, which says it
 . "$repo/evals/harbor/caches.sh"  # the caches made on this machine, when their folders exist
+. "$repo/evals/harbor/max-output.sh"  # the model's reply limit, before the job name, which says it
 # Runs with extra trusted CAs change the task environment: label them, they're for local comparisons.
 ca=""
 [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
@@ -79,6 +83,7 @@ ca=""
 [ -n "${KODACT_HARBOR_PIP_CACHE:-}" ] && ca="${ca}-pipcache"
 [ -n "${KODACT_HARBOR_APT_CACHE:-}" ] && ca="${ca}-aptcache"
 [ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ] && ca="${ca}-hfmirror"
+[ -n "${KODACT_HARBOR_MAX_OUTPUT:-}" ] && ca="${ca}-maxout${KODACT_HARBOR_MAX_OUTPUT}"
 [ -n "${KODACT_NUDGES:-}" ] && ca="${ca}-n-$(printf '%s' "$KODACT_NUDGES" | tr -c 'A-Za-z0-9' '.')"
 [ -n "${KODACT_HARBOR_ARGS:-}" ] && ca="${ca}-args-$(printf '%s' "$KODACT_HARBOR_ARGS" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-40)"
 case "${KODACT_HARBOR_AUTONOMOUS:-1}" in 0|false|no|off) ca="${ca}-noauto" ;; esac
