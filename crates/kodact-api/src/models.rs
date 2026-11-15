@@ -299,11 +299,24 @@ pub fn configure_limits(id: &str, l: Limits) {
     limit_map().write().unwrap().insert(id.to_string(), (l, LimitsSource::Configured));
 }
 
-/// Record a context window the endpoint reports for `id`, unless the user set one.
+/// Record limits the endpoint states for `id` (its model list, LiteLLM's `/model/info`, a
+/// refusal), unless the user set them. Each limit it states replaces the one recorded before;
+/// one it doesn't state keeps it, so a reply limit learned from a refusal outlives a later
+/// listing that gives only the window.
 pub fn listed_limits(id: &str, l: Limits) {
     let mut m = limit_map().write().unwrap();
-    if !matches!(m.get(id), Some((_, LimitsSource::Configured))) {
-        m.insert(id.to_string(), (l, LimitsSource::Listed));
+    match m.get(id) {
+        Some((_, LimitsSource::Configured)) => {}
+        Some((old, _)) => {
+            let merged = Limits {
+                context_window: l.context_window.or(old.context_window),
+                max_output: l.max_output.or(old.max_output),
+            };
+            m.insert(id.to_string(), (merged, LimitsSource::Listed));
+        }
+        None => {
+            m.insert(id.to_string(), (l, LimitsSource::Listed));
+        }
     }
 }
 
@@ -312,22 +325,40 @@ pub fn listed_limits(id: &str, l: Limits) {
 /// and the guess, never over `modelLimits`. True when it changes the window KodAct uses.
 pub fn reported_window(id: &str, window: u64) -> bool {
     let before = model_info_or_default(id).context_window;
-    let max_output = limit_map().read().unwrap().get(id).and_then(|(l, _)| l.max_output);
-    listed_limits(id, Limits { context_window: Some(window), max_output });
+    listed_limits(id, Limits { context_window: Some(window), max_output: None });
     model_info_or_default(id).context_window != before
 }
 
-/// Nothing about `id` itself gives its window yet: it is in no table, the user set no
-/// limits for it, and its endpoint has listed none. Until the endpoint's model list says
-/// otherwise, its window is `KODACT_CONTEXT_WINDOW` or the 1,000,000-token guess.
-pub fn window_unknown(id: &str) -> bool {
-    model_info(id).is_none() && !limit_map().read().unwrap().contains_key(id)
+/// The most output tokens `id`'s endpoint said a request may ask for, when it refused one that
+/// asked for more. Like a listed limit it wins over the table and the guess, never over
+/// `modelLimits`. True when it changes the limit KodAct uses.
+pub fn reported_max_output(id: &str, max_output: u32) -> bool {
+    let before = model_info_or_default(id).max_output;
+    listed_limits(id, Limits { context_window: None, max_output: Some(max_output) });
+    model_info_or_default(id).max_output != before
 }
 
-/// Where `id`'s limits come from.
+/// The reply limit someone stated for `id`: the user (`modelLimits`), or its endpoint (its model
+/// list, LiteLLM's `/model/info`, a refusal). `None` when only the built-in table or KodAct's
+/// guess gives one.
+pub fn stated_max_output(id: &str) -> Option<u32> {
+    limit_map().read().unwrap().get(id).and_then(|(l, _)| l.max_output)
+}
+
+/// Nothing about `id` itself gives its window yet: it is in no table, the user set no
+/// window for it, and its endpoint has stated none. Until the endpoint's model list says
+/// otherwise, its window is `KODACT_CONTEXT_WINDOW` or the 1,000,000-token guess. A reply limit
+/// alone doesn't count: it says nothing about the window.
+pub fn window_unknown(id: &str) -> bool {
+    model_info(id).is_none() && !limit_map().read().unwrap().get(id).is_some_and(|(l, _)| l.context_window.is_some())
+}
+
+/// Where `id`'s window comes from.
 pub fn limits_source(id: &str) -> LimitsSource {
-    if let Some((_, src)) = limit_map().read().unwrap().get(id) {
-        return *src;
+    if let Some((l, src)) = limit_map().read().unwrap().get(id) {
+        if l.context_window.is_some() {
+            return *src;
+        }
     }
     if model_info(id).is_some() {
         LimitsSource::Known
@@ -393,6 +424,29 @@ fn base_info(id: &str) -> ModelInfo {
 mod tests {
     use super::*;
     use kodact_types::Usage;
+
+    #[test]
+    fn a_stated_reply_limit_is_kept_apart_from_the_window() {
+        // Learned from a refusal: it replaces the guess, and the window stays unknown.
+        let id = "test-reply-limit-refused";
+        assert_eq!(stated_max_output(id), None);
+        assert!(reported_max_output(id, 8_192));
+        assert_eq!((model_info_or_default(id).max_output, stated_max_output(id)), (8_192, Some(8_192)));
+        assert!(window_unknown(id) && limits_source(id) == LimitsSource::Guessed);
+        assert!(!reported_max_output(id, 8_192), "nothing new");
+        // A later listing that gives only the window keeps it.
+        listed_limits(id, Limits { context_window: Some(524_288), max_output: None });
+        let info = model_info_or_default(id);
+        assert_eq!((info.context_window, info.max_output), (524_288, 8_192));
+        assert!(!window_unknown(id) && limits_source(id) == LimitsSource::Listed);
+        // A model in the table, or one nothing is known about, has no stated limit.
+        assert_eq!(stated_max_output("claude-haiku-4-5"), None);
+        assert_eq!(stated_max_output("test-reply-limit-nothing"), None);
+        // modelLimits wins over a refusal.
+        configure_limits("test-reply-limit-configured", Limits { context_window: None, max_output: Some(65_536) });
+        assert!(!reported_max_output("test-reply-limit-configured", 8_192));
+        assert_eq!(stated_max_output("test-reply-limit-configured"), Some(65_536));
+    }
 
     #[test]
     fn configured_limits_win_over_listed_and_defaults() {

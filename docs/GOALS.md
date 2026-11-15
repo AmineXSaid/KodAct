@@ -84,7 +84,12 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - a window the endpoint states anywhere is learned: its model list,
     LiteLLM's `/model/info`, or a refusal for length ("maximum context length
     is N tokens"), after which the request goes again sized to fit, instead of
-    compacting on a guessed window.
+    compacting on a guessed window;
+  - each model's own reply limit: `modelLimits`, then what its endpoint states
+    (its model list, LiteLLM's `/model/info`, or a refusal that names the
+    limit, after which the request goes again asking no more), is the cap of
+    every request, above the 32,000 default too; `KODACT_MAX_OUTPUT_TOKENS`
+    still wins (`evals/context-window/`, cases `max-output-*`).
 - **Measured by:** pass rate and cost on long tasks, and context tokens per
   turn (task `log-needle`); after a reasoning handback, the share of next
   replies that act instead of reasoning to the limit again

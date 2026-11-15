@@ -553,12 +553,24 @@ clears the same-result counts, so re-reading after one isn't called a loop.
 - Where the provider doesn't send reasoning back (chat completions, except to
   Gemini), the model no longer has that reply's reasoning in the next request,
   so "act on what you have" would ask for what it lost. There the reminder
-  carries the reasoning: whole up to 8,000 characters, otherwise its first
-  2,000 and its last 6,000 (how it began and where it stopped). The event's
-  `reasoning_chars` says how much it carried (0 where reasoning is sent back).
-- After the first `max_tokens` stop, the turn's output cap rises to 64,000
-  (bounded by the model), unless the user set `KODACT_MAX_OUTPUT_TOKENS`, and
-  `system/output_limit` is emitted.
+  carries the reasoning (`handback.rs`): as many bytes as half the room left
+  before compaction, at least a quarter of the reply cap and 8,000 bytes, but
+  never more than that room holds. What fits comes back whole; otherwise its
+  start and its end, cut at line starts, and the whole reasoning is saved in
+  the session's spill directory, named in the reminder. A paragraph repeated
+  word for word is shown once, at its last place, and one an earlier reminder
+  gave is marked; fenced code comes back as written. The event's
+  `reasoning_chars` says how much it carried (0 where reasoning is sent back)
+  and `saved` where the whole went.
+- The output cap is the model's reply limit where `modelLimits` or the
+  endpoint states one (its model list, LiteLLM's `/model/info`, or a refusal
+  naming it, which is learned with `system/output_limit_learned` and the
+  request sent again), otherwise 32,000; `KODACT_MAX_OUTPUT_TOKENS` wins over
+  both.
+- After the first `max_tokens` stop that cut off text or a tool call, the
+  turn's output cap rises to 64,000 (bounded by the model) when it was lower,
+  unless the user set `KODACT_MAX_OUTPUT_TOKENS`, and `system/output_limit` is
+  emitted.
 
 Tests:
 - `builtin::edit_failures_point_at_the_nearest_text`;
@@ -570,6 +582,8 @@ Tests:
 - `engine::a_reply_cut_off_while_reasoning_is_asked_to_act`;
 - `engine::an_empty_reply_is_asked_to_act_instead_of_ending_the_turn`;
 - `engine::a_reply_that_was_all_reasoning_gets_it_back_where_it_is_not_kept`;
+- `engine::the_reply_limit_is_learned_from_the_endpoint`,
+  `outage_tests::a_refusal_of_the_reply_length_gives_the_output_limit`;
 - `accumulate::invalid_tool_json_is_marked_truncated`.
 
 ### C14. Dangerous commands and injected instructions

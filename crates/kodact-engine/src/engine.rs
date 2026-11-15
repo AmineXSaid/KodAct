@@ -268,8 +268,9 @@ pub struct EngineConfig {
     /// what the turn left. Not for a session with a person or a host at the other end, where
     /// stopping to ask is right.
     pub one_shot: bool,
-    /// After a `max_tokens` stop, raise the output cap to [`ESCALATED_OUTPUT_TOKENS`]
-    /// for the rest of the turn (off when the user set the cap).
+    /// The reply cap is KodAct's to choose: the user didn't set one (`KODACT_MAX_OUTPUT_TOKENS`).
+    /// It then follows a reply limit stated for the model (by `modelLimits` or the endpoint),
+    /// and after a `max_tokens` stop rises to [`ESCALATED_OUTPUT_TOKENS`] for the rest of the turn.
     pub escalate_output: bool,
     /// Start in fast mode (`fastMode` setting).
     pub fast: bool,
@@ -1083,10 +1084,23 @@ impl Engine {
     /// the model's own (its limits, `modelLimits`, `KODACT_CONTEXT_WINDOW`, what the endpoint
     /// reports), never the `--autocompact` window, which may be set lower to compact early.
     fn reply_budget(&self, model: &str) -> u32 {
-        let cap = self.output_cap.unwrap_or(self.cfg.max_output_tokens);
+        let cap = self.output_cap.unwrap_or_else(|| self.base_output_cap(model));
         let window = kodact_api::models::model_info_or_default(model).context_window;
         let fitted = fit_reply(cap, window, self.projected_context_tokens());
         self.reply_shrink.map_or(fitted, |s| fitted.min(s))
+    }
+
+    /// The reply cap before any raise for the turn. The user's (`KODACT_MAX_OUTPUT_TOKENS`) when
+    /// set; otherwise the model's own reply limit where the user (`modelLimits`) or its endpoint
+    /// (its model list, LiteLLM's `/model/info`, a refusal) stated one; otherwise the default.
+    /// The default is a guess for a model nothing says anything about, and the table's models
+    /// keep it, as the reference CLI does. A stated limit is the model's word: below the default
+    /// every request would be refused, above it a reply was cut off for nothing.
+    fn base_output_cap(&self, model: &str) -> u32 {
+        match kodact_api::models::stated_max_output(model) {
+            Some(n) if self.cfg.escalate_output => n,
+            _ => self.cfg.max_output_tokens,
+        }
     }
 
     /// The window compaction is measured against, for `model`.
@@ -2095,6 +2109,24 @@ impl Engine {
         reported.prompt.is_none_or(|p| p.saturating_add(u64::from(MIN_REPLY)) <= window)
     }
 
+    /// A refusal that states the most output a request to `model` may ask for: use it from now
+    /// on, for every request (the endpoint's word, like its model list). True when the request
+    /// asked for more than that, so it is worth sending again, sized to it. Seen on endpoints that
+    /// cap replies below KodAct's default: every request was refused and the session ended there.
+    fn learn_output_limit(&mut self, model: &str, e: &ApiError, sent: u32) -> bool {
+        let Some(limit) = e.reported_max_output() else { return false };
+        if limit >= sent || !kodact_api::models::reported_max_output(model, limit) {
+            return false;
+        }
+        self.output_cap = self.output_cap.map(|c| c.min(limit));
+        self.system_event("output_limit_learned", json!({"model": model, "max_output": limit, "asked": sent}));
+        self.notice(
+            NoticeLevel::Warning,
+            format!("{model}'s endpoint allows at most {limit} output tokens a reply: using that from now on."),
+        );
+        true
+    }
+
     /// A summary asks for the lowest reasoning level. Summarizing is reading and writing down, not
     /// solving; at full depth a reasoning model could spend the whole budget thinking and return
     /// no summary (on a 100,000-token model, 2026-11-10: two summaries in a row of 32,000 tokens
@@ -2785,6 +2817,8 @@ impl Engine {
         let mut compacted_len: Option<usize> = None;
         // A refusal that gave the model's real window: sent again once, sized to it.
         let mut learned_window = false;
+        // A refusal that gave the model's reply limit: sent again once, asking no more than that.
+        let mut learned_output = false;
         let mut reply_shrinks = 0u32;
         // Replies the thinking time-box stopped in a row.
         let mut time_boxes = 0u32;
@@ -2940,6 +2974,10 @@ impl Engine {
                         Some("interrupted".into()),
                         None,
                     );
+                }
+                StreamOutcome::Failed(e) if !learned_output && self.learn_output_limit(&model, &e, sent) => {
+                    learned_output = true;
+                    continue;
                 }
                 StreamOutcome::Failed(e) if !learned_window && self.learn_from_refusal(&model, &e, true) => {
                     learned_window = true;
@@ -3168,16 +3206,11 @@ impl Engine {
                 // on a 100,000-token reasoning model, 2026-11-10: three replies of 32,000 tokens of
                 // reasoning each, minutes apiece, in a 30-minute run).
                 let cut_output = reply_has_text || !tool_uses.is_empty();
-                if self.cfg.escalate_output
-                    && cut_output
-                    && self.output_cap.is_none()
-                    && self.cfg.max_output_tokens < ESCALATED_OUTPUT_TOKENS
+                let base = self.base_output_cap(&model);
+                if self.cfg.escalate_output && cut_output && self.output_cap.is_none() && base < ESCALATED_OUTPUT_TOKENS
                 {
                     self.output_cap = Some(ESCALATED_OUTPUT_TOKENS);
-                    self.system_event(
-                        "output_limit",
-                        json!({"from": self.cfg.max_output_tokens, "to": ESCALATED_OUTPUT_TOKENS}),
-                    );
+                    self.system_event("output_limit", json!({"from": base, "to": ESCALATED_OUTPUT_TOKENS}));
                 }
                 if tool_uses.is_empty() && reply_has_text && continuations < MAX_CONTINUATIONS {
                     continuations += 1;
@@ -3771,7 +3804,7 @@ impl Engine {
     /// spill directory, under a name no other writer can take.
     fn reasoning_notes(&self, what: &str, model: &str, reasoning: &str) -> Handback {
         let info = kodact_api::models::model_info_or_default(model);
-        let cap = u64::from(self.output_cap.unwrap_or(self.cfg.max_output_tokens).min(info.max_output));
+        let cap = u64::from(self.output_cap.unwrap_or_else(|| self.base_output_cap(model)).min(info.max_output));
         let room = self.autocompact_at(model).saturating_sub(self.projected_context_tokens());
         let above = handback::handed_back(&self.state.messages);
         handback::notes(what, reasoning, &above, handback::budget_bytes(cap, room), |whole| {

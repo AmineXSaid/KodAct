@@ -329,6 +329,42 @@ impl ApiError {
     }
 }
 
+impl ApiError {
+    /// The most output tokens a request may ask for, when a refusal of one that asked for more
+    /// states it: OpenAI's "this model supports at most N completion tokens", the Messages API's
+    /// "max_tokens: M > N, which is the maximum allowed number of output tokens", DeepSeek's "the
+    /// valid range of max_tokens is [1, N]", Groq's "`max_tokens` must be less than or equal to
+    /// `N`". Gateways such as LiteLLM pass these words on. `None` for anything else, a refusal
+    /// that states the window (vLLM's "cannot be greater than max_model_len") included.
+    pub fn reported_max_output(&self) -> Option<u32> {
+        let m = match self {
+            ApiError::Http { status: 400 | 413 | 422, message, .. } | ApiError::Stream { message, .. } => {
+                message.to_ascii_lowercase()
+            }
+            _ => return None,
+        };
+        // Only a refusal about the reply's length.
+        let about_reply =
+            ["max_tokens", "max_completion_tokens", "max_new_tokens", "output tokens", "completion tokens"];
+        if !about_reply.iter().any(|k| m.contains(k)) {
+            return None;
+        }
+        [
+            ("supports at most ", "completion token"),
+            ("supports at most ", "output token"),
+            // The number reader takes the comma after it for a thousands separator.
+            (" > ", "which is the maximum allowed number of output tokens"),
+            ("valid range of max_tokens is [1, ", "]"),
+            ("must be less than or equal to `", "`"),
+            ("must be less than or equal to ", ""),
+        ]
+        .iter()
+        .find_map(|(before, after)| number_between(&m, before, after))
+        .filter(|n| (64..=100_000_000).contains(n))
+        .and_then(|n| u32::try_from(n).ok())
+    }
+}
+
 /// See [`ApiError::reported_limits`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReportedLimits {
@@ -502,6 +538,38 @@ mod outage_tests {
             http(400, "maximum context length is 12 tokens").reported_limits().window,
             None,
             "not a real window"
+        );
+    }
+
+    /// The reply limit a refusal states, in each server's words; nothing from a refusal of the
+    /// window or of anything else.
+    #[test]
+    fn a_refusal_of_the_reply_length_gives_the_output_limit() {
+        let openai = "max_tokens is too large: 32000. This model supports at most 16384 completion tokens, whereas you provided 32000.";
+        assert_eq!(http(400, openai).reported_max_output(), Some(16_384));
+        let messages = "max_tokens: 64001 > 64000, which is the maximum allowed number of output tokens for claude-x";
+        assert_eq!(http(400, messages).reported_max_output(), Some(64_000));
+        let deepseek = "Invalid max_tokens value, the valid range of max_tokens is [1, 8192]";
+        assert_eq!(http(400, deepseek).reported_max_output(), Some(8_192));
+        let groq = "`max_tokens` must be less than or equal to `8192`, the maximum value for `max_tokens` is less than the `context_window` for this model";
+        assert_eq!(http(400, groq).reported_max_output(), Some(8_192));
+        let plain = "max_tokens must be less than or equal to 4096";
+        assert_eq!(http(422, plain).reported_max_output(), Some(4_096));
+        // Passed on by LiteLLM, escaped.
+        let litellm = r#"{"detail":"litellm.BadRequestError: OpenAIException - {\"error\":{\"message\":\"max_tokens is too large: 32000. This model supports at most 4096 completion tokens\"}}"}"#;
+        assert_eq!(http(400, litellm).reported_max_output(), Some(4_096));
+        // A window refusal, or anything else, gives none.
+        let vllm =
+            "max_tokens=100000000 cannot be greater than max_model_len=524288. Please request fewer output tokens.";
+        assert_eq!(http(400, vllm).reported_max_output(), None);
+        let window = "This model's maximum context length is 100000 tokens. However, you requested 32000 output tokens";
+        assert_eq!(http(400, window).reported_max_output(), None);
+        assert_eq!(http(400, "temperature must be less than or equal to 2").reported_max_output(), None);
+        assert_eq!(http(500, openai).reported_max_output(), None);
+        assert_eq!(
+            http(400, "max_tokens must be less than or equal to 2").reported_max_output(),
+            None,
+            "not a real limit"
         );
     }
 

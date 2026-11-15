@@ -138,6 +138,15 @@ case("no-refusal-large-print-prompt", "print_prompt", {"models": {"fields": {}},
 # 7. The reply limit.
 case("max-output-4096-print-prompt", "print_prompt", fields(max_model_len=W, max_output_tokens=4096), {"max_tokens_le": 4096})
 case("max-output-over-window-print-prompt", "print_prompt", fields(max_model_len=8192, max_output_tokens=100000), {"max_tokens_le": 8192})
+# A reply limit stated above the default is the cap (it used to stay at 32,000); the user's
+# KODACT_MAX_OUTPUT_TOKENS still wins. Listed in /models, or in LiteLLM's /model/info.
+case("max-output-65536-print-prompt", "print_prompt", fields(max_model_len=1_000_000, max_output_tokens=65536), {"max_tokens_eq": [65536], "exit": 0})
+case("max-output-65536-env-cap-print-prompt", "print_prompt", fields(max_model_len=1_000_000, max_output_tokens=65536), {"max_tokens_eq": [20000], "exit": 0}, env={"KODACT_MAX_OUTPUT_TOKENS": "20000"})
+case("model-info-max-output-print-prompt", "print_prompt", {"models": {"fields": {}, "model_info": {"max_input_tokens": 1000000, "max_output_tokens": 65536}}}, {"max_tokens_eq": [65536], "exit": 0})
+# An endpoint that caps replies below the default and says so when it refuses: the limit is
+# learned and the request goes again (the session used to end at the first request).
+case("max-output-refused-openai-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"max_output": 8192}}, {"max_tokens_eq": [32000, 8192], "exit": 0})
+case("max-output-refused-deepseek-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"max_output": 8192, "max_output_style": "deepseek"}}, {"max_tokens_eq": [32000, 8192], "exit": 0})
 # 8. Compaction on a small window: at ~20k, not every turn.
 case("compact-under-threshold-tui", "tui", {"models": {"fields": {"max_model_len": W}}, "chat": {"prompt_tokens": 15000}}, {"summaries": 0}, prompts=("one", "two", "three"))
 case("compact-over-threshold-tui", "tui", {"models": {"fields": {"max_model_len": W}}, "chat": {"prompt_tokens": 22000}}, {"summaries_ge": 1}, prompts=("one", "two", "three"))

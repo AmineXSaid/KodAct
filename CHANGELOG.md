@@ -2,6 +2,39 @@
 
 ## 0.1.0 (unreleased)
 
+### A model's reply limit is learned from its endpoint
+- **A refusal that names the limit is learned.** An endpoint that caps
+  replies below KodAct's 32,000-token default refused every request, and the
+  session ended at the first one ("this model supports at most 8192
+  completion tokens", "the valid range of max_tokens is [1, 8192]"). KodAct
+  now reads the limit from the refusal, in OpenAI's, the Messages API's,
+  DeepSeek's and Groq's words (also as LiteLLM passes them on), uses it for
+  every later request, and sends the refused one again
+  (`system/output_limit_learned`).
+- **A stated limit above the default is used.** A reply limit from
+  `modelLimits`, the model list (`max_output_tokens`, `max_completion_tokens`,
+  OpenRouter's `top_provider.max_completion_tokens`) or LiteLLM's
+  `/model/info` could only lower the cap: a model listed at 65,536 was still
+  cut off at 32,000, and setting `maxOutputTokens` above 32,000 did nothing.
+  It is now the cap, still fitted to the room the window has left.
+  `KODACT_MAX_OUTPUT_TOKENS` still wins; the table's models and models nothing
+  is known about keep 32,000. `/model/info` is now also read for a model
+  whose window is known but whose reply limit isn't.
+- **What it changes in real use.** Pointing KodAct at DeepSeek's own API,
+  Groq or a small hosted model no longer fails on the first request until
+  `modelLimits` is set. A gateway that states a long reply limit gets it. A
+  server that bounds replies only by its window (vLLM, as behind the
+  deep-thinking runs) states no reply limit, so nothing changes there on its
+  own; `modelLimits` now raises the cap for it, which it couldn't before.
+- **What it costs.** Nothing on a turn where the endpoint states nothing. A
+  higher stated limit lets a reply run longer before it is cut off, a reply
+  that only reasons included; the thinking time limit
+  (`nudges.thinkingTimeBox`) bounds that by time.
+- **Measured by** `evals/context-window/`, cases `max-output-*`, with the real
+  binary: the build before this passed 3 of the 7 (it asked 32,000 where
+  65,536 was listed, and ended with an error on both refusals); this one
+  passes all 7, and the suite's 62 cases.
+
 ### A reply cut off while reasoning gets its reasoning back, sized to the window
 - **The handback comes from the model's limits.** Where reasoning isn't sent
   back (chat completions), a reply cut off at the reply cap, stopped by the

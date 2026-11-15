@@ -852,15 +852,19 @@ pub fn listed_limits(entry: &Value) -> crate::models::Limits {
 }
 
 /// Record the limits LiteLLM's `/model/info` gives each model (`model_name`, with
-/// `model_info.max_input_tokens` and `max_output_tokens`), for models without a window yet.
-/// True when the page held at least one model.
+/// `model_info.max_input_tokens` and `max_output_tokens`): the window for models without one
+/// yet, the reply limit whenever it states one. True when the page held at least one model.
 pub fn record_model_info(body: &Value) -> bool {
     let mut any = false;
     for m in body["data"].as_array().into_iter().flatten() {
         let Some(id) = m["model_name"].as_str() else { continue };
         any = true;
         let l = listed_limits(m);
-        if l.context_window.is_some() && crate::models::window_unknown(id) {
+        let l = crate::models::Limits {
+            context_window: l.context_window.filter(|_| crate::models::window_unknown(id)),
+            max_output: l.max_output,
+        };
+        if l != crate::models::Limits::default() {
             crate::models::listed_limits(id, l);
         }
     }
@@ -915,9 +919,11 @@ impl Provider for OpenAiProvider {
             let body: Value = res.json().await.map_err(|e| ApiError::Parse(e.to_string()))?;
             record_listed_limits(&body);
             let ids = model_ids(&body);
-            // A LiteLLM gateway lists no window in /models but keeps one per model in
-            // /model/info (`model_info.max_input_tokens`): ask there when a model lacks one.
-            if ids.iter().any(|id| crate::models::window_unknown(id)) {
+            // A LiteLLM gateway lists no limits in /models but keeps them per model in
+            // /model/info (`max_input_tokens`, `max_output_tokens`): ask there when a model
+            // lacks its window or its reply limit.
+            if ids.iter().any(|id| crate::models::window_unknown(id) || crate::models::stated_max_output(id).is_none())
+            {
                 self.read_model_info().await;
             }
             Ok(ids)
@@ -1061,6 +1067,17 @@ mod tests {
         assert_eq!(w("info-large"), 1_000_000);
         assert!(crate::models::window_unknown("info-none"));
         assert!(!record_model_info(&json!({"data": [{"id": "not-model-info"}]})), "another server's page");
+        // A model whose window is known already still gets the reply limit the page states.
+        crate::models::listed_limits(
+            "info-window-known",
+            crate::models::Limits { context_window: Some(524_288), max_output: None },
+        );
+        record_model_info(
+            &json!({"data": [{"model_name": "info-window-known", "model_info": {"max_input_tokens": 1000, "max_output_tokens": 65536}}]}),
+        );
+        let info = crate::models::model_info_or_default("info-window-known");
+        assert_eq!((info.context_window, info.max_output), (524_288, 65_536));
+        assert_eq!(crate::models::stated_max_output("info-window-known"), Some(65_536));
     }
 
     use super::*;

@@ -51,6 +51,14 @@ class H(BaseHTTPRequestHandler):
         # the window less the reply asked for, plus one.
         pt = ch.get("prompt_tokens", 3000) + ch.get("per_message", 0) * len(msgs) + ch.get("real_extra", 0)
         mt = req.get("max_tokens") or req.get("max_completion_tokens") or 0
+        # A server that caps replies below what was asked, refusing in the words of the API it
+        # stands for (`max_output_style`): OpenAI's (default) or DeepSeek's.
+        if ch.get("max_output") and mt > ch["max_output"]:
+            words = {
+                "openai": f"max_tokens is too large: {mt}. This model supports at most {ch['max_output']} completion tokens, whereas you provided {mt}.",
+                "deepseek": f"Invalid max_tokens value, the valid range of max_tokens is [1, {ch['max_output']}]",
+            }[ch.get("max_output_style", "openai")]
+            return self.reply(400, json.dumps({"error": {"message": words, "type": "invalid_request_error"}}))
         if ch.get("window") and pt + mt > ch["window"]:
             stated = ch["window"] - mt + 1 if ch.get("at_least") else pt
             inner = (f"This model's maximum context length is {ch['window']} tokens. However, you requested {mt} output tokens "

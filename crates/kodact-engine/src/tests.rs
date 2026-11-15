@@ -2081,6 +2081,70 @@ fn a_reply_budget_fits_what_the_window_has_left() {
     assert_eq!(fit_reply(2_000, 100_000, 99_500), 2_000);
 }
 
+/// A model's reply limit comes from what it, or its endpoint, says. A refusal that states it is
+/// learned and the request goes again asking no more, and so does every later one (an endpoint
+/// that caps replies below the default ended every session at the first request). A limit stated
+/// above the default is used, on a large window and fitted to a small one; the user's own cap
+/// (`KODACT_MAX_OUTPUT_TOKENS`) still wins.
+#[tokio::test]
+async fn the_reply_limit_is_learned_from_the_endpoint() {
+    use kodact_api::models::{listed_limits, Limits};
+    let refused = || {
+        MockTurn::HttpError {
+        status: 400,
+        kind: "invalid_request_error".into(),
+        message: "max_tokens is too large: 32000. This model supports at most 8192 completion tokens, whereas you provided 32000.".into(),
+    }
+    };
+    let asked = |h: &Harness| h.provider.requests().iter().map(|q| q.max_tokens).collect::<Vec<u32>>();
+
+    // Refused at the default: learned, sent again, and later turns ask the learned limit.
+    let h = Harness::new(vec![refused(), MockTurn::text("one"), MockTurn::text("two")]);
+    let cfg = EngineConfig { model: "reply-limit-refused".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("first")).await.result.as_deref(), Some("one"));
+    assert_eq!(e.submit(prompt("second")).await.result.as_deref(), Some("two"));
+    assert_eq!(asked(&h), [32_000, 8_192, 8_192]);
+    assert!(h.transcript_text().contains("output_limit_learned"));
+
+    // Refused again at the learned limit: not learned twice, the error stands.
+    let h = Harness::new(vec![refused(), refused()]);
+    let cfg = EngineConfig { model: "reply-limit-refused-twice".into(), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("first")).await;
+    assert!(r.is_error, "{r:?}");
+    assert_eq!(asked(&h), [32_000, 8_192]);
+
+    // A limit the endpoint states above the default is the cap: whole on a 1M window, fitted to
+    // the room on a 100k one once the conversation has grown.
+    for (model, window, second) in
+        [("reply-limit-listed-large", 1_000_000u64, 65_536u32), ("reply-limit-listed-small", 100_000, 38_000)]
+    {
+        listed_limits(model, Limits { context_window: Some(window), max_output: Some(65_536) });
+        let h = Harness::new(vec![MockTurn::text("one").with_usage(usage(60_000)), MockTurn::text("two")]);
+        let cfg = EngineConfig { model: model.into(), ..Default::default() };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("first")).await;
+        e.submit(prompt("second")).await;
+        let got = asked(&h);
+        assert_eq!(got[0], 65_536, "{model}: the stated limit, not the default");
+        assert!(got[1] <= second && got[1] > second - 2_000, "{model}: {got:?}");
+    }
+
+    // The user's cap wins over a stated limit.
+    listed_limits("reply-limit-user-cap", Limits { context_window: Some(1_000_000), max_output: Some(65_536) });
+    let h = Harness::new(vec![MockTurn::text("one")]);
+    let cfg = EngineConfig {
+        model: "reply-limit-user-cap".into(),
+        max_output_tokens: 20_000,
+        escalate_output: false,
+        ..Default::default()
+    };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("first")).await;
+    assert_eq!(asked(&h), [20_000]);
+}
+
 #[tokio::test]
 async fn requests_ask_for_no_more_reply_than_the_window_holds() {
     // Two made-up models, so the limits set here touch nothing else.

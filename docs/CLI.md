@@ -467,6 +467,18 @@ the context window to compact in time, and prices to show costs.
   time the conversation overflows after growing, so a long `-p` run on a small
   window goes on. So a model's window is learned whatever its size, with no
   setting. `evals/context-window/` tests this end to end.
+- The reply limit is learned the same way. A limit stated for the model
+  (`modelLimits`' `maxOutputTokens`, the model list's `max_output_tokens`,
+  `max_completion_tokens` or OpenRouter's `top_provider.max_completion_tokens`,
+  LiteLLM's `/model/info`) is the cap of every request, below 32,000 or above
+  it. When the endpoint refuses a request for asking too much and states its
+  limit (OpenAI's "supports at most N completion tokens", the Messages API's
+  "maximum allowed number of output tokens", DeepSeek's "valid range of
+  max_tokens is [1, N]", Groq's "must be less than or equal to N"), KodAct
+  uses that limit from then on and sends the request again
+  (`system/output_limit_learned`). `KODACT_MAX_OUTPUT_TOKENS` still wins over
+  all of these. A server that bounds replies only by the window (vLLM) states
+  no reply limit: there the cap stays 32,000 unless `modelLimits` gives one.
 - `modelPricing`: `{"<model id>": {"input": 0.3, "output": 1.2}}`, USD per
   million tokens.
 - Without these, KodAct assumes 1,000,000 tokens of context (so a large model is
@@ -496,7 +508,7 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_GEMINI_API_KEY`, `KODACT_GEMINI_BASE_URL`, `KODACT_GEMINI_AUTH_HEADER` | Google's Gemini API instead (Google AI Studio by default, Vertex AI or a gateway by URL) |
 | `KODACT_MODEL` | Default model |
 | `KODACT_TUI` | `inline` keeps the interactive UI in an inline viewport at the bottom of the terminal, writing output into its scrollback as it happens; by default the UI takes the whole window and prints the conversation into the scrollback when it closes |
-| `KODACT_MAX_OUTPUT_TOKENS` | Per-request output cap |
+| `KODACT_MAX_OUTPUT_TOKENS` | Per-request output cap (wins over the model's stated limit; turns off the raise after a cut-off) |
 | `KODACT_CONTEXT_WINDOW` | Context window, in tokens, for a model with none of its own: not in `modelLimits`, the endpoint's list or the built-in table |
 | `KODACT_MAX_THINKING_TOKENS` | Thinking budget |
 | `KODACT_MAX_RETRIES` | API retries (default 3) |
