@@ -695,14 +695,14 @@ pub fn result_lines(
     }
 }
 
-/// The mark of the plan's task in progress in the transcript: the Plan pane's circle as it is
-/// while nothing moves (`◉`), as scrollback can't.
+/// The mark of the plan's task in progress in the transcript: a circle with its centre filled
+/// (`◉`), still, as scrollback is, and one column wide, as the other marks are.
 const TODO_ACTIVE_MARK: &str = "◉ ";
 
 /// A TodoWrite call's plan, as a checklist under its header, every task in the plan's order:
 /// - done ones with a green `✓` and their text struck through, as a Markdown task list shows
 ///   them;
-/// - the one in progress with the Plan pane's circle, still (`◉`), in lime and bold;
+/// - the one in progress with a still circle (`◉`), in lime and bold;
 /// - the rest open `○`.
 fn todo_checklist(t: &Theme, todos: &Value) -> Vec<Line<'static>> {
     let items: Vec<&Value> = todos.as_array().map(|a| a.iter().collect()).unwrap_or_default();
@@ -3617,7 +3617,7 @@ mod tests {
 
     /// A TodoWrite call shows the plan as a checklist, as the reference CLI does: done tasks with
     /// a green check and their text struck through, the one in progress in lime and bold with
-    /// the Plan pane's circle, still, the rest open; its header says how far the plan is.
+    /// a still circle, the rest open; its header says how far the plan is.
     #[test]
     fn a_plan_update_shows_the_plan_as_a_checklist() {
         let t = Theme { color: true, light: false, accent: None, depth: Default::default() };

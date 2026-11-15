@@ -1673,14 +1673,16 @@ mod snapshots {
         }
     }
 
+    /// The screen as a page, a cell a column wide as in a terminal, whatever font draws its
+    /// glyph: DejaVu Sans Mono has no braille, so FreeMono draws it, a monospace font too.
     fn html(buf: &ratatui::buffer::Buffer, light: bool) -> String {
         let area = buf.area;
         // A light terminal's page for a light theme, a dark one's otherwise.
         let (bg, fg) = if light { ("#fafafa", "#1f2328") } else { ("#0b0c0e", "#d8d8d8") };
         let mut s = format!(
             "<!doctype html><meta charset=utf-8><style>body{{margin:0;background:{bg}}}\
-             pre{{margin:0;padding:8px;font:16px/1.15 'DejaVu Sans Mono',monospace;color:{fg};background:{bg}}}\
-             span{{white-space:pre;display:inline-block;height:1.15em;vertical-align:top}}</style><pre>",
+             pre{{margin:0;padding:8px;font:16px/1.15 'DejaVu Sans Mono','FreeMono',monospace;color:{fg};background:{bg}}}\
+             span{{white-space:pre;display:inline-block;width:1ch;height:1.15em;vertical-align:top}}</style><pre>",
         );
         for y in 0..area.height {
             for x in 0..area.width {
@@ -2032,10 +2034,12 @@ mod snapshots {
         }
 
         // 15. The sidebar mid-turn: the plan, MCP servers with their tools (one failed,
-        // one still connecting), the skills used, and two sub-agents at work. Drawn afresh for
-        // each frame: a shot takes the transcript into its own screen.
-        let sidebar_scene = |offset: std::time::Duration| -> App {
+        // one still connecting), the skills used, and two sub-agents at work, in a dark and a
+        // light terminal. Drawn afresh for each frame: a shot takes the transcript into its own
+        // screen.
+        let sidebar_scene = |offset: std::time::Duration, light: bool| -> App {
             let mut a = app();
+            a.theme.light = light;
             a.submit("add an age check to signups".into());
             a.front = false;
             a.sidebar = true;
@@ -2097,14 +2101,15 @@ mod snapshots {
             a.running[1].since = ago(12_000 + 700);
             a
         };
-        shot("15-sidebar", &mut sidebar_scene(std::time::Duration::ZERO), 170, 40);
+        shot("15-sidebar", &mut sidebar_scene(std::time::Duration::ZERO, false), 170, 40);
+        shot("15-sidebar-light", &mut sidebar_scene(std::time::Duration::ZERO, true), 170, 40);
         // The marks' frames, for an animation of the sidebar: each fills at its own phase.
         for f in 0..render::FILL.len() as u32 {
-            shot(&format!("sidebar-{f:02}"), &mut sidebar_scene(render::FILL_STEP * f), 170, 40);
+            shot(&format!("sidebar-{f:02}"), &mut sidebar_scene(render::FILL_STEP * f, false), 170, 40);
         }
-        // The plan's task in progress going round its circle, for an animation of the Plan pane.
-        for f in 0..render::CIRCLE.len() as u32 {
-            shot(&format!("15-sidebar-circle-{f}"), &mut sidebar_scene(render::CIRCLE_STEP * f), 170, 40);
+        // The plan's task in progress, its ring's gap going round, for an animation of the Plan pane.
+        for f in 0..render::RING.len() as u32 {
+            shot(&format!("15-sidebar-ring-{f}"), &mut sidebar_scene(render::RING_STEP * f, false), 170, 40);
         }
 
         // 16. The plan in the transcript, then its progress, with the spinner saying the task in

@@ -683,20 +683,23 @@ pub const FILL: [&str; 14] = ["⡀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣷", "
 /// The time between frames of a filling mark.
 pub const FILL_STEP: Duration = Duration::from_millis(90);
 
-/// The frames of the plan's task in progress in the Plan pane (TodoWrite): an arc going round
-/// a circle, as a loading circle does, a sixth of a turn a frame.
-pub const CIRCLE: [&str; 6] = ["◜", "◠", "◝", "◞", "◡", "◟"];
+/// The frames of the plan's task in progress in the Plan pane (TodoWrite): a ring of eight
+/// braille dots over two columns, four dots wide and four high, so it is round, with a gap of
+/// two dots going round its edge clockwise, a dot a frame. The edge turns; the inside stays
+/// empty. Clockwise from the top left, the ring's dots are (row, column): (0,1) (0,2) (1,3)
+/// (2,3) (3,2) (3,1) (2,0) (1,0); frame `k` leaves out dots `k` and `k + 1`.
+pub const RING: [&str; 8] = ["⢆⡰", "⢎⡠", "⢎⡁", "⢎⠑", "⠎⠱", "⠊⡱", "⢈⡱", "⢄⡱"];
 
-/// The time between the circle's frames.
-pub const CIRCLE_STEP: Duration = Duration::from_millis(120);
+/// The time between the ring's frames: a turn in 0.8 s.
+pub const RING_STEP: Duration = Duration::from_millis(100);
 
-/// The plan's task in progress where nothing moves: a circle with its centre filled, in each
-/// plan update's checklist in the transcript and in the Plan pane while the session waits.
-pub const CIRCLE_STILL: &str = "◉";
+/// The ring whole and still: the plan's task in progress in the Plan pane while the session
+/// waits.
+pub const RING_STILL: &str = "⢎⡱";
 
-/// The circle's frame `ran` after the turn began.
-pub fn circling(ran: Duration) -> &'static str {
-    CIRCLE[(ran.as_millis() / CIRCLE_STEP.as_millis()) as usize % CIRCLE.len()]
+/// The ring's frame `ran` after the turn began.
+pub fn turning(ran: Duration) -> &'static str {
+    RING[(ran.as_millis() / RING_STEP.as_millis()) as usize % RING.len()]
 }
 
 /// A filling mark, `ran` after its work began: each keeps its own phase, so several
@@ -814,9 +817,11 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         context.push(Line::from(Span::styled(fit(&s.model, inner), t.dim())));
     }
 
-    // The plan: done steps quiet with a check, the active one in lime with a circle going
-    // round while the turn runs (still, `◉`, while it waits), the rest open. A long step
-    // takes the rows it needs while there is room, two when there isn't.
+    // The plan: done steps quiet with a check, the active one in lime with a ring whose gap
+    // goes round its edge while the turn runs (whole and still while it waits), the rest
+    // open. Every mark takes the ring's two columns, the others flush right, so the steps'
+    // text lines up. A long step takes the rows it needs while there is room, two when
+    // there isn't.
     let plan_rows = |most: usize| -> Vec<Line<'static>> {
         let mut plan = vec![];
         if app.todos.is_empty() {
@@ -829,16 +834,16 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
             let (mark, mark_style, body) = match status.as_str() {
                 "completed" => ("✓", t.subtle(), t.subtle()),
                 "in_progress" => match busy_for.filter(|_| app.busy) {
-                    Some(ran) => (circling(ran), t.accent(), t.accent()),
-                    None => (CIRCLE_STILL, t.accent(), t.accent()),
+                    Some(ran) => (turning(ran), t.accent(), t.accent()),
+                    None => (RING_STILL, t.accent(), t.accent()),
                 },
                 _ => ("○", t.dim(), t.dim()),
             };
             let rows =
-                text::wrap(vec![Line::from(Span::styled(content.clone(), body))], inner.saturating_sub(2) as u16);
+                text::wrap(vec![Line::from(Span::styled(content.clone(), body))], inner.saturating_sub(3) as u16);
             for (i, r) in rows.into_iter().take(most).enumerate() {
                 let mut spans =
-                    vec![if i == 0 { Span::styled(format!("{mark} "), mark_style) } else { Span::raw("  ") }];
+                    vec![if i == 0 { Span::styled(format!("{mark:>2} "), mark_style) } else { Span::raw("   ") }];
                 spans.extend(r.spans);
                 plan.push(Line::from(spans));
             }
@@ -3158,6 +3163,39 @@ mod tests {
         assert!(rows.iter().all(|r| text_width(r) <= SIDEBAR_W as usize), "{all}");
     }
 
+    /// The ring is the eight dots round a 4x4 braille square, and each frame is the ring less
+    /// two neighbouring dots, the gap one dot further clockwise each frame: only the edge moves.
+    #[test]
+    fn the_plan_ring_turns_its_edge() {
+        // (row, column) clockwise from the top left; a braille cell's dots by row, left column
+        // then right column.
+        let ring = [(0, 1), (0, 2), (1, 3), (2, 3), (3, 2), (3, 1), (2, 0), (1, 0)];
+        let bit = |row: usize, col: usize| -> u32 {
+            let left = [0x01, 0x02, 0x04, 0x40];
+            let right = [0x08, 0x10, 0x20, 0x80];
+            if col.is_multiple_of(2) {
+                left[row]
+            } else {
+                right[row]
+            }
+        };
+        let draw = |lit: &[usize]| -> String {
+            let mut cells = [0u32; 2];
+            for &i in lit {
+                let (row, col) = ring[i % 8];
+                cells[col / 2] |= bit(row, col);
+            }
+            cells.iter().map(|c| char::from_u32(0x2800 + c).unwrap()).collect()
+        };
+        assert_eq!(RING_STILL, draw(&[0, 1, 2, 3, 4, 5, 6, 7]));
+        for (k, frame) in RING.iter().enumerate() {
+            let lit: Vec<usize> = (2..8).map(|j| k + j).collect();
+            assert_eq!(*frame, draw(&lit), "frame {k}");
+            assert_eq!(text_width(frame), 2, "frame {k}");
+        }
+        assert_eq!(turning(RING_STEP * 9), RING[1]);
+    }
+
     #[test]
     fn work_in_flight_fills_and_settles_when_the_turn_ends() {
         let start = Instant::now();
@@ -3166,22 +3204,22 @@ mod tests {
         let mark = |a: &App, now: Instant, what: &str| -> String {
             let rows = side(a, 60, now);
             let r = rows.iter().find(|r| r.contains(what)).unwrap_or_else(|| panic!("{what}: {rows:#?}"));
-            r.trim_start().chars().next().unwrap().to_string()
+            r.split_whitespace().next().unwrap().to_string()
         };
         // A sub-agent's mark fills frame by frame, from empty to full and back.
         let frames: Vec<String> =
             (0..FILL.len() as u32).map(|i| mark(&a, start + FILL_STEP * i, "find the parser")).collect();
         assert_eq!(frames, FILL.map(String::from).to_vec());
-        // The plan's task in progress goes round a circle, a sixth of a turn a frame.
+        // The plan's task in progress: a ring whose gap goes round its edge, a dot a frame.
         let round: Vec<String> =
-            (0..CIRCLE.len() as u32).map(|i| mark(&a, start + CIRCLE_STEP * i, "Add the field")).collect();
-        assert_eq!(round, CIRCLE.map(String::from).to_vec());
+            (0..RING.len() as u32).map(|i| mark(&a, start + RING_STEP * i, "Add the field")).collect();
+        assert_eq!(round, RING.map(String::from).to_vec());
         // Each mark keeps its own phase: a sub-agent that started later is a frame behind.
         assert_eq!(filling(FILL_STEP * (FILL.len() as u32 + 1)), filling(FILL_STEP));
-        // Idle: the open step waits, its circle still, and the agents section is gone.
+        // Idle: the open step waits, its ring whole and still, and the agents section is gone.
         a.busy = false;
         a.running.clear();
-        assert_eq!(mark(&a, start + FILL_STEP * 3, "Add the field"), CIRCLE_STILL);
+        assert_eq!(mark(&a, start + FILL_STEP * 3, "Add the field"), RING_STILL);
         assert!(!side(&a, 60, start).join("\n").contains("Agents"));
         // A server still connecting fills too, and keeps the window redrawing while idle.
         a.mcp.push(("linear".into(), "pending".into()));

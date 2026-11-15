@@ -414,8 +414,8 @@ with `{"text", "cwd"}`:
   - TodoWrite: the plan as a checklist, every task in order, under
     `Updated the plan 1 of 4 done`: done tasks with a green `✓` and their
     text struck through (as a Markdown task list shows them), the one in
-    progress in lime and bold with the Plan pane's circle, still (`◉`),
-    the rest open `○`; an emptied plan `No tasks`;
+    progress in lime and bold with a still circle `◉`, the rest open `○`;
+    an emptied plan `No tasks`;
   - anything else: `first line (+N lines)`.
 - **While the model works**, the spinner names the plan's task in progress,
   its `activeForm` (`Running the tests…`), or its content when it has none;
@@ -452,9 +452,11 @@ with `{"text", "cwd"}`:
   - the session's title (its first prompt);
   - **Context**: the room left, the tokens used and the model;
   - **Plan** (`1/4`): the plan from TodoWrite, done steps quiet with `✓`, the
-    active one in lime with a circle going round while the turn runs (an arc,
-    `◜ ◠ ◝ ◞ ◡ ◟`, a sixth of a turn every 120 ms), still `◉` while the
-    session waits, the rest open `○`;
+    active one in lime with a ring of eight dots over two columns (`⢎⡱`)
+    whose two-dot gap goes round its edge, clockwise, a dot every 100 ms,
+    while the turn runs: the edge turns, the inside stays empty. While the
+    session waits the ring is whole and still. The rest are open `○`; every
+    mark takes the ring's two columns, so the steps' text lines up;
   - **MCP** (`2/3 up`, or `1 failed` in red): each server and what it
     brings, `● jira  12 tools` in green, a failed one `× figma  failed` in
     red, one still connecting `connecting`, a disabled one `○ … off`;
@@ -471,7 +473,7 @@ with `{"text", "cwd"}`:
   bottom, dot by dot (`⡀ ⣀ ⣄ ⣤ ⣦ ⣶ ⣷ ⣿`), and drains again, its colour
   breathing with it (dim nearly empty, full when full, in 24-bit colour),
   each at its own pace: a server connecting, a sub-agent working. (The plan's
-  step in progress turns as a circle instead, above.) The
+  step in progress has a turning ring instead, above.) The
   context gauge uses the same cell, filled to how much is used, and the
   sidebar adds a bar under it that fills left to right, dot by dot. A finished state
   is still: `●` connected, `✓` done. Every state has a word or a shape as

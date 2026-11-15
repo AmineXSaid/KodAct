@@ -155,9 +155,9 @@ session open from one check to the next.
     `✓` and struck through, the one in progress in lime and bold with a
     still `◉`, the rest `○`. While the model works, the spinner names the
     task in progress (`Adding the age field…`), and at 140 columns or more
-    the sidebar's Plan pane shows that task with a lime circle going round
-    (`◜ ◠ ◝ ◞ ◡ ◟`), still `◉` once the turn ends. Check it in a dark and a
-    light terminal.
+    the sidebar's Plan pane shows that task with a lime ring of dots whose
+    gap goes round its edge, clockwise, whole and still once the turn ends;
+    the steps' text stays lined up. Check it in a dark and a light terminal.
 
 ### Goals and loops
 

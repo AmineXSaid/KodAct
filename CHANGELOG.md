@@ -2,18 +2,23 @@
 
 ## 0.1.0 (unreleased)
 
-### The plan's task in progress turns as a circle
+### The plan's task in progress turns as a ring
 - **In the Plan pane.** The sidebar marked the plan's task in progress with
   a braille cell that filled and drained, as it marks a server connecting or
-  a sub-agent working. While the model works, that task now has an arc going
-  round a circle (`◜ ◠ ◝ ◞ ◡ ◟`), in lime, a sixth of a turn every 120 ms,
-  so the step being worked on reads as in progress at a glance. While the
-  session waits, the circle is still: `◉`.
+  a sub-agent working. While the model works, that task now has a ring of
+  eight dots over two columns (`⢎⡱`), in lime, with a gap of two dots going
+  round its edge, clockwise, a dot every 100 ms: the edge turns and the
+  inside stays empty, so the step being worked on reads as in progress at a
+  glance. While the session waits, the ring is whole and still. The other
+  steps' marks take the same two columns, so the text lines up.
 - **In the transcript.** Each plan update's checklist marks the task in
-  progress with the same still circle, `◉`, where it had the half-full cell
-  `⣤`. Scrollback doesn't move, so it doesn't turn there.
-- **Seen in snapshots.** Scene 15 gains six frames, `15-sidebar-circle-0` to
-  `15-sidebar-circle-5`, a sixth of a turn apart.
+  progress with a still circle, `◉`, where it had the half-full cell `⣤`.
+  Scrollback doesn't move, and its marks stay one column wide.
+- **Seen in snapshots.** Scene 15 gains eight frames, `15-sidebar-ring-0` to
+  `15-sidebar-ring-7`, a dot of the turn apart. The snapshot page keeps each
+  cell one column wide, as a terminal does, and draws braille in FreeMono:
+  DejaVu Sans Mono has none, and the fallback drew it wider, which pushed
+  the context gauge past its pane.
 
 ### The terminal shows each plan update as a checklist
 - **A TodoWrite call shows the plan.** It was shown as `Updated the plan 4
