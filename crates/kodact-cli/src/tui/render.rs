@@ -1460,6 +1460,8 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
                 format!("Waiting for {agents} {}", if agents == 1 { "agent" } else { "agents" })
             } else {
                 match app.activity.as_str() {
+                    // The plan's task in progress, as the reference CLI's spinner says it.
+                    "" | "Working" if app.todo_active.is_some() => app.todo_active.clone().unwrap_or_default(),
                     // "Thinking" only while reasoning arrives; any other wait is work.
                     "" | "Working" if app.look == super::look::Look::Frame => "Working".to_string(),
                     "" | "Working" => VERBS[(since.as_secs() / VERB_FOR.as_secs()) as usize % VERBS.len()].to_string(),
@@ -1967,6 +1969,66 @@ mod tests {
         let text = rows.join("\n");
         assert_eq!(text.matches("Run the cart tests").count(), 1, "{text}");
         assert!(text.contains("Run the cart tests  7s"), "the step's own time: {text}");
+    }
+
+    /// The spinner says the plan's task in progress, as the reference CLI's does: its activeForm,
+    /// or its content when it has none; with no task in progress, the usual word.
+    #[test]
+    fn the_spinner_says_the_task_in_progress() {
+        use kodact_types::{ApiMessage, ContentBlock, Role, StopReason, Usage};
+        let mut a = app(false);
+        a.look = crate::tui::look::Look::Frame;
+        typed(&mut a, "fix the signup form");
+        a.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let start = a.busy_since.unwrap();
+        let plan = |todos: serde_json::Value| {
+            let call = ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "TodoWrite".into(),
+                input: serde_json::json!({ "todos": todos }),
+                cache_control: None,
+                provider: None,
+            };
+            UiEvent::Engine(kodact_engine::EngineEvent::Assistant {
+                message: ApiMessage {
+                    id: "m".into(),
+                    kind: "message".into(),
+                    role: Role::Assistant,
+                    model: "m".into(),
+                    content: vec![call],
+                    stop_reason: Some(StopReason::ToolUse),
+                    stop_sequence: None,
+                    usage: Usage::default(),
+                },
+                uuid: "u".into(),
+                parent_tool_use_id: None,
+            })
+        };
+        // The call answered: the spinner shows again, as it does between steps.
+        let answered = || {
+            UiEvent::Engine(kodact_engine::EngineEvent::User {
+                message: kodact_types::Message::user(vec![ContentBlock::tool_result("t1".to_string(), "ok", false)]),
+                uuid: "r".into(),
+                tool_use_result: None,
+                is_meta: false,
+                parent_tool_use_id: None,
+            })
+        };
+        let spinner = |a: &App| draw(&live_view_at(a, 80, 20, start + Duration::from_secs(2)), 80).0.join("\n");
+        a.on_event(plan(serde_json::json!([
+            {"content": "Read the form", "status": "completed", "activeForm": "Reading the form"},
+            {"content": "Run the tests", "status": "in_progress", "activeForm": "Running the tests"},
+        ])));
+        a.on_event(answered());
+        assert!(spinner(&a).contains("Running the tests… (2s)"), "{}", spinner(&a));
+        a.on_event(plan(
+            serde_json::json!([{"content": "Write the check", "status": "in_progress", "activeForm": ""}]),
+        ));
+        a.on_event(answered());
+        assert!(spinner(&a).contains("Write the check… (2s)"), "its content without an activeForm");
+        a.on_event(plan(serde_json::json!([{"content": "Done", "status": "completed", "activeForm": "Doing"}])));
+        a.on_event(answered());
+        assert!(spinner(&a).contains("Working… (2s)"), "none in progress: {}", spinner(&a));
     }
 
     #[test]

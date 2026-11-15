@@ -47,16 +47,21 @@ pub struct NudgeConfig {
     /// A reply that is still all thinking past a limit from the run's own pace is stopped, its
     /// notes handed back, and the model asked for one concrete step.
     pub thinking_time_box: bool,
-    /// The task list as the reference CLI keeps it: TodoWrite's long description (when to use it,
-    /// when not, worked examples, its states), a section of the system prompt asking for it on
-    /// work with several steps, and, after [`TODO_STEPS`] steps without it, a reminder with the
-    /// list as it stands, at most once every [`TODO_STEPS`] steps. The description and the
-    /// section follow this setting alone; the reminder, like every reminder, also `reminders`.
+    /// The task list as the reference CLI keeps it:
+    /// - TodoWrite's long description (when to use it, when not, worked examples, its states);
+    /// - a section of the system prompt asking for it on work with several steps;
+    /// - as a conversation starts with the list empty, a note that it is;
+    /// - after [`TODO_STEPS`] replies without a TodoWrite call, at most once every
+    ///   [`TODO_STEPS`] replies, a reminder with the list as it stands, sent with the step's
+    ///   results or with the next prompt, whichever comes first.
+    ///
+    /// The description and the section follow this setting alone; the notes, like every
+    /// reminder, also `reminders`.
     pub todo_tracking: bool,
 }
 
-/// Steps (model calls that used tools) without a TodoWrite call before the task-list reminder,
-/// and between two reminders: the reference CLI's cadence.
+/// Replies (every reply of the model, with tools or without) without a TodoWrite call before the
+/// task-list reminder, and between two reminders: the reference CLI's cadence.
 pub const TODO_STEPS: u32 = 10;
 
 impl NudgeConfig {

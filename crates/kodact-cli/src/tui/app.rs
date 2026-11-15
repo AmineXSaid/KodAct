@@ -565,6 +565,9 @@ pub struct App {
     pub skills_used: Vec<(String, usize)>,
     /// The model's latest plan (TodoWrite): (status, content).
     pub todos: Vec<(String, String)>,
+    /// The plan's task in progress, as the spinner says it while the model works: its
+    /// `activeForm` ("Running the tests"), or its content when it has none.
+    pub todo_active: Option<String>,
     /// Where requests go (`127.0.0.1:11434`), for the line under the front screen's input.
     pub endpoint: String,
     /// The git branch, for the status style's bar (empty outside a repository).
@@ -920,6 +923,18 @@ pub fn todo_items(input: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
+/// A TodoWrite call's task in progress, as the spinner says it: its `activeForm`, else its
+/// content; `None` when no task is in progress.
+pub fn active_task(input: &Value) -> Option<String> {
+    let task = input["todos"].as_array()?.iter().find(|t| t["status"] == "in_progress")?;
+    [&task["activeForm"], &task["content"]]
+        .into_iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 /// The skill a tool call uses, if it is a `Skill` call: `{"skill": "simplify"}` → `simplify`.
 pub fn skill_of(name: &str, input: &Value) -> Option<String> {
     let skill = input.get("skill").and_then(Value::as_str).filter(|_| name == "Skill")?;
@@ -1129,6 +1144,7 @@ impl App {
             skills: vec![],
             skills_used: vec![],
             todos: vec![],
+            todo_active: None,
             endpoint: String::new(),
             branch: String::new(),
             focus: false,
@@ -1547,6 +1563,7 @@ impl App {
         self.first_line = true;
         self.streamed = false;
         self.todos.clear();
+        self.todo_active = None;
         self.skills_used.clear();
         self.agents_done = 0;
         self.title.clear();
@@ -1745,6 +1762,7 @@ impl App {
                     if let ContentBlock::ToolUse { name, input, .. } = b {
                         if name == "TodoWrite" {
                             self.todos = todo_items(input);
+                            self.todo_active = active_task(input);
                         }
                         if let Some(skill) = skill_of(name, input) {
                             self.used_skill(&skill);

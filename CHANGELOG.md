@@ -2,6 +2,30 @@
 
 ## 0.1.0 (unreleased)
 
+### The task list as the reference CLI keeps it, completed
+- **Every reply counts.** The task-list reminder (`nudges.todoTracking`) now
+  counts every reply of the model since the last TodoWrite call, with tools
+  or without, as the reference CLI does, not only steps that used tools. It
+  goes with the step's results or, when a turn ends first, with the next
+  prompt, so a conversation of short turns is reminded too.
+- **An empty list is said as a conversation starts.** With the first prompt,
+  a note says the list is empty and to create it if the work has several
+  steps.
+- **The description and the section say the rest.**
+  - The description adds: use it in plan mode, keep exactly one task in
+    progress while work is left, finish it before starting another, and
+    don't mark a task completed while a file or dependency it needs is
+    missing.
+  - The prompt section gets two worked examples.
+- **The spinner says the task in progress.** In the terminal, while the model
+  works, the spinner shows the plan's task in progress ("Running the
+  tests…", its `activeForm`, else its content) instead of a stock word, as
+  the reference CLI's does. This is on for everyone: it changes only what
+  the person sees.
+- **What it costs.** Off: nothing. On: the notes are in KodAct's own words, at
+  most once every 10 replies, with the step's other notes or the prompt,
+  never a model call of their own.
+
 ### The reference CLI's task list, as an A/B (`nudges.todoTracking`)
 - **What it is.** The reference CLI asks a model to keep its task list far
   more than KodAct does, and Claude models use TodoWrite a lot under it. The

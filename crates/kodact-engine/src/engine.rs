@@ -189,14 +189,19 @@ fn one_shot_todo_reminder(open: &[String]) -> String {
 /// Tasks of the list shown in the task-list reminder; the rest are counted.
 const TODO_REMINDER_ITEMS: usize = 20;
 
-/// The task-list reminder (`nudges.todoTracking`): TodoWrite unused for `steps` steps, with the
-/// list as it stands (`todos`, one `- [status] task` line each).
-fn todo_reminder_text(steps: u32, todos: &[String]) -> String {
+/// The note as a conversation starts with the task list empty (`nudges.todoTracking`).
+const TODO_EMPTY_NOTE: &str = "The task list (TodoWrite) is empty. If this work has several steps, create it now: \
+     one task per step, the first one in progress. If it is a small task or a question, ignore this. This note is \
+     for you: don't mention it to the person.";
+
+/// The task-list reminder (`nudges.todoTracking`): TodoWrite unused for `replies` replies, with
+/// the list as it stands (`todos`, one `- [status] task` line each).
+fn todo_reminder_body(replies: u32, todos: &[String]) -> String {
     let mut text = format!(
-        "<system-reminder>\nThe task list (TodoWrite) hasn't been updated in the last {steps} steps. If this work \
-         has several steps, use it to track them: add what is left, mark what is done, and keep one task in \
-         progress. If the list no longer matches the work, bring it up to date. If the work is simple, ignore \
-         this. This note is for you: don't mention it to the person.\n"
+        "The task list (TodoWrite) hasn't been updated in the last {replies} replies. If this work has several \
+         steps, use it to track them: add what is left, mark what is done, and keep one task in progress. If the \
+         list no longer matches the work, bring it up to date. If the work is simple, ignore this. This note is \
+         for you: don't mention it to the person.\n"
     );
     if todos.is_empty() {
         text.push_str("The list is empty.");
@@ -207,7 +212,6 @@ fn todo_reminder_text(steps: u32, todos: &[String]) -> String {
             text.push_str(&format!("\n… and {} more", todos.len() - TODO_REMINDER_ITEMS));
         }
     }
-    text.push_str("\n</system-reminder>");
     text
 }
 
@@ -822,8 +826,8 @@ pub struct Engine {
     last_sent: Mutex<Option<crate::prefix::PrefixHash>>,
     /// The shell-edit suggestion was given this turn.
     shell_edit_told: bool,
-    /// Steps that used tools since the last TodoWrite call, and since the last task-list reminder
-    /// (`nudges.todoTracking`): counted across turns, as the reference CLI counts them.
+    /// Replies since the last TodoWrite call, and since the last task-list reminder
+    /// (`nudges.todoTracking`): every reply, counted across turns, as the reference CLI counts them.
     todo_steps: (u32, u32),
     /// Shell commands run this turn, for the constraint report.
     ran_commands: Vec<String>,
@@ -2762,6 +2766,11 @@ impl Engine {
             }
             self.planning = planning;
         }
+        // The task list as the reference CLI keeps it (`nudges.todoTracking`): empty as a
+        // conversation starts, or unused for a while, said with the prompt.
+        if let Some(body) = self.todo_note_for_prompt() {
+            self.reminders.push(body);
+        }
         if !self.reminders.is_empty() && !self.cfg.is_subagent {
             let notes = std::mem::take(&mut self.reminders).join("\n\n");
             blocks.insert(0, ContentBlock::text(format!("<system-reminder>\n{notes}\n</system-reminder>")));
@@ -3166,7 +3175,9 @@ impl Engine {
             } else {
                 time_boxes = 0;
             }
+            let wrote_todos = tool_uses.iter().any(|(_, name, _)| name == "TodoWrite");
             self.push_assistant(msg);
+            self.count_todo_reply(wrote_todos);
             self.publish_turn(started, &turn);
 
             // Budget (contract C7): checked after every call.
@@ -3353,11 +3364,6 @@ impl Engine {
                         }
                     }
                 }
-                let wrote_todos = tool_uses
-                    .iter()
-                    .zip(&results)
-                    .any(|((_, name, _), r)| name == "TodoWrite" && !r.output.is_error && r.denial.is_none());
-                self.count_todo_step(wrote_todos);
                 let mut interrupted = cancel.is_cancelled();
                 for r in results {
                     if let Some(d) = r.denial {
@@ -3408,7 +3414,8 @@ impl Engine {
                     }
                 }
                 if !interrupted {
-                    if let Some(text) = self.todo_reminder_due() {
+                    if let Some(body) = self.todo_reminder_due() {
+                        let text = format!("<system-reminder>\n{body}\n</system-reminder>");
                         self.push_user(Message::user_text(text), true, None, true);
                     }
                 }
@@ -3683,33 +3690,27 @@ impl Engine {
         }
     }
 
-    /// One step that used tools, counted for the task-list reminder (`nudges.todoTracking`): a
-    /// TodoWrite call starts the count again.
-    fn count_todo_step(&mut self, wrote: bool) {
+    /// One reply of the model, counted for the task-list reminder (`nudges.todoTracking`), as the
+    /// reference CLI counts them: every reply, with tools or without. One that calls TodoWrite
+    /// starts the count again.
+    fn count_todo_reply(&mut self, wrote: bool) {
         let (since_write, since_note) = &mut self.todo_steps;
         *since_write = if wrote { 0 } else { since_write.saturating_add(1) };
         *since_note = since_note.saturating_add(1);
     }
 
-    /// The task-list reminder, when it is due (`nudges.todoTracking`): no TodoWrite call in the
-    /// last [`crate::nudges::TODO_STEPS`] steps, and no reminder in as many, the reference CLI's
-    /// cadence. It shows the list as it stands, so the model can bring it up to date at once.
-    fn todo_reminder_due(&mut self) -> Option<String> {
-        let steps = crate::nudges::TODO_STEPS;
-        if !self.cfg.nudges.todo_tracking
-            || !self.cfg.reminders
-            || self.cfg.is_subagent
-            || self.todo_steps.0 < steps
-            || self.todo_steps.1 < steps
-            || !self.offered_tools().iter().any(|t| t.name == "TodoWrite")
-        {
-            return None;
-        }
-        self.todo_steps.1 = 0;
-        let since = self.todo_steps.0;
-        self.system_event("nudge", json!({"kind": crate::nudges::Nudge::TodoTracking.as_str(), "steps": since}));
-        let todos: Vec<String> = self
-            .shared
+    /// Whether the task-list notes apply (`nudges.todoTracking`): KodAct's reminders on, the main
+    /// agent, and TodoWrite offered.
+    fn todo_tracking_on(&self) -> bool {
+        self.cfg.nudges.todo_tracking
+            && self.cfg.reminders
+            && !self.cfg.is_subagent
+            && self.offered_tools().iter().any(|t| t.name == "TodoWrite")
+    }
+
+    /// The task list as it stands, one `- [status] task` line each.
+    fn todo_lines(&self) -> Vec<String> {
+        self.shared
             .tool_ctx
             .todos
             .lock()
@@ -3720,8 +3721,37 @@ impl Engine {
                 let content = t.get("content").and_then(Value::as_str).unwrap_or("");
                 (!content.is_empty()).then(|| format!("- [{status}] {content}"))
             })
-            .collect();
-        Some(todo_reminder_text(since, &todos))
+            .collect()
+    }
+
+    /// The task-list reminder, when it is due (`nudges.todoTracking`): no TodoWrite call in the
+    /// last [`crate::nudges::TODO_STEPS`] replies, and no reminder in as many, the reference CLI's
+    /// cadence. It shows the list as it stands, so the model can bring it up to date at once. The
+    /// note's text, for the caller to send with the step's results or with the next prompt.
+    fn todo_reminder_due(&mut self) -> Option<String> {
+        let replies = crate::nudges::TODO_STEPS;
+        if !self.todo_tracking_on() || self.todo_steps.0 < replies || self.todo_steps.1 < replies {
+            return None;
+        }
+        self.todo_steps.1 = 0;
+        let since = self.todo_steps.0;
+        self.system_event("nudge", json!({"kind": crate::nudges::Nudge::TodoTracking.as_str(), "replies": since}));
+        Some(todo_reminder_body(since, &self.todo_lines()))
+    }
+
+    /// The task-list note that goes with a prompt (`nudges.todoTracking`): as a conversation
+    /// starts (no reply yet) with the list empty, the reference CLI's note that it is empty; else
+    /// the reminder, when it is due.
+    fn todo_note_for_prompt(&mut self) -> Option<String> {
+        if !self.todo_tracking_on() {
+            return None;
+        }
+        let started = self.state.messages.iter().any(|m| m.role == kodact_types::Role::Assistant);
+        if !started && self.todo_lines().is_empty() {
+            self.system_event("nudge", json!({"kind": crate::nudges::Nudge::TodoTracking.as_str(), "empty": true}));
+            return Some(TODO_EMPTY_NOTE.to_string());
+        }
+        self.todo_reminder_due()
     }
 
     /// A heads-up when this run's turn, spending or time limit is close (GOALS pillar 5), so the model

@@ -5,6 +5,7 @@ Keep a structured task list for this session: what is planned, what is being don
 Use it proactively:
 - for work with three or more distinct steps or actions;
 - for work that needs planning or several changes, even when it looks simple at first;
+- in plan mode: write the plan's steps as tasks, so the work after it follows them;
 - when the person asks for a task list;
 - when the person gives several things to do (numbered, or in a list separated by commas);
 - as soon as a new request arrives: write its requirements down as tasks;
@@ -34,10 +35,12 @@ When there is one small thing to do, just do it.
 
 ## Task states and rules
 
-- `pending`: not started. `in_progress`: being worked on now, exactly one at a time. `completed`: finished.
+- `pending`: not started. `in_progress`: being worked on now. `completed`: finished.
+- While there is work left, exactly one task is `in_progress`: not none, not two.
 - Each task has `content`, what to do in the imperative ("Run the tests"), and `activeForm`, the same in the present continuous ("Running the tests").
 - Update the list as you work: mark each task `completed` as soon as it is done, not several at once later, and start the next by marking it `in_progress`.
-- Mark a task `completed` only when it is fully done. While tests fail, the work is partial or an error is unresolved, keep it `in_progress` and add a task for what blocks it.
+- Finish the task in progress before you start another.
+- Mark a task `completed` only when it is fully done. While tests fail, the work is partial, an error is unresolved, or a file or dependency it needs can't be found, keep it `in_progress` and add a task for what blocks it.
 - Remove tasks that no longer apply.
 - Split large work into specific tasks with clear names.
 
