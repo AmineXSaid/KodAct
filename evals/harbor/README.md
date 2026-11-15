@@ -78,6 +78,11 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | `KODACT_HARBOR_HOSTS` | the endpoint's host | Names to resolve here and pin in each container's `/etc/hosts` (`none` turns it off) |
 | `KODACT_HARBOR_HOST_IP` | found automatically | This machine's address, used in place of a `localhost` endpoint |
 
+`deep-thinking`'s gateway never honours the reasoning level, in any form: `--effort` in
+`KODACT_HARBOR_ARGS` changes nothing for it, though the job name still says `-args-effort-…`.
+Leave it out of those runs. Its reply length is bounded by the reply limit
+(`KODACT_HARBOR_MAX_OUTPUT`) and, once measured, KodAct's thinking time-box.
+
 Each task has an agent time limit, and Harbor stops the agent when it's up.
 The agent passes that limit, less 30 seconds, as `--max-time`. The model then
 knows its deadline from the start and gets a wrap-up reminder near the end.
