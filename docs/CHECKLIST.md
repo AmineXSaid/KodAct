@@ -149,6 +149,12 @@ session open from one check to the next.
     or a send).
 20. (new, gap) `/copy` after an answer: paste into another program; it is
     the answer's text. (Inside tmux: check 50.)
+20a. (new) `add an age check to the signup form, with tests` with
+    `KODACT_NUDGES=todoTracking`. Each plan update shows the plan as a
+    checklist under `Updated the plan 1 of 4 done`: done tasks with a green
+    `✓` and struck through, the one in progress in lime and bold, the rest
+    `○`. While the model works, the spinner names the task in progress
+    (`Adding the age field…`). Check it in a dark and a light terminal.
 
 ### Goals and loops
 

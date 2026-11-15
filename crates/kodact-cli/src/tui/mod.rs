@@ -1673,17 +1673,19 @@ mod snapshots {
         }
     }
 
-    fn html(buf: &ratatui::buffer::Buffer) -> String {
+    fn html(buf: &ratatui::buffer::Buffer, light: bool) -> String {
         let area = buf.area;
-        let mut s = String::from(
-            "<!doctype html><meta charset=utf-8><style>body{margin:0;background:#0b0c0e}\
-             pre{margin:0;padding:8px;font:16px/1.15 'DejaVu Sans Mono',monospace;color:#d8d8d8;background:#0b0c0e}\
-             span{white-space:pre;display:inline-block;height:1.15em;vertical-align:top}</style><pre>",
+        // A light terminal's page for a light theme, a dark one's otherwise.
+        let (bg, fg) = if light { ("#fafafa", "#1f2328") } else { ("#0b0c0e", "#d8d8d8") };
+        let mut s = format!(
+            "<!doctype html><meta charset=utf-8><style>body{{margin:0;background:{bg}}}\
+             pre{{margin:0;padding:8px;font:16px/1.15 'DejaVu Sans Mono',monospace;color:{fg};background:{bg}}}\
+             span{{white-space:pre;display:inline-block;height:1.15em;vertical-align:top}}</style><pre>",
         );
         for y in 0..area.height {
             for x in 0..area.width {
                 let c = &buf[(x, y)];
-                let mut st = format!("color:{};", css(c.fg, "#d8d8d8"));
+                let mut st = format!("color:{};", css(c.fg, fg));
                 if c.bg != Color::Reset {
                     st.push_str(&format!("background:{};", css(c.bg, "transparent")));
                 }
@@ -1692,6 +1694,12 @@ mod snapshots {
                 }
                 if c.modifier.contains(ratatui::style::Modifier::DIM) {
                     st.push_str("opacity:.6;");
+                }
+                if c.modifier.contains(ratatui::style::Modifier::CROSSED_OUT) {
+                    st.push_str("text-decoration:line-through;");
+                }
+                if c.modifier.contains(ratatui::style::Modifier::ITALIC) {
+                    st.push_str("font-style:italic;");
                 }
                 let sym = c.symbol().replace('&', "&amp;").replace('<', "&lt;");
                 s.push_str(&format!("<span style=\"{st}\">{sym}</span>"));
@@ -1741,7 +1749,7 @@ mod snapshots {
         let mut f = Full::new(TestBackend::new(w, h), info(recent)).unwrap();
         f.commit(a.take_pending());
         f.draw(a).unwrap();
-        std::fs::write(format!("{dir}/{name}.html"), html(f.terminal.backend().buffer())).unwrap();
+        std::fs::write(format!("{dir}/{name}.html"), html(f.terminal.backend().buffer(), a.theme.light)).unwrap();
     }
 
     fn shot(name: &str, a: &mut App, w: u16, h: u16) {
@@ -2055,7 +2063,13 @@ mod snapshots {
             StopReason::ToolUse,
             None,
         ));
-        done(&mut a, "p", "ok", false, None);
+        let plan = json!([
+            {"content": "Read the signup form", "status": "completed", "activeForm": "Reading"},
+            {"content": "Add the age field and its check", "status": "in_progress", "activeForm": "Adding"},
+            {"content": "Run the tests", "status": "pending", "activeForm": "Running"},
+            {"content": "Update the changelog", "status": "pending", "activeForm": "Updating"}
+        ]);
+        done(&mut a, "p", "ok", false, Some(json!({"oldTodos": [], "newTodos": plan})));
         a.on_event(msg(
             vec![
                 call(
@@ -2080,6 +2094,41 @@ mod snapshots {
         a.running[0].since = ago(41_000 + 280);
         a.running[1].since = ago(12_000 + 700);
         shot("15-sidebar", &mut a, 170, 40);
+        // 16. The plan in the transcript, then its progress, with the spinner saying the task in
+        // progress: at 100 columns (no sidebar), in a dark and a light terminal.
+        for (name, light) in [("16-plan", false), ("16-plan-light", true)] {
+            let mut a = App::new(Theme { color: true, light, accent: None, depth: Default::default() }, vec![]);
+            a.transcript_indent = TRANSCRIPT_INDENT as usize;
+            a.submit("add an age check to signups".into());
+            a.front = false;
+            let todo = |content: &str, status: &str, active: &str| json!({"content": content, "status": status, "activeForm": active});
+            let first = json!([
+                todo("Read the signup form", "in_progress", "Reading the signup form"),
+                todo("Add the age field and its check", "pending", "Adding the age field and its check"),
+                todo("Run the tests", "pending", "Running the tests"),
+                todo("Update the changelog", "pending", "Updating the changelog"),
+            ]);
+            a.on_event(msg(vec![call("p1", "TodoWrite", json!({"todos": first}))], StopReason::ToolUse, None));
+            done(&mut a, "p1", "ok", false, Some(json!({"oldTodos": [], "newTodos": first})));
+            a.on_event(msg(
+                vec![call("r1", "Read", json!({"file_path": "/home/kryptonite/KodAct/src/forms/signup.ts"}))],
+                StopReason::ToolUse,
+                None,
+            ));
+            let read = json!({"type": "text", "file": {"filePath": "src/forms/signup.ts", "numLines": 84, "startLine": 1, "totalLines": 84}});
+            done(&mut a, "r1", "1\tconst form = …", false, Some(read));
+            let second = json!([
+                todo("Read the signup form", "completed", "Reading the signup form"),
+                todo("Add the age field and its check", "in_progress", "Adding the age field and its check"),
+                todo("Run the tests", "pending", "Running the tests"),
+                todo("Update the changelog", "pending", "Updating the changelog"),
+            ]);
+            a.on_event(msg(vec![call("p2", "TodoWrite", json!({"todos": second}))], StopReason::ToolUse, None));
+            done(&mut a, "p2", "ok", false, Some(json!({"oldTodos": first, "newTodos": second})));
+            a.busy_since = Some(std::time::Instant::now() - std::time::Duration::from_secs(23));
+            shot(name, &mut a, 100, 24);
+        }
+
         // The marks' frames, for an animation of the sidebar: each fills at its own phase.
         let step = render::FILL_STEP.as_millis() as u64;
         for f in 0..render::FILL.len() as u64 {

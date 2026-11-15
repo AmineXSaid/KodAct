@@ -411,7 +411,15 @@ with `{"text", "cwd"}`:
     command on its own line in the code colour (`✓ Run the cart tests` /
     `$ python3 -m pytest -q`); without one, `Ran <command>`. Then its last 3
     output lines, or `(no output)`;
+  - TodoWrite: the plan as a checklist, every task in order, under
+    `Updated the plan 1 of 4 done`: done tasks with a green `✓` and their
+    text struck through (as a Markdown task list shows them), the one in
+    progress in lime and bold with the plan pane's half-full cell `⣤`, the
+    rest open `○`; an emptied plan `No tasks`;
   - anything else: `first line (+N lines)`.
+- **While the model works**, the spinner names the plan's task in progress,
+  its `activeForm` (`Running the tests…`), or its content when it has none;
+  with no task in progress, a word for what it does.
 - **While the model writes a tool call**, the working line says what it is
   preparing: `Preparing an edit to cart.py…`, `Writing notes.md…`,
   `Preparing a command…`; the file name once its path has arrived.

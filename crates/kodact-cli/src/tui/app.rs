@@ -645,6 +645,7 @@ pub fn result_lines(
             one(msg, t.dim())
         }
         ("Read", Some(v)) => one(format!("{} file", v["type"].as_str().unwrap_or("a")), t.dim()),
+        ("TodoWrite", Some(v)) if v["newTodos"].is_array() => todo_checklist(t, &v["newTodos"]),
         ("Edit" | "MultiEdit" | "Write", Some(v)) if v.get("structuredPatch").is_some() => {
             let hunks = v["structuredPatch"].as_array().cloned().unwrap_or_default();
             let lines: Vec<String> = hunks
@@ -692,6 +693,36 @@ pub fn result_lines(
             one(format!("{}{more}", first_line(text)), t.dim())
         }
     }
+}
+
+/// The mark of the plan's task in progress in the transcript: the plan pane's cell, half full
+/// as it is while the session waits (`⣤`), still, as scrollback is.
+const TODO_ACTIVE_MARK: &str = "⣤ ";
+
+/// A TodoWrite call's plan, as a checklist under its header, every task in the plan's order:
+/// - done ones with a green `✓` and their text struck through, as a Markdown task list shows
+///   them;
+/// - the one in progress with the plan pane's half-full cell, in lime and bold;
+/// - the rest open `○`.
+fn todo_checklist(t: &Theme, todos: &Value) -> Vec<Line<'static>> {
+    let items: Vec<&Value> = todos.as_array().map(|a| a.iter().collect()).unwrap_or_default();
+    if items.is_empty() {
+        return vec![Line::from(vec![Span::styled(RESULT_MARK, t.hairline()), Span::styled("No tasks", t.dim())])];
+    }
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let lead = if i == 0 { Span::styled(RESULT_MARK, t.hairline()) } else { Span::raw(RESULT_INDENT) };
+            let content: String = item["content"].as_str().unwrap_or("").chars().take(200).collect();
+            let (mark, mark_style, text_style) = match item["status"].as_str() {
+                Some("completed") => ("✓ ", t.success(), t.dim().add_modifier(Modifier::CROSSED_OUT)),
+                Some("in_progress") => (TODO_ACTIVE_MARK, t.accent(), t.accent().add_modifier(Modifier::BOLD)),
+                _ => ("○ ", t.subtle(), Style::default()),
+            };
+            Line::from(vec![lead, Span::styled(mark, mark_style), Span::styled(content, text_style)])
+        })
+        .collect()
 }
 
 /// A tool call that has not answered yet.
@@ -1024,7 +1055,10 @@ pub fn summarize(tool: &str, input: &Value) -> String {
         _ => "",
     };
     let v = input.get(key).and_then(Value::as_str).map(str::to_string).or_else(|| match tool {
-        "TodoWrite" => input["todos"].as_array().map(|a| format!("{} todos", a.len())),
+        "TodoWrite" => input["todos"].as_array().map(|a| {
+            let done = a.iter().filter(|t| t["status"] == "completed").count();
+            format!("{done} of {} done", a.len())
+        }),
         _ => input.as_object().and_then(|o| o.values().find_map(Value::as_str).map(str::to_string)),
     });
     let v = v.unwrap_or_default();
@@ -3579,6 +3613,40 @@ mod tests {
         assert_eq!(a.look, Look::Ledger);
         a.on_event(UiEvent::Look("neon".into()));
         assert_eq!(a.look, Look::Frame, "an unknown name falls back to the first style");
+    }
+
+    /// A TodoWrite call shows the plan as a checklist, as the reference CLI does: done tasks with
+    /// a green check and their text struck through, the one in progress in lime and bold with
+    /// the plan pane's half-full cell, the rest open; its header says how far the plan is.
+    #[test]
+    fn a_plan_update_shows_the_plan_as_a_checklist() {
+        let t = Theme { color: true, light: false, accent: None, depth: Default::default() };
+        let todos = json!([
+            {"content": "Read the signup form", "status": "completed", "activeForm": "Reading the signup form"},
+            {"content": "Add the age check", "status": "in_progress", "activeForm": "Adding the age check"},
+            {"content": "Run the tests", "status": "pending", "activeForm": "Running the tests"},
+        ]);
+        let result = json!({"oldTodos": [], "newTodos": todos});
+        let lines = result_lines(&t, "TodoWrite", "Todos have been modified successfully.", false, Some(&result));
+        assert_eq!(
+            texts(&lines),
+            ["  └ ✓ Read the signup form", "    ⣤ Add the age check", "    ○ Run the tests"],
+            "the plan, not the tool's message"
+        );
+        let style = |row: usize, span: usize| lines[row].spans[span].style;
+        assert_eq!(style(0, 1), t.success(), "a green check");
+        assert!(style(0, 2).add_modifier.contains(Modifier::CROSSED_OUT), "done: struck through");
+        assert_eq!(style(1, 1), t.accent(), "the task in progress in lime");
+        assert!(style(1, 2).add_modifier.contains(Modifier::BOLD));
+        assert_eq!(style(2, 1), t.subtle(), "open");
+        let header: String =
+            tool_header(&t, "TodoWrite", &json!({"todos": todos}), true).iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(header, "Updated the plan 1 of 3 done");
+        // An emptied plan says so; a refused call still shows its error.
+        let empty = json!({"oldTodos": todos, "newTodos": []});
+        assert_eq!(texts(&result_lines(&t, "TodoWrite", "ok", false, Some(&empty))), ["  └ No tasks"]);
+        let refused = result_lines(&t, "TodoWrite", "todos[0].content must not be empty", true, None);
+        assert_eq!(texts(&refused), ["  └ todos[0].content must not be empty"]);
     }
 
     #[test]

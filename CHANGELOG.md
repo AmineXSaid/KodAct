@@ -2,6 +2,23 @@
 
 ## 0.1.0 (unreleased)
 
+### The terminal shows each plan update as a checklist
+- **A TodoWrite call shows the plan.** It was shown as `Updated the plan 4
+  todos`, with the tool's own message under it. It is now the whole plan, as
+  a checklist:
+  - done tasks have a green `✓` and their text struck through, as a Markdown
+    task list shows them;
+  - the task in progress is lime and bold, with the plan pane's half-full
+    cell;
+  - the rest are open `○`;
+  - the header says how far the plan is (`Updated the plan 1 of 4 done`).
+- **Every width, every look.** The sidebar's Plan pane needs 140 columns, so
+  in a narrower terminal this was the only view of the plan. The checklist
+  shows at any width, dark or light.
+- **Seen in snapshots.** The TUI snapshots (`KODACT_SNAPSHOT_DIR`) gain the
+  scenes `16-plan` and `16-plan-light` at 100 columns, and draw struck-through
+  and italic text.
+
 ### The task list as the reference CLI keeps it, completed
 - **Every reply counts.** The task-list reminder (`nudges.todoTracking`) now
   counts every reply of the model since the last TodoWrite call, with tools
