@@ -414,8 +414,8 @@ with `{"text", "cwd"}`:
   - TodoWrite: the plan as a checklist, every task in order, under
     `Updated the plan 1 of 4 done`: done tasks with a green `✓` and their
     text struck through (as a Markdown task list shows them), the one in
-    progress in lime and bold with the plan pane's half-full cell `⣤`, the
-    rest open `○`; an emptied plan `No tasks`;
+    progress in lime and bold with the Plan pane's circle, still (`◉`),
+    the rest open `○`; an emptied plan `No tasks`;
   - anything else: `first line (+N lines)`.
 - **While the model works**, the spinner names the plan's task in progress,
   its `activeForm` (`Running the tests…`), or its content when it has none;
@@ -452,7 +452,9 @@ with `{"text", "cwd"}`:
   - the session's title (its first prompt);
   - **Context**: the room left, the tokens used and the model;
   - **Plan** (`1/4`): the plan from TodoWrite, done steps quiet with `✓`, the
-    active one in lime, the rest open `○`;
+    active one in lime with a circle going round while the turn runs (an arc,
+    `◜ ◠ ◝ ◞ ◡ ◟`, a sixth of a turn every 120 ms), still `◉` while the
+    session waits, the rest open `○`;
   - **MCP** (`2/3 up`, or `1 failed` in red): each server and what it
     brings, `● jira  12 tools` in green, a failed one `× figma  failed` in
     red, one still connecting `connecting`, a disabled one `○ … off`;
@@ -468,8 +470,8 @@ with `{"text", "cwd"}`:
   Work in flight has a mark that fills: a braille cell that fills from the
   bottom, dot by dot (`⡀ ⣀ ⣄ ⣤ ⣦ ⣶ ⣷ ⣿`), and drains again, its colour
   breathing with it (dim nearly empty, full when full, in 24-bit colour),
-  each at its own pace: the active plan step during a turn (half full `⣤`
-  while the session waits), a server connecting, a sub-agent working. The
+  each at its own pace: a server connecting, a sub-agent working. (The plan's
+  step in progress turns as a circle instead, above.) The
   context gauge uses the same cell, filled to how much is used, and the
   sidebar adds a bar under it that fills left to right, dot by dot. A finished state
   is still: `●` connected, `✓` done. Every state has a word or a shape as

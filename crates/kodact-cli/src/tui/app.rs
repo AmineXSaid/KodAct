@@ -695,14 +695,14 @@ pub fn result_lines(
     }
 }
 
-/// The mark of the plan's task in progress in the transcript: the plan pane's cell, half full
-/// as it is while the session waits (`⣤`), still, as scrollback is.
-const TODO_ACTIVE_MARK: &str = "⣤ ";
+/// The mark of the plan's task in progress in the transcript: the Plan pane's circle as it is
+/// while nothing moves (`◉`), as scrollback can't.
+const TODO_ACTIVE_MARK: &str = "◉ ";
 
 /// A TodoWrite call's plan, as a checklist under its header, every task in the plan's order:
 /// - done ones with a green `✓` and their text struck through, as a Markdown task list shows
 ///   them;
-/// - the one in progress with the plan pane's half-full cell, in lime and bold;
+/// - the one in progress with the Plan pane's circle, still (`◉`), in lime and bold;
 /// - the rest open `○`.
 fn todo_checklist(t: &Theme, todos: &Value) -> Vec<Line<'static>> {
     let items: Vec<&Value> = todos.as_array().map(|a| a.iter().collect()).unwrap_or_default();
@@ -3617,7 +3617,7 @@ mod tests {
 
     /// A TodoWrite call shows the plan as a checklist, as the reference CLI does: done tasks with
     /// a green check and their text struck through, the one in progress in lime and bold with
-    /// the plan pane's half-full cell, the rest open; its header says how far the plan is.
+    /// the Plan pane's circle, still, the rest open; its header says how far the plan is.
     #[test]
     fn a_plan_update_shows_the_plan_as_a_checklist() {
         let t = Theme { color: true, light: false, accent: None, depth: Default::default() };
@@ -3630,7 +3630,7 @@ mod tests {
         let lines = result_lines(&t, "TodoWrite", "Todos have been modified successfully.", false, Some(&result));
         assert_eq!(
             texts(&lines),
-            ["  └ ✓ Read the signup form", "    ⣤ Add the age check", "    ○ Run the tests"],
+            ["  └ ✓ Read the signup form", "    ◉ Add the age check", "    ○ Run the tests"],
             "the plan, not the tool's message"
         );
         let style = |row: usize, span: usize| lines[row].spans[span].style;

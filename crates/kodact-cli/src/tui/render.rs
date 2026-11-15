@@ -676,12 +676,28 @@ pub fn sidebar_width(cols: u16) -> u16 {
 pub const LEVELS: [&str; 9] = ["⠀", "⡀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣷", "⣿"];
 
 /// The frames of a mark that fills while its work is in flight (a server connecting,
-/// a sub-agent working, the plan's step during a turn): it fills from the bottom,
-/// dot by dot, and drains again, so it reads as filling, never as done.
+/// a sub-agent working): it fills from the bottom, dot by dot, and drains again, so it
+/// reads as filling, never as done.
 pub const FILL: [&str; 14] = ["⡀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣷", "⣿", "⣷", "⣶", "⣦", "⣤", "⣄", "⣀"];
 
 /// The time between frames of a filling mark.
 pub const FILL_STEP: Duration = Duration::from_millis(90);
+
+/// The frames of the plan's task in progress in the Plan pane (TodoWrite): an arc going round
+/// a circle, as a loading circle does, a sixth of a turn a frame.
+pub const CIRCLE: [&str; 6] = ["◜", "◠", "◝", "◞", "◡", "◟"];
+
+/// The time between the circle's frames.
+pub const CIRCLE_STEP: Duration = Duration::from_millis(120);
+
+/// The plan's task in progress where nothing moves: a circle with its centre filled, in each
+/// plan update's checklist in the transcript and in the Plan pane while the session waits.
+pub const CIRCLE_STILL: &str = "◉";
+
+/// The circle's frame `ran` after the turn began.
+pub fn circling(ran: Duration) -> &'static str {
+    CIRCLE[(ran.as_millis() / CIRCLE_STEP.as_millis()) as usize % CIRCLE.len()]
+}
 
 /// A filling mark, `ran` after its work began: each keeps its own phase, so several
 /// in flight never pulse in step.
@@ -798,9 +814,9 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         context.push(Line::from(Span::styled(fit(&s.model, inner), t.dim())));
     }
 
-    // The plan: done steps quiet with a check, the active one filling in lime while
-    // the turn runs (half full while it waits), the rest open. A long step takes the
-    // rows it needs while there is room, two when there isn't.
+    // The plan: done steps quiet with a check, the active one in lime with a circle going
+    // round while the turn runs (still, `◉`, while it waits), the rest open. A long step
+    // takes the rows it needs while there is room, two when there isn't.
     let plan_rows = |most: usize| -> Vec<Line<'static>> {
         let mut plan = vec![];
         if app.todos.is_empty() {
@@ -813,8 +829,8 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
             let (mark, mark_style, body) = match status.as_str() {
                 "completed" => ("✓", t.subtle(), t.subtle()),
                 "in_progress" => match busy_for.filter(|_| app.busy) {
-                    Some(ran) => (filling(ran), breathing(&t, t.accent(), ran), t.accent()),
-                    None => (LEVELS[4], t.accent(), t.accent()),
+                    Some(ran) => (circling(ran), t.accent(), t.accent()),
+                    None => (CIRCLE_STILL, t.accent(), t.accent()),
                 },
                 _ => ("○", t.dim(), t.dim()),
             };
@@ -3152,18 +3168,20 @@ mod tests {
             let r = rows.iter().find(|r| r.contains(what)).unwrap_or_else(|| panic!("{what}: {rows:#?}"));
             r.trim_start().chars().next().unwrap().to_string()
         };
-        // The sub-agent and the active step fill frame by frame, from empty to full and back.
+        // A sub-agent's mark fills frame by frame, from empty to full and back.
         let frames: Vec<String> =
             (0..FILL.len() as u32).map(|i| mark(&a, start + FILL_STEP * i, "find the parser")).collect();
         assert_eq!(frames, FILL.map(String::from).to_vec());
-        assert_eq!(mark(&a, start + FILL_STEP * 2, "Add the field"), "⣄");
-        assert_eq!(mark(&a, start + FILL_STEP * 3, "Add the field"), "⣤");
+        // The plan's task in progress goes round a circle, a sixth of a turn a frame.
+        let round: Vec<String> =
+            (0..CIRCLE.len() as u32).map(|i| mark(&a, start + CIRCLE_STEP * i, "Add the field")).collect();
+        assert_eq!(round, CIRCLE.map(String::from).to_vec());
         // Each mark keeps its own phase: a sub-agent that started later is a frame behind.
         assert_eq!(filling(FILL_STEP * (FILL.len() as u32 + 1)), filling(FILL_STEP));
-        // Idle: the open step waits half full, and the agents section is gone.
+        // Idle: the open step waits, its circle still, and the agents section is gone.
         a.busy = false;
         a.running.clear();
-        assert_eq!(mark(&a, start + FILL_STEP * 3, "Add the field"), "⣤");
+        assert_eq!(mark(&a, start + FILL_STEP * 3, "Add the field"), CIRCLE_STILL);
         assert!(!side(&a, 60, start).join("\n").contains("Agents"));
         // A server still connecting fills too, and keeps the window redrawing while idle.
         a.mcp.push(("linear".into(), "pending".into()));

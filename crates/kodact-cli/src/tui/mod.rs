@@ -2032,68 +2032,81 @@ mod snapshots {
         }
 
         // 15. The sidebar mid-turn: the plan, MCP servers with their tools (one failed,
-        // one still connecting), the skills used, and two sub-agents at work.
-        let mut a = app();
-        a.submit("add an age check to signups".into());
-        a.front = false;
-        a.sidebar = true;
-        a.status.session_tokens = 41_000;
-        a.mcp = vec![
-            ("jira".into(), "connected".into()),
-            ("github".into(), "connected".into()),
-            ("figma".into(), "failed".into()),
-            ("linear".into(), "pending".into()),
-        ];
-        a.mcp_tools = [("jira", 12), ("github", 8)].into_iter().map(|(n, c)| (n.to_string(), c)).collect();
-        a.on_event(UiEvent::Skills((1..=14).map(|i| format!("skill{i}")).collect()));
-        for s in ["verify", "simplify", "verify"] {
-            a.used_skill(s);
+        // one still connecting), the skills used, and two sub-agents at work. Drawn afresh for
+        // each frame: a shot takes the transcript into its own screen.
+        let sidebar_scene = |offset: std::time::Duration| -> App {
+            let mut a = app();
+            a.submit("add an age check to signups".into());
+            a.front = false;
+            a.sidebar = true;
+            a.status.session_tokens = 41_000;
+            a.mcp = vec![
+                ("jira".into(), "connected".into()),
+                ("github".into(), "connected".into()),
+                ("figma".into(), "failed".into()),
+                ("linear".into(), "pending".into()),
+            ];
+            a.mcp_tools = [("jira", 12), ("github", 8)].into_iter().map(|(n, c)| (n.to_string(), c)).collect();
+            a.on_event(UiEvent::Skills((1..=14).map(|i| format!("skill{i}")).collect()));
+            for s in ["verify", "simplify", "verify"] {
+                a.used_skill(s);
+            }
+            a.on_event(msg(
+                vec![call(
+                    "p",
+                    "TodoWrite",
+                    json!({"todos": [
+                        {"content": "Read the signup form", "status": "completed", "activeForm": "Reading"},
+                        {"content": "Add the age field and its check", "status": "in_progress", "activeForm": "Adding"},
+                        {"content": "Run the tests", "status": "pending", "activeForm": "Running"},
+                        {"content": "Update the changelog", "status": "pending", "activeForm": "Updating"}
+                    ]}),
+                )],
+                StopReason::ToolUse,
+                None,
+            ));
+            let plan = json!([
+                {"content": "Read the signup form", "status": "completed", "activeForm": "Reading"},
+                {"content": "Add the age field and its check", "status": "in_progress", "activeForm": "Adding"},
+                {"content": "Run the tests", "status": "pending", "activeForm": "Running"},
+                {"content": "Update the changelog", "status": "pending", "activeForm": "Updating"}
+            ]);
+            done(&mut a, "p", "ok", false, Some(json!({"oldTodos": [], "newTodos": plan})));
+            a.on_event(msg(
+                vec![
+                    call(
+                        "t1",
+                        "Task",
+                        json!({"subagent_type": "Explore", "description": "find the form validators", "prompt": "…"}),
+                    ),
+                    call(
+                        "t2",
+                        "Task",
+                        json!({"subagent_type": "general-purpose", "description": "check the API docs", "prompt": "…"}),
+                    ),
+                ],
+                StopReason::ToolUse,
+                None,
+            ));
+            for (step, parent) in [("src/forms/signup.ts", "t1"), ("src/forms/rules.ts", "t1"), ("docs/api.md", "t2")] {
+                a.on_event(msg(vec![call("s", "Read", json!({"file_path": step}))], StopReason::ToolUse, Some(parent)));
+            }
+            let ago = |ms: u64| std::time::Instant::now() - std::time::Duration::from_millis(ms) - offset;
+            a.busy_since = Some(ago(41_000));
+            a.running[0].since = ago(41_000 + 280);
+            a.running[1].since = ago(12_000 + 700);
+            a
+        };
+        shot("15-sidebar", &mut sidebar_scene(std::time::Duration::ZERO), 170, 40);
+        // The marks' frames, for an animation of the sidebar: each fills at its own phase.
+        for f in 0..render::FILL.len() as u32 {
+            shot(&format!("sidebar-{f:02}"), &mut sidebar_scene(render::FILL_STEP * f), 170, 40);
         }
-        a.on_event(msg(
-            vec![call(
-                "p",
-                "TodoWrite",
-                json!({"todos": [
-                    {"content": "Read the signup form", "status": "completed", "activeForm": "Reading"},
-                    {"content": "Add the age field and its check", "status": "in_progress", "activeForm": "Adding"},
-                    {"content": "Run the tests", "status": "pending", "activeForm": "Running"},
-                    {"content": "Update the changelog", "status": "pending", "activeForm": "Updating"}
-                ]}),
-            )],
-            StopReason::ToolUse,
-            None,
-        ));
-        let plan = json!([
-            {"content": "Read the signup form", "status": "completed", "activeForm": "Reading"},
-            {"content": "Add the age field and its check", "status": "in_progress", "activeForm": "Adding"},
-            {"content": "Run the tests", "status": "pending", "activeForm": "Running"},
-            {"content": "Update the changelog", "status": "pending", "activeForm": "Updating"}
-        ]);
-        done(&mut a, "p", "ok", false, Some(json!({"oldTodos": [], "newTodos": plan})));
-        a.on_event(msg(
-            vec![
-                call(
-                    "t1",
-                    "Task",
-                    json!({"subagent_type": "Explore", "description": "find the form validators", "prompt": "…"}),
-                ),
-                call(
-                    "t2",
-                    "Task",
-                    json!({"subagent_type": "general-purpose", "description": "check the API docs", "prompt": "…"}),
-                ),
-            ],
-            StopReason::ToolUse,
-            None,
-        ));
-        for (step, parent) in [("src/forms/signup.ts", "t1"), ("src/forms/rules.ts", "t1"), ("docs/api.md", "t2")] {
-            a.on_event(msg(vec![call("s", "Read", json!({"file_path": step}))], StopReason::ToolUse, Some(parent)));
+        // The plan's task in progress going round its circle, for an animation of the Plan pane.
+        for f in 0..render::CIRCLE.len() as u32 {
+            shot(&format!("15-sidebar-circle-{f}"), &mut sidebar_scene(render::CIRCLE_STEP * f), 170, 40);
         }
-        let ago = |ms: u64| std::time::Instant::now() - std::time::Duration::from_millis(ms);
-        a.busy_since = Some(ago(41_000));
-        a.running[0].since = ago(41_000 + 280);
-        a.running[1].since = ago(12_000 + 700);
-        shot("15-sidebar", &mut a, 170, 40);
+
         // 16. The plan in the transcript, then its progress, with the spinner saying the task in
         // progress: at 100 columns (no sidebar), in a dark and a light terminal.
         for (name, light) in [("16-plan", false), ("16-plan-light", true)] {
@@ -2127,15 +2140,6 @@ mod snapshots {
             done(&mut a, "p2", "ok", false, Some(json!({"oldTodos": first, "newTodos": second})));
             a.busy_since = Some(std::time::Instant::now() - std::time::Duration::from_secs(23));
             shot(name, &mut a, 100, 24);
-        }
-
-        // The marks' frames, for an animation of the sidebar: each fills at its own phase.
-        let step = render::FILL_STEP.as_millis() as u64;
-        for f in 0..render::FILL.len() as u64 {
-            a.busy_since = Some(ago(41_000 + step * f));
-            a.running[0].since = ago(41_000 + 280 + step * f);
-            a.running[1].since = ago(12_000 + 700 + step * f);
-            shot(&format!("sidebar-{f:02}"), &mut a, 170, 40);
         }
     }
 }

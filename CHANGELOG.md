@@ -2,14 +2,26 @@
 
 ## 0.1.0 (unreleased)
 
+### The plan's task in progress turns as a circle
+- **In the Plan pane.** The sidebar marked the plan's task in progress with
+  a braille cell that filled and drained, as it marks a server connecting or
+  a sub-agent working. While the model works, that task now has an arc going
+  round a circle (`◜ ◠ ◝ ◞ ◡ ◟`), in lime, a sixth of a turn every 120 ms,
+  so the step being worked on reads as in progress at a glance. While the
+  session waits, the circle is still: `◉`.
+- **In the transcript.** Each plan update's checklist marks the task in
+  progress with the same still circle, `◉`, where it had the half-full cell
+  `⣤`. Scrollback doesn't move, so it doesn't turn there.
+- **Seen in snapshots.** Scene 15 gains six frames, `15-sidebar-circle-0` to
+  `15-sidebar-circle-5`, a sixth of a turn apart.
+
 ### The terminal shows each plan update as a checklist
 - **A TodoWrite call shows the plan.** It was shown as `Updated the plan 4
   todos`, with the tool's own message under it. It is now the whole plan, as
   a checklist:
   - done tasks have a green `✓` and their text struck through, as a Markdown
     task list shows them;
-  - the task in progress is lime and bold, with the plan pane's half-full
-    cell;
+  - the task in progress is lime and bold, with a still circle `◉`;
   - the rest are open `○`;
   - the header says how far the plan is (`Updated the plan 1 of 4 done`).
 - **Every width, every look.** The sidebar's Plan pane needs 140 columns, so
