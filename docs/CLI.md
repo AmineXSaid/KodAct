@@ -369,7 +369,10 @@ a file only when it reads as a path: it exists, starts at a root (`/`, `./`,
 `../`, `~/`), ends with `/`, or ends with a file name (`out/plan.jsonl`). So
 `and/or` isn't one. A file named alone (`parser.py`) that isn't at the
 project's root is the file of that name elsewhere in the project
-(`src/parser.py`), not one to make. Two files named as alternatives
+(`src/parser.py`), not one to make; one made during the turn in a folder of
+its own (a package's `__init__.py`, `tests/test_parser.py`) isn't missing
+either. A name alone that ends a path the request also names (`algo.py`
+beside `/app/repo/algo.py`) is that path. Two files named as alternatives
 (`requirements.txt or pyproject.toml`) are one deliverable: when either
 exists, neither is listed. Which files a request asks for is read
 from its words, a guess. The field is absent when nothing is

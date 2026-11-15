@@ -2,6 +2,30 @@
 
 ## 0.1.0 (unreleased)
 
+### A file the turn made where the request said is not reported missing
+- **A name alone beside its full path is that file.** A request that names
+  `/app/repo/algo.py` and later says "algo.py" was read as asking for two
+  files, the second at the project's root. Once the model made the first,
+  the result's `verification.missing` still listed `algo.py` (a run of
+  2026-11-15). The name alone now stands for the path, and a size limit
+  given for it is the path's.
+- **A name alone made in a folder of its own is not missing.** "Add
+  `test_counter.py`" or "the function in `__init__.py`" is read, as at the
+  start of a turn, as the file of that name anywhere in the project; one
+  made in `tests/` or in a package's folder is no longer listed. A path the
+  request gives is still where the file must be.
+- **What it changes in real use.** `-p` results, the /goal evaluator (told
+  which files "don't exist") and the `constraints` nudge no longer hear of
+  files that the turn made. A false entry could keep a goal loop going or
+  have the model write a stray copy at the project's root.
+- **What it costs.** The alias costs nothing. At a turn's end, the project is
+  searched (the same bounded search as at its start) only when a file named
+  alone is missing where it was looked for. The model and its window play no
+  part.
+- `named_corpus`, an ignored test, prints this reading for every request in
+  a folder (Harbor job folders, the eval tasks), so a change to it can be
+  measured across many requests before it is made.
+
 ### Harbor: no trial starts into a dead endpoint; trials that say nothing are listed to run again
 - **The endpoint gate.** Before each trial's agent starts, the KodAct agent
   asks the model endpoint whether it answers (`endpoint_gate.py`, with the

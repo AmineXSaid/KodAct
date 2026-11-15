@@ -1,0 +1,13 @@
+{
+  "instruction": "Create the package lib/wordcount with the module lib/wordcount/counter.py. It needs a function count_words(text) that returns how many words the text has: words are separated by any whitespace, and an empty or blank text has 0. Make sure counter.py handles tabs and newlines. Then add test_counter.py next to the existing tests, and make `python3 -m unittest discover -s tests` pass.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": [
+    "python",
+    "everyday",
+    "deliverables",
+    "constraints",
+    "quiet"
+  ],
+  "timeout_secs": 300
+}

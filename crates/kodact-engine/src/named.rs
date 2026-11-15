@@ -174,6 +174,7 @@ impl Named {
                 }
             }
         }
+        n.merge_aliases();
         // A limit without a file: the one new file the request asks for, or the one of its
         // type. Files there already are what the request reads, not what it asks to be made.
         if unattached.is_empty() {
@@ -201,6 +202,33 @@ impl Named {
 
     pub fn names_files(&self) -> bool {
         !self.files.is_empty()
+    }
+
+    /// A name alone that is the last part of a path the request also names (`algo.py` beside
+    /// `/app/repo/algo.py`) is that file: it is dropped, and a limit or an alternative given for
+    /// it is the path's. Read as a file of its own at the project's root, it was reported missing
+    /// (a run of 2026-11-15) once the model had made it where the request said.
+    fn merge_aliases(&mut self) {
+        let alias: Vec<(String, String)> = self
+            .files
+            .iter()
+            .filter(|f| !f.contains('/'))
+            .filter_map(|name| {
+                let path = self.files.iter().find(|p| p.contains('/') && file_name(p) == name.as_str())?;
+                Some((name.clone(), path.clone()))
+            })
+            .collect();
+        if alias.is_empty() {
+            return;
+        }
+        let to = |f: &String| alias.iter().find(|(a, _)| a == f).map_or_else(|| f.clone(), |(_, p)| p.clone());
+        self.files.retain(|f| !alias.iter().any(|(a, _)| a == f));
+        for (f, ..) in &mut self.limits {
+            *f = to(f);
+        }
+        for (a, b) in &mut self.either {
+            (*a, *b) = (to(a), to(b));
+        }
     }
 
     /// Named commands no command run this turn contains.
@@ -286,6 +314,8 @@ pub(crate) struct Watched {
     deliverables: Vec<String>,
     /// Alternatives (`a.txt or b.toml`): either one existing is the other one made.
     either: Vec<(String, String)>,
+    /// Where a name alone is looked for at the end, as at the start ([`locate`]).
+    project: PathBuf,
 }
 
 impl Watched {
@@ -305,7 +335,7 @@ impl Watched {
                 push(&mut deliverables, f.clone());
             }
         }
-        Watched { files, deliverables, either: n.either.clone() }
+        Watched { files, deliverables, either: n.either.clone(), project: project.to_path_buf() }
     }
 
     /// The request names files that didn't exist when the turn started.
@@ -368,15 +398,27 @@ impl Watched {
     ///
     /// Of two alternatives (`requirements.txt or pyproject.toml`), one existing is enough: the
     /// other is not missing.
+    ///
+    /// A name alone (`helper.py`, `__init__.py`) is the file of that name anywhere in the project,
+    /// as at the start ([`locate`]): one made in a folder of its own (a package, `tests/`, a folder
+    /// the turn made) is not missing. The request gave no folder for it, so none is wrong. The
+    /// project is searched only when such a name is missing where it was watched.
     pub fn still_missing(&self) -> Vec<String> {
         let exists = |name: &str| self.files.iter().any(|(n, p, _)| n == name && p.exists());
         let covered =
             |name: &str| self.either.iter().any(|(a, b)| (a == name && exists(b)) || (b == name && exists(a)));
-        self.files
+        let missing: Vec<String> = self
+            .files
             .iter()
             .filter(|(n, p, _)| self.deliverables.contains(n) && !p.exists() && !covered(n))
             .map(|(n, ..)| n.clone())
-            .collect()
+            .collect();
+        let alone: Vec<&str> = missing.iter().filter(|n| !n.contains('/')).map(String::as_str).collect();
+        if alone.is_empty() {
+            return missing;
+        }
+        let made = found_elsewhere(&alone, &self.project);
+        missing.into_iter().filter(|n| n.contains('/') || !made.iter().any(|(f, _)| f == n)).collect()
     }
 }
 
@@ -500,6 +542,11 @@ fn push(v: &mut Vec<String>, s: String) {
     if !v.contains(&s) {
         v.push(s);
     }
+}
+
+/// The last part of a path as the request writes it (`/app/repo/algo.py`: `algo.py`).
+fn file_name(f: &str) -> &str {
+    f.trim_end_matches('/').rsplit('/').next().unwrap_or(f)
 }
 
 fn resolve(f: &str, project: &Path) -> PathBuf {
@@ -1175,5 +1222,100 @@ mod tests {
         // Read, not made: a limit from a sentence that names no file isn't its.
         let ask = "Use requests_1.jsonl. The output must be at most 10 bytes.";
         assert!(Named::from_request(ask, root).limits.is_empty());
+    }
+
+    #[test]
+    fn a_name_alone_beside_its_full_path_is_that_file() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        let repo = root.join("repo");
+        let ask = format!(
+            "mkdir {repo}, then initialize a git repo at {repo}. Merge the branches so the result includes \
+             {repo}/algo.py. Verify that algo.py gives the expected outputs.",
+            repo = repo.display()
+        );
+        let n = Named::from_request(&ask, root);
+        let full = format!("{}/algo.py", repo.display());
+        assert!(n.files.contains(&full) && !n.files.iter().any(|f| f == "algo.py"), "{:?}", n.files);
+        let w = Watched::at_start(&n, root);
+        assert!(w.still_missing().contains(&full), "{:?}", w.still_missing());
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::write(repo.join("algo.py"), "def map(g): return g\n").unwrap();
+        assert!(w.still_missing().is_empty(), "{:?}", w.still_missing());
+        // A limit given for the name alone is the path's.
+        let n = Named::from_request(&format!("Write {full}. Keep algo.py under 100 bytes."), root);
+        assert_eq!(n.limits, [(full, 99, "under 100 bytes".to_string())]);
+    }
+
+    #[test]
+    fn a_name_alone_made_in_a_folder_of_its_own_is_not_missing() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        let n = Named::from_request("Create a package with the function in __init__.py, and write notes.md.", root);
+        let w = Watched::at_start(&n, root);
+        assert_eq!(w.still_missing(), ["__init__.py", "notes.md"]);
+        std::fs::create_dir(root.join("vectors")).unwrap();
+        std::fs::write(root.join("vectors/__init__.py"), "").unwrap();
+        assert_eq!(w.still_missing(), ["notes.md"], "made in the package's folder");
+        // A path the request gives is where the file must be: one made elsewhere is still missing.
+        let n = Named::from_request("Write out/plan.json.", root);
+        let w = Watched::at_start(&n, root);
+        std::fs::write(root.join("plan.json"), "{}").unwrap();
+        assert_eq!(w.still_missing(), ["out/plan.json"]);
+        // What a build or an installer made doesn't count, as at the start.
+        let n = Named::from_request("Write report.txt.", root);
+        let w = Watched::at_start(&n, root);
+        std::fs::create_dir_all(root.join("node_modules/x")).unwrap();
+        std::fs::write(root.join("node_modules/x/report.txt"), "").unwrap();
+        assert_eq!(w.still_missing(), ["report.txt"]);
+    }
+
+    /// The reading of many requests at once, to measure a change to it across cases before making
+    /// it (docs/goal.md, rule 4). `KODACT_NAMED_CORPUS` names a folder: every `instruction.txt`
+    /// under it (the trials of Harbor job folders) and every eval task's `task.json` is read, in an
+    /// empty project, so each file it names is one to make unless the request removes it. Prints,
+    /// per request, the files to make, those it removes, and the size limits, for labelling by hand:
+    ///
+    /// ```text
+    /// KODACT_NAMED_CORPUS=jobs cargo test -p kodact-engine named_corpus -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn named_corpus() {
+        let Some(dir) = std::env::var_os("KODACT_NAMED_CORPUS") else { return };
+        let mut found = vec![];
+        let mut todo = vec![PathBuf::from(dir)];
+        while let Some(d) = todo.pop() {
+            let Ok(rd) = std::fs::read_dir(&d) else { continue };
+            for e in rd.flatten() {
+                let path = e.path();
+                if path.is_dir() {
+                    todo.push(path);
+                } else if matches!(e.file_name().to_str(), Some("instruction.txt" | "task.json")) {
+                    found.push(path);
+                }
+            }
+        }
+        found.sort();
+        let empty = tempfile::tempdir().unwrap();
+        for path in found {
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let request = if path.ends_with("task.json") {
+                let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                v["instruction"].as_str().unwrap_or_default().to_string()
+            } else {
+                text
+            };
+            let n = Named::from_request(&request, empty.path());
+            let made = Watched::at_start(&n, empty.path()).still_missing();
+            let limits: Vec<String> = n.limits.iter().map(|(f, b, _)| format!("{f} <= {b}")).collect();
+            println!("{}\n  to make: {}", path.display(), made.join(", "));
+            if !n.removed.is_empty() {
+                println!("  removed: {}", n.removed.join(", "));
+            }
+            if !limits.is_empty() {
+                println!("  limits: {}", limits.join(", "));
+            }
+        }
     }
 }
