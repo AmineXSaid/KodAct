@@ -1086,6 +1086,7 @@ pub fn build_session(
     if let Some(v) = &verify {
         env_info.checks = v.commands.clone();
     }
+    let nudge_config = nudges(&settings, &mut warnings);
     let prompt = PromptSpec {
         replace: opts.system_prompt.clone(),
         append: opts.append_system_prompt.clone(),
@@ -1096,6 +1097,7 @@ pub fn build_session(
         output_style: Some(style.prompt.clone()).filter(|p| !p.is_empty()),
         autonomous,
         short: short_prompt(&settings),
+        todo_tracking: nudge_config.todo_tracking,
         env: env_info,
     };
     let sp_opts = prompt.options();
@@ -1192,7 +1194,7 @@ pub fn build_session(
         verify,
         escalate_output: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").is_none(),
         fast: settings.bool("/fastMode").unwrap_or(false),
-        nudges: nudges(&settings, &mut warnings),
+        nudges: nudge_config,
     };
     let parts = EngineParts {
         provider: provider.clone(),

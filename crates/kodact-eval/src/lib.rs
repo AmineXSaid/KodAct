@@ -181,6 +181,9 @@ pub struct RunRecord {
     /// Replies that were all reasoning, each answered with a reminder to act (`act_reminder`).
     #[serde(default)]
     pub act_reminders: u64,
+    /// TodoWrite calls: how much the model kept its task list (the `todoTracking` A/B).
+    #[serde(default)]
+    pub todo_writes: u64,
     /// Nudges given (`system/nudge`), by kind.
     #[serde(default)]
     pub nudges: std::collections::BTreeMap<String, u64>,
@@ -243,6 +246,9 @@ pub struct Summary {
     pub act_reminders_per_run: f64,
     #[serde(default)]
     pub nudges_per_run: f64,
+    /// TodoWrite calls per run.
+    #[serde(default)]
+    pub todo_writes_per_run: f64,
     #[serde(default)]
     pub mean_tokens: f64,
     /// Over the runs that wrote a file.
@@ -297,6 +303,7 @@ pub fn summarize(runs: &[RunRecord]) -> Summary {
         loop_guards_per_run: runs.iter().map(|r| r.loop_guards as f64).sum::<f64>() / n,
         act_reminders_per_run: runs.iter().map(|r| r.act_reminders as f64).sum::<f64>() / n,
         nudges_per_run: runs.iter().map(|r| r.nudges.values().sum::<u64>() as f64).sum::<f64>() / n,
+        todo_writes_per_run: runs.iter().map(|r| r.todo_writes as f64).sum::<f64>() / n,
         mean_tokens: runs.iter().map(|r| r.tokens as f64).sum::<f64>() / n,
         mean_calls_to_first_write: {
             let w: Vec<f64> = runs.iter().filter_map(|r| r.calls_to_first_write).map(|c| c as f64).collect();
@@ -421,6 +428,7 @@ pub struct StreamFacts {
     pub verify_reminders: u64,
     pub loop_guards: u64,
     pub act_reminders: u64,
+    pub todo_writes: u64,
     pub nudges: std::collections::BTreeMap<String, u64>,
     pub tokens: u64,
     pub calls_to_first_write: Option<u64>,
@@ -444,6 +452,9 @@ pub fn parse_stream(lines: &[Value]) -> StreamFacts {
                 for b in v["message"]["content"].as_array().into_iter().flatten() {
                     if b["type"] == "tool_use" {
                         f.tool_calls += 1;
+                        if b["name"] == "TodoWrite" {
+                            f.todo_writes += 1;
+                        }
                         let writes =
                             matches!(b["name"].as_str(), Some("Write" | "Edit" | "MultiEdit" | "NotebookEdit"));
                         if writes && f.calls_to_first_write.is_none() {
@@ -650,6 +661,7 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         verify_reminders: facts.verify_reminders,
         loop_guards: facts.loop_guards,
         act_reminders: facts.act_reminders,
+        todo_writes: facts.todo_writes,
         nudges: facts.nudges,
         tokens: facts.tokens,
         calls_to_first_write: facts.calls_to_first_write,
@@ -691,6 +703,7 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
                     verify_reminders: 0,
                     loop_guards: 0,
                     act_reminders: 0,
+                    todo_writes: 0,
                     nudges: Default::default(),
                     tokens: 0,
                     calls_to_first_write: None,
@@ -763,7 +776,8 @@ pub fn render_markdown(r: &Report) -> String {
          | Wall time per task | {:.1}s |\n| Recovery rate | {} |\n| False-finish rate | {} |\n| Invalid-call rate | {} |\n\
          | Verification reminders per task | {:.2} |\n| Loop warnings per task | {:.2} |\n\
          | Reasoning-only replies per task | {:.2} |\n| Edits told they broke the syntax, per task | {:.2} |\n\
-         | Nudges per task | {:.2} |\n| Tokens per task | {:.0} |\n| Tool calls before the first write | {} |\n\
+         | Nudges per task | {:.2} |\n| TodoWrite calls per task | {:.2} |\n| Tokens per task | {:.0} |\n\
+         | Tool calls before the first write | {} |\n\
          | Compactions per task | {:.2} |\n\
          | Failed summaries per task | {:.2} |\n| Finished as verified, check failed | {} |\n\n",
         r.label,
@@ -782,6 +796,7 @@ pub fn render_markdown(r: &Report) -> String {
         s.act_reminders_per_run,
         s.edit_diagnostics_per_run,
         s.nudges_per_run,
+        s.todo_writes_per_run,
         s.mean_tokens,
         s.mean_calls_to_first_write.map(|c| format!("{c:.1}")).unwrap_or_else(|| "–".into()),
         s.compactions_per_run,
@@ -900,6 +915,17 @@ pub fn render_compare(a: &Report, b: &Report) -> String {
         format!("{:.2}", y.nudges_per_run),
         &delta(x.nudges_per_run, y.nudges_per_run, false),
     ));
+    let more_or_fewer = |da: f64, db: f64| match db - da {
+        d if d.abs() < 1e-9 => "=".to_string(),
+        d if d > 0.0 => "more in B".to_string(),
+        _ => "fewer in B".to_string(),
+    };
+    out.push_str(&row(
+        "TodoWrite calls per task",
+        format!("{:.2}", x.todo_writes_per_run),
+        format!("{:.2}", y.todo_writes_per_run),
+        &more_or_fewer(x.todo_writes_per_run, y.todo_writes_per_run),
+    ));
     out.push_str(&row(
         "Tokens per task",
         format!("{:.0}", x.mean_tokens),
@@ -1009,6 +1035,7 @@ mod tests {
             verify_reminders: 0,
             loop_guards: 0,
             act_reminders: 0,
+            todo_writes: 0,
             nudges: Default::default(),
             tokens: 0,
             calls_to_first_write: None,
@@ -1060,7 +1087,7 @@ mod tests {
     fn stream_parsing() {
         let lines = vec![
             json!({"type": "system", "subtype": "init"}),
-            json!({"type": "assistant", "message": {"content": [{"type": "tool_use"}, {"type": "tool_use"}]}}),
+            json!({"type": "assistant", "message": {"content": [{"type": "tool_use"}, {"type": "tool_use", "name": "TodoWrite"}]}}),
             json!({"type": "user", "message": {"content": [{"type": "tool_result", "is_error": true}, {"type": "tool_result"}]}}),
             json!({"type": "system", "subtype": "verification", "kind": "unchecked"}),
             json!({"type": "system", "subtype": "loop_guard", "kind": "repeated_failure", "after_changes": true}),
@@ -1077,6 +1104,7 @@ mod tests {
         assert_eq!((f.compactions, f.compact_failures, f.compact_fallbacks), (1, 2, 1));
         assert_eq!((f.act_reminders, f.edit_diagnostics), (1, 1));
         assert_eq!((f.tool_calls, f.tool_errors, f.turns), (2, 1, 3));
+        assert_eq!(f.todo_writes, 1, "the task list's use, for the todoTracking A/B");
         assert!(f.saw_result && !f.is_error && !f.api_error);
         assert_eq!(f.cost_usd, 0.05);
         assert_eq!(f.verification_missing, ["out.txt"]);

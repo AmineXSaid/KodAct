@@ -8,6 +8,10 @@
 //! task has measured it, and `reminders: false` turns them off with the rest of KodAct's
 //! reminders.
 //!
+//! `todoTracking` is the reference CLI's handling of the task list, measured against KodAct's own
+//! (a short TodoWrite description, a reminder only for tasks left open): its reminder is advice,
+//! not a fact the model lacks, so it is on only where an A/B shows it pays (docs/goal.md, rule 8).
+//!
 //! Pacing nudges (a long stretch with nothing written, an early first version, the steps left
 //! at the run's pace) and their back-off were removed: in the runs that measured them they
 //! rarely spoke and never showed a gain, and their note was advice the model could give
@@ -43,11 +47,21 @@ pub struct NudgeConfig {
     /// A reply that is still all thinking past a limit from the run's own pace is stopped, its
     /// notes handed back, and the model asked for one concrete step.
     pub thinking_time_box: bool,
+    /// The task list as the reference CLI keeps it: TodoWrite's long description (when to use it,
+    /// when not, worked examples, its states), a section of the system prompt asking for it on
+    /// work with several steps, and, after [`TODO_STEPS`] steps without it, a reminder with the
+    /// list as it stands, at most once every [`TODO_STEPS`] steps. The description and the
+    /// section follow this setting alone; the reminder, like every reminder, also `reminders`.
+    pub todo_tracking: bool,
 }
+
+/// Steps (model calls that used tools) without a TodoWrite call before the task-list reminder,
+/// and between two reminders: the reference CLI's cadence.
+pub const TODO_STEPS: u32 = 10;
 
 impl NudgeConfig {
     /// The names used in settings and `KODACT_NUDGES`.
-    pub const NAMES: [&'static str; 8] = [
+    pub const NAMES: [&'static str; 9] = [
         "shellEdit",
         "constraints",
         "namedChecks",
@@ -56,6 +70,7 @@ impl NudgeConfig {
         "staleDeliverables",
         "adaptiveEffort",
         "thinkingTimeBox",
+        "todoTracking",
     ];
 
     /// From a list of names (`KODACT_NUDGES=shellEdit,constraints`); `all` turns every one on,
@@ -86,6 +101,7 @@ impl NudgeConfig {
             "staleDeliverables" => &mut self.stale_deliverables,
             "adaptiveEffort" => &mut self.adaptive_effort,
             "thinkingTimeBox" => &mut self.thinking_time_box,
+            "todoTracking" => &mut self.todo_tracking,
             _ => return false,
         };
         *field = on;
@@ -108,6 +124,7 @@ pub(crate) enum Nudge {
     SizeLimit,
     AdaptiveEffort,
     ThinkingTimeBox,
+    TodoTracking,
 }
 
 impl Nudge {
@@ -121,6 +138,7 @@ impl Nudge {
             Nudge::SizeLimit => "size_limit",
             Nudge::AdaptiveEffort => "adaptive_effort",
             Nudge::ThinkingTimeBox => "thinking_time_box",
+            Nudge::TodoTracking => "todo_tracking",
         }
     }
 }

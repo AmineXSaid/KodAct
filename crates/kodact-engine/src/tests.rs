@@ -4114,3 +4114,69 @@ async fn finish_with_other_tools_is_refused_and_unchecked_changes_send_the_model
     assert_eq!(r.result.as_deref(), Some("checked"));
     assert_eq!(system_events(&h, "finish").len(), 1, "only the claim that ended the run is recorded");
 }
+
+/// Requests whose last user message holds the task-list reminder (`nudges.todoTracking`).
+fn todo_reminded(h: &Harness) -> Vec<usize> {
+    h.provider
+        .requests()
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| last_user_text(r).contains("The task list (TodoWrite) hasn't been updated"))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// `nudges.todoTracking`, the reference CLI's cadence: after ten steps without TodoWrite the model
+/// is reminded of the task list, and not again for ten steps. Off by default, and with
+/// `reminders: false`.
+#[tokio::test]
+async fn the_task_list_reminder_comes_every_ten_steps_without_todowrite() {
+    let run = |cfg: EngineConfig| async move {
+        let h = Harness::new(vec![]);
+        for i in 0..25 {
+            h.provider.push(MockTurn::tool("Bash", json!({"command": format!("echo step {i}")})));
+        }
+        h.provider.push(MockTurn::text("done"));
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("do the work")).await;
+        h
+    };
+    let h = run(EngineConfig { verify: None, ..nudged_cfg("todoTracking") }).await;
+    assert_eq!(todo_reminded(&h), [10, 20], "after the 10th and the 20th step");
+    let told = last_user_text(&h.provider.requests()[10]);
+    assert!(told.contains("in the last 10 steps") && told.contains("The list is empty."), "{told}");
+    let events = nudges(&h.transcript_text());
+    assert_eq!(events.len(), 2);
+    assert_eq!((events[0]["kind"].as_str(), events[0]["steps"].as_u64()), (Some("todo_tracking"), Some(10)));
+    // Off by default, and with the rest of KodAct's reminders.
+    let h = run(EngineConfig { verify: None, ..Default::default() }).await;
+    assert!(todo_reminded(&h).is_empty() && nudges(&h.transcript_text()).is_empty());
+    let h = run(EngineConfig { verify: None, reminders: false, ..nudged_cfg("todoTracking") }).await;
+    assert!(todo_reminded(&h).is_empty());
+}
+
+/// A TodoWrite call starts the count again, and the reminder shows the list as it stands.
+#[tokio::test]
+async fn a_todowrite_call_starts_the_count_again_and_the_reminder_shows_the_list() {
+    let h = Harness::new(vec![]);
+    let bash = |i: usize| MockTurn::tool("Bash", json!({"command": format!("echo step {i}")}));
+    for i in 0..6 {
+        h.provider.push(bash(i));
+    }
+    let todos = json!({"todos": [
+        {"content": "Build it", "status": "completed", "activeForm": "Building it"},
+        {"content": "Test it", "status": "in_progress", "activeForm": "Testing it"},
+    ]});
+    h.provider.push(MockTurn::tool("TodoWrite", todos));
+    for i in 0..12 {
+        h.provider.push(bash(100 + i));
+    }
+    h.provider.push(MockTurn::text("done"));
+    let cfg = EngineConfig { verify: None, ..nudged_cfg("todoTracking") };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("build and test it")).await;
+    // Steps 1-6, TodoWrite at 7, then ten more: the reminder goes with the 17th step's results.
+    assert_eq!(todo_reminded(&h), [17]);
+    let told = last_user_text(&h.provider.requests()[17]);
+    assert!(told.contains("The list as it stands:\n- [completed] Build it\n- [in_progress] Test it"), "{told}");
+}

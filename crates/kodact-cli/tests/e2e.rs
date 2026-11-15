@@ -585,6 +585,41 @@ async fn print_tells_the_model_its_time_limit() {
     assert_eq!(api.requests().len(), 1, "a bad limit never reaches the API");
 }
 
+/// The first request of `kodact -p hi` with these nudges: its system prompt, and TodoWrite's
+/// description.
+async fn todo_request(e: &Env, nudges: Option<&str>) -> (String, String) {
+    let api = MockApi::start(vec![MockTurn::text("ok")]).await;
+    let mut c = command(&kodact_bin(), &e.cwd, &e.home, &api.url, &["-p", "hi"]);
+    if let Some(n) = nudges {
+        c.env("KODACT_NUDGES", n);
+    }
+    c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let out = tokio::time::timeout(Duration::from_secs(30), c.output()).await.unwrap().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ok");
+    let req = api.requests()[0].clone();
+    let todo = req["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "TodoWrite")
+        .map(|t| t["description"].as_str().unwrap_or_default().to_string())
+        .unwrap_or_default();
+    (req["system"].to_string(), todo)
+}
+
+/// `KODACT_NUDGES=todoTracking` reaches the request: TodoWrite's long description and the
+/// task-list section of the system prompt; without it, neither.
+#[tokio::test]
+async fn todo_tracking_gives_todowrite_the_long_description_and_the_prompt_its_section() {
+    let e = env();
+    let (system, todo) = todo_request(&e, Some("todoTracking")).await;
+    assert!(system.contains("# Task list"), "{system}");
+    assert!(todo.contains("## When not to use it") && todo.contains("## Examples where it helps"), "{todo}");
+    let (system, todo) = todo_request(&e, None).await;
+    assert!(!system.contains("# Task list"));
+    assert!(!todo.is_empty() && !todo.contains("## When not to use it"), "{todo}");
+}
+
 #[tokio::test]
 async fn autonomous_runs_have_no_question_tools_and_attempt_first() {
     let e = env();

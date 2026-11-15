@@ -19,6 +19,10 @@
 #   limits       two-plan-scheduler    none                 vs limitVerdicts,staleDeliverables
 #   effort       two-plan-scheduler    none                 vs adaptiveEffort (give both an --effort)
 #   timebox      two-plan-scheduler    none                 vs thinkingTimeBox
+#   todos        long-horizon tasks (the pillar: 15 tasks of several steps)
+#                                      none                 vs todoTracking (the reference CLI's
+#                task list: long TodoWrite description, prompt section, reminder every 10 steps
+#                without it). Read TodoWrite calls per task beside the pass rate
 #   suite        every task            none                 vs all (do the nudges hurt other work?)
 #
 # Reports land in evals/results/<NAME>-<time>-<group>-{off,on}/ (ignored by git); the table
@@ -64,6 +68,7 @@ spec() {
     limits) echo "two-plan-scheduler|none|limitVerdicts,staleDeliverables" ;;
     effort) echo "two-plan-scheduler|none|adaptiveEffort" ;;
     timebox) echo "two-plan-scheduler|none|thinkingTimeBox" ;;
+    todos) echo "long-horizon|none|todoTracking" ;;  # the pillar: its tasks have several steps
     suite) echo "*|none|all" ;;
     *) echo "nudge-ab: unknown group $1 (try --help)" >&2; return 1 ;;
   esac

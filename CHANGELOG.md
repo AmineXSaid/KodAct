@@ -2,6 +2,29 @@
 
 ## 0.1.0 (unreleased)
 
+### The reference CLI's task list, as an A/B (`nudges.todoTracking`)
+- **What it is.** The reference CLI asks a model to keep its task list far
+  more than KodAct does, and Claude models use TodoWrite a lot under it. The
+  deep-thinking model never called TodoWrite in 30 runs (2026-11-15).
+  `todoTracking` turns on that handling, in KodAct's own words:
+  - TodoWrite gets a long description: when to use it, when not, worked
+    examples, and its states and rules;
+  - the system prompt gets a "Task list" section asking for it on work with
+    several steps;
+  - after 10 steps (model calls that used tools) without a TodoWrite call,
+    and at most once every 10 steps, counted across turns, a reminder comes
+    with the step's results, showing the list as it stands.
+- **Off by default**, like every nudge, until its A/B shows it pays: the
+  reminder is advice, not a fact the model lacks (docs/goal.md, rule 8).
+  `scripts/nudge-ab.sh todos` runs the long-horizon tasks without it and with
+  it; `KODACT_NUDGES=todoTracking` does the same for a Harbor job, whose name
+  then says `-n-todoTracking`.
+- `kodact-eval` counts TodoWrite calls per run and shows them in its
+  reports and A/B tables, beside the pass rate.
+- **What it costs.** Off: nothing. On: the longer description and the section
+  in every request (read from the server's cache after the first), and the
+  reminder's note at most once every 10 steps.
+
 ### Measurement tools for what the 2026-11-15 run left open
 - `scripts/probe-effort.py` also sends the level in a model's chat-template
   arguments (`chat_template_kwargs.reasoning_effort`), named and as the

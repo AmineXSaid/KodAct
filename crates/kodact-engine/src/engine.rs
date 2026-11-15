@@ -186,6 +186,31 @@ fn one_shot_todo_reminder(open: &[String]) -> String {
     )
 }
 
+/// Tasks of the list shown in the task-list reminder; the rest are counted.
+const TODO_REMINDER_ITEMS: usize = 20;
+
+/// The task-list reminder (`nudges.todoTracking`): TodoWrite unused for `steps` steps, with the
+/// list as it stands (`todos`, one `- [status] task` line each).
+fn todo_reminder_text(steps: u32, todos: &[String]) -> String {
+    let mut text = format!(
+        "<system-reminder>\nThe task list (TodoWrite) hasn't been updated in the last {steps} steps. If this work \
+         has several steps, use it to track them: add what is left, mark what is done, and keep one task in \
+         progress. If the list no longer matches the work, bring it up to date. If the work is simple, ignore \
+         this. This note is for you: don't mention it to the person.\n"
+    );
+    if todos.is_empty() {
+        text.push_str("The list is empty.");
+    } else {
+        text.push_str("The list as it stands:\n");
+        text.push_str(&todos.iter().take(TODO_REMINDER_ITEMS).cloned().collect::<Vec<_>>().join("\n"));
+        if todos.len() > TODO_REMINDER_ITEMS {
+            text.push_str(&format!("\n… and {} more", todos.len() - TODO_REMINDER_ITEMS));
+        }
+    }
+    text.push_str("\n</system-reminder>");
+    text
+}
+
 fn todo_reminder(open: &[String]) -> String {
     format!(
         "<system-reminder>\nThe run is about to end with todo items not completed:\n{}\nFinish them now. If one no \
@@ -797,6 +822,9 @@ pub struct Engine {
     last_sent: Mutex<Option<crate::prefix::PrefixHash>>,
     /// The shell-edit suggestion was given this turn.
     shell_edit_told: bool,
+    /// Steps that used tools since the last TodoWrite call, and since the last task-list reminder
+    /// (`nudges.todoTracking`): counted across turns, as the reference CLI counts them.
+    todo_steps: (u32, u32),
     /// Shell commands run this turn, for the constraint report.
     ran_commands: Vec<String>,
     /// The constraint report was given this turn.
@@ -956,6 +984,7 @@ impl Engine {
             watched: Default::default(),
             last_sent: Mutex::new(None),
             shell_edit_told: false,
+            todo_steps: (0, crate::nudges::TODO_STEPS),
             ran_commands: vec![],
             constraints_told: false,
             passing: None,
@@ -3324,6 +3353,11 @@ impl Engine {
                         }
                     }
                 }
+                let wrote_todos = tool_uses
+                    .iter()
+                    .zip(&results)
+                    .any(|((_, name, _), r)| name == "TodoWrite" && !r.output.is_error && r.denial.is_none());
+                self.count_todo_step(wrote_todos);
                 let mut interrupted = cancel.is_cancelled();
                 for r in results {
                     if let Some(d) = r.denial {
@@ -3370,6 +3404,11 @@ impl Engine {
                 if self.cfg.reminders && !budget_warned && !interrupted {
                     if let Some(text) = self.budget_warning(turn.api_calls) {
                         budget_warned = true;
+                        self.push_user(Message::user_text(text), true, None, true);
+                    }
+                }
+                if !interrupted {
+                    if let Some(text) = self.todo_reminder_due() {
                         self.push_user(Message::user_text(text), true, None, true);
                     }
                 }
@@ -3642,6 +3681,47 @@ impl Engine {
                 *input = json!({ kodact_api::INVALID_INPUT: problem, kodact_api::RAW_INPUT: raw });
             }
         }
+    }
+
+    /// One step that used tools, counted for the task-list reminder (`nudges.todoTracking`): a
+    /// TodoWrite call starts the count again.
+    fn count_todo_step(&mut self, wrote: bool) {
+        let (since_write, since_note) = &mut self.todo_steps;
+        *since_write = if wrote { 0 } else { since_write.saturating_add(1) };
+        *since_note = since_note.saturating_add(1);
+    }
+
+    /// The task-list reminder, when it is due (`nudges.todoTracking`): no TodoWrite call in the
+    /// last [`crate::nudges::TODO_STEPS`] steps, and no reminder in as many, the reference CLI's
+    /// cadence. It shows the list as it stands, so the model can bring it up to date at once.
+    fn todo_reminder_due(&mut self) -> Option<String> {
+        let steps = crate::nudges::TODO_STEPS;
+        if !self.cfg.nudges.todo_tracking
+            || !self.cfg.reminders
+            || self.cfg.is_subagent
+            || self.todo_steps.0 < steps
+            || self.todo_steps.1 < steps
+            || !self.offered_tools().iter().any(|t| t.name == "TodoWrite")
+        {
+            return None;
+        }
+        self.todo_steps.1 = 0;
+        let since = self.todo_steps.0;
+        self.system_event("nudge", json!({"kind": crate::nudges::Nudge::TodoTracking.as_str(), "steps": since}));
+        let todos: Vec<String> = self
+            .shared
+            .tool_ctx
+            .todos
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                let status = t.get("status").and_then(Value::as_str).unwrap_or("pending");
+                let content = t.get("content").and_then(Value::as_str).unwrap_or("");
+                (!content.is_empty()).then(|| format!("- [{status}] {content}"))
+            })
+            .collect();
+        Some(todo_reminder_text(since, &todos))
     }
 
     /// A heads-up when this run's turn, spending or time limit is close (GOALS pillar 5), so the model

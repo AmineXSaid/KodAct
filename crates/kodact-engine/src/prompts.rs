@@ -19,6 +19,12 @@ const SHORT: &str = include_str!("../prompts/short.md");
 
 /// The section added for unattended runs (`--autonomous`).
 pub const AUTONOMOUS: &str = include_str!("../prompts/05-autonomous.md");
+/// The task-list section (`nudges.todoTracking`): the reference CLI asks for the list on work with
+/// several steps in its system prompt, as well as in the tool's description.
+pub const TODO_SECTION: &str = include_str!("../prompts/06-todos.md");
+/// TodoWrite's long description (`nudges.todoTracking`): when to use it, when not, worked
+/// examples and its states, as the reference CLI describes the tool.
+pub const TODO_TOOL: &str = include_str!("../prompts/todo-tool.md");
 
 /// How the system prompt is chosen (`--system-prompt`, `--append-system-prompt`).
 #[derive(Debug, Clone, Default)]
@@ -37,6 +43,8 @@ pub struct SystemPromptOptions {
     pub autonomous: bool,
     /// Use the shorter built-in prompt (`prompt.short`).
     pub short: bool,
+    /// `nudges.todoTracking`: the task-list section, and TodoWrite's long description.
+    pub todo_tracking: bool,
 }
 
 /// Facts about the machine and project for the environment section.
@@ -124,9 +132,15 @@ fn fill(text: &str, env: &EnvInfo) -> String {
         .replace("{{shell}}", env.shell.as_deref().unwrap_or("bash"))
 }
 
-/// Tool description overrides from `<prompts_dir>/tools/<Name>.md`.
+/// Tool description overrides from `<prompts_dir>/tools/<Name>.md`, and TodoWrite's long
+/// description with `nudges.todoTracking` unless the directory gives one.
 pub fn tool_description_overrides(opts: &SystemPromptOptions) -> Vec<(String, String)> {
-    opts.prompts_dir.as_deref().map(|d| read_dir_md(&d.join("tools"))).unwrap_or_default()
+    let mut out: Vec<(String, String)> =
+        opts.prompts_dir.as_deref().map(|d| read_dir_md(&d.join("tools"))).unwrap_or_default();
+    if opts.todo_tracking && !out.iter().any(|(name, _)| name == "TodoWrite") {
+        out.push(("TodoWrite".to_string(), TODO_TOOL.trim().to_string()));
+    }
+    out
 }
 
 /// The system prompt blocks, plus text for the first user message when
@@ -149,6 +163,10 @@ pub fn build_system(opts: &SystemPromptOptions, env: &EnvInfo) -> (Vec<SystemBlo
     if opts.autonomous {
         base.push_str("\n\n");
         base.push_str(AUTONOMOUS.trim());
+    }
+    if opts.todo_tracking && opts.replace.is_none() {
+        base.push_str("\n\n");
+        base.push_str(TODO_SECTION.trim());
     }
     let mut deferred = None;
     let using_default = opts.replace.is_none();
@@ -297,5 +315,33 @@ mod tests {
         let (b, _) = build_system(&opts, &env());
         assert!(b[0].text.starts_with("First in /w\n\nSecond claude-opus-5-5"));
         assert_eq!(tool_description_overrides(&opts), vec![("Bash".to_string(), "Custom bash".to_string())]);
+    }
+
+    /// `nudges.todoTracking`: the task list as the reference CLI asks for it, in the system prompt
+    /// and in TodoWrite's long description (when to use it, when not, examples, its states).
+    #[test]
+    fn todo_tracking_adds_the_task_list_section_and_the_long_description() {
+        let off = SystemPromptOptions::default();
+        assert!(!build_system(&off, &env()).0[0].text.contains("# Task list"));
+        assert!(tool_description_overrides(&off).is_empty(), "off: TodoWrite keeps its short description");
+        let on = SystemPromptOptions { todo_tracking: true, ..Default::default() };
+        assert!(build_system(&on, &env()).0[0].text.contains("# Task list\n\nUse TodoWrite often"));
+        let o = tool_description_overrides(&on);
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].0, "TodoWrite");
+        for part in ["## When to use it", "## When not to use it", "## Examples where it helps", "## Task states"] {
+            assert!(o[0].1.contains(part), "{part}");
+        }
+        // The short prompt gets the section too; a prompt given in full is left as it is.
+        let short = SystemPromptOptions { todo_tracking: true, short: true, ..Default::default() };
+        assert!(build_system(&short, &env()).0[0].text.contains("# Task list"));
+        let replaced = SystemPromptOptions { todo_tracking: true, replace: Some("Mine.".into()), ..Default::default() };
+        assert!(!build_system(&replaced, &env()).0[0].text.contains("# Task list"));
+        // A prompts directory's own TodoWrite description wins.
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("tools")).unwrap();
+        std::fs::write(d.path().join("tools/TodoWrite.md"), "Own list text").unwrap();
+        let own = SystemPromptOptions { todo_tracking: true, prompts_dir: Some(d.path().into()), ..Default::default() };
+        assert_eq!(tool_description_overrides(&own), vec![("TodoWrite".to_string(), "Own list text".to_string())]);
     }
 }

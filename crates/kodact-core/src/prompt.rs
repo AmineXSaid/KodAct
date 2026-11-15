@@ -27,6 +27,8 @@ pub struct PromptSpec {
     pub autonomous: bool,
     /// `prompt.short`: the shorter built-in prompt.
     pub short: bool,
+    /// `nudges.todoTracking`: the task-list section and TodoWrite's long description.
+    pub todo_tracking: bool,
     pub env: EnvInfo,
 }
 
@@ -42,6 +44,7 @@ impl PromptSpec {
             output_style: self.output_style.clone(),
             autonomous: self.autonomous,
             short: self.short,
+            todo_tracking: self.todo_tracking,
         }
     }
 
