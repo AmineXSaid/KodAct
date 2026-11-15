@@ -38,6 +38,7 @@ pub use events::{
     PermissionPrompter, SerializedPrompter, VecSink,
 };
 pub use lsp::{LspConfig, ServerSpec};
+pub use named::OverLimit;
 pub use nudges::NudgeConfig;
 pub use prompts::{build_system, EnvInfo, SystemPromptOptions};
 pub use snapshot::{side_question_request, EngineSnapshot, TurnProgress};

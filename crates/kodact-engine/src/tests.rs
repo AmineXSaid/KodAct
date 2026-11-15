@@ -1056,6 +1056,37 @@ async fn the_result_names_the_requested_files_never_made() {
     assert!(h.engine().submit(prompt("Write notes.md.")).await.missing.is_empty());
 }
 
+/// gpt2-codegolf (2026-11-15): the request said "Your c program must be <5000 bytes", the file
+/// ended at 5,093 bytes, and the result said `success` with nothing flagged. A file over the size
+/// the request states for it is in the result, as a missing file is, whatever the nudges (the
+/// model is told only with `nudges.constraints`); back within it, or with the verification loop
+/// off, it isn't.
+#[tokio::test]
+async fn the_result_names_a_file_over_its_stated_size() {
+    const ASK: &str = "Write tiny.py that prints 1. Your Python script must be under 100 bytes.";
+    let h = Harness::new(vec![]);
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    let f = h.cwd().join("tiny.py");
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "x".repeat(150)})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "true"})));
+    h.provider.push(MockTurn::text("done"));
+    let mut e = verifying_engine(&h, &["true"]);
+    let r = e.submit(prompt(ASK)).await;
+    assert_eq!(r.over_limit, [crate::named::OverLimit { file: "tiny.py".into(), size: 150, limit: 99 }]);
+    assert!(r.missing.is_empty(), "{:?}", r.missing);
+    assert!(nudges(&h.transcript_text()).is_empty(), "the model is told nothing with the nudges off");
+    // Back within the limit: nothing to report.
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "printf 'print(1)\\n' > tiny.py"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "true"})));
+    h.provider.push(MockTurn::text("done"));
+    let r = e.submit(prompt(ASK)).await;
+    assert!(r.over_limit.is_empty(), "{:?}", r.over_limit);
+    // With the verification loop off, the result says nothing of it either.
+    std::fs::write(&f, "x".repeat(150)).unwrap();
+    h.provider.push(MockTurn::text("no"));
+    assert!(h.engine().submit(prompt(ASK)).await.over_limit.is_empty());
+}
+
 #[tokio::test]
 async fn verify_accepts_a_check_after_the_last_change() {
     let h = Harness::new(vec![]);

@@ -211,6 +211,11 @@ pub struct RunRecord {
     /// (`verification.missing`): a false finish with these was announced by KodAct itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_missing: Vec<String>,
+    /// The files over the size the request states for them when the run ended
+    /// (`verification.over_limit`), as `file: size bytes, limit at most`: a false finish with
+    /// these was announced by KodAct itself too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_over_limit: Vec<String>,
     /// An unattended run that ended with the Finish tool: whether the model claimed its tool
     /// output showed the requirements met. Beside `passed` (what the checker found), a claimed
     /// but false finish is told from one the model didn't vouch for.
@@ -440,6 +445,7 @@ pub struct StreamFacts {
     pub is_error: bool,
     pub stop_reason: Option<String>,
     pub verification_missing: Vec<String>,
+    pub verification_over_limit: Vec<String>,
     pub claimed_verified: Option<bool>,
     pub saw_result: bool,
 }
@@ -496,6 +502,21 @@ pub fn parse_stream(lines: &[Value]) -> StreamFacts {
                 f.verification_missing = v["verification"]["missing"]
                     .as_array()
                     .map(|a| a.iter().filter_map(|m| m.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                f.verification_over_limit = v["verification"]["over_limit"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|o| {
+                                Some(format!(
+                                    "{}: {} bytes, {} at most",
+                                    o["file"].as_str()?,
+                                    o["size"].as_u64()?,
+                                    o["limit"].as_u64()?
+                                ))
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
                 if v["subtype"] == "error_during_execution" {
                     f.api_error = true;
@@ -672,6 +693,7 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         agent_error,
         stop_reason: facts.stop_reason,
         verification_missing: facts.verification_missing,
+        verification_over_limit: facts.verification_over_limit,
         claimed_verified: facts.claimed_verified,
         timed_out,
         check_output,
@@ -714,6 +736,7 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
                     agent_error: true,
                     stop_reason: None,
                     verification_missing: vec![],
+                    verification_over_limit: vec![],
                     claimed_verified: None,
                     timed_out: false,
                     check_output: format!("harness error: {e:#}"),
@@ -813,7 +836,7 @@ pub fn render_markdown(r: &Report) -> String {
             s.mean_turns
         ));
     }
-    out.push_str("\n## Runs\n\n| Task | Run | Pass | False finish | Turns | Cost | Tool errors | Time | Reminders (verify/loop/act) | Nudges | Tokens | Compactions (done/failed/note) | Missing files |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+    out.push_str("\n## Runs\n\n| Task | Run | Pass | False finish | Turns | Cost | Tool errors | Time | Reminders (verify/loop/act) | Nudges | Tokens | Compactions (done/failed/note) | Missing files, over the size limit |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for x in &r.runs {
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} | ${:.4} | {}/{} | {:.1}s | {}/{}/{} | {} | {} | {}/{}/{} | {} |\n",
@@ -838,7 +861,7 @@ pub fn render_markdown(r: &Report) -> String {
             x.compactions,
             x.compact_failures,
             x.compact_fallbacks,
-            x.verification_missing.join(" ")
+            x.verification_missing.iter().chain(&x.verification_over_limit).cloned().collect::<Vec<_>>().join("; ")
         ));
     }
     out
@@ -1046,6 +1069,7 @@ mod tests {
             agent_error: false,
             stop_reason: Some("end_turn".into()),
             verification_missing: vec![],
+            verification_over_limit: vec![],
             claimed_verified: None,
             timed_out: false,
             check_output: String::new(),
@@ -1097,7 +1121,7 @@ mod tests {
             json!({"type": "system", "subtype": "compact_failed", "trigger": "auto", "reason": "empty_summary"}),
             json!({"type": "system", "subtype": "compact_fallback", "trigger": "auto"}),
             json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"trigger": "auto"}}),
-            json!({"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.05, "num_turns": 3, "stop_reason": "end_turn", "verification": {"missing": ["out.txt"]}}),
+            json!({"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.05, "num_turns": 3, "stop_reason": "end_turn", "verification": {"missing": ["out.txt"], "over_limit": [{"file": "roman.py", "size": 512, "limit": 399}]}}),
         ];
         let f = parse_stream(&lines);
         assert_eq!((f.verify_reminders, f.loop_guards), (1, 1));
@@ -1108,6 +1132,7 @@ mod tests {
         assert!(f.saw_result && !f.is_error && !f.api_error);
         assert_eq!(f.cost_usd, 0.05);
         assert_eq!(f.verification_missing, ["out.txt"]);
+        assert_eq!(f.verification_over_limit, ["roman.py: 512 bytes, 399 at most"]);
     }
 
     #[test]

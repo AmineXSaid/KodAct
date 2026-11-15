@@ -736,6 +736,28 @@ async fn a_quota_is_not_retried_and_a_long_wait_is_stated() {
     assert!(err.contains("asks to wait 48m"), "{err}");
 }
 
+/// `-p --output-format json`: a file over the size the request states for it is in the result's
+/// `verification.over_limit`, so a script sees the limit unmet beside `success` (gpt2-codegolf,
+/// 2026-11-15: 5,093 bytes for "<5000 bytes", and nothing said).
+#[tokio::test]
+async fn print_reports_a_file_over_its_stated_size() {
+    let e = env();
+    let api = MockApi::start(vec![
+        MockTurn::tool("Write", json!({"file_path": e.cwd.join("tiny.py"), "content": "x".repeat(150)})),
+        MockTurn::text("Wrote tiny.py."),
+        MockTurn::text("No check to run here."),
+        MockTurn::text("Done."),
+    ])
+    .await;
+    let ask = "Write tiny.py that prints 1. Your Python script must be under 100 bytes.";
+    let args = ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions", ask];
+    let (code, out, err) = run(&e, &api, &args, None).await;
+    assert_eq!(code, 0, "stderr: {err}");
+    let v: Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["subtype"], json!("success"), "{out}");
+    assert_eq!(v["verification"], json!({"over_limit": [{"file": "tiny.py", "size": 150, "limit": 99}]}), "{out}");
+}
+
 /// `-p --output-format json`: the result says where the changes stand, and a one-shot run
 /// about to end with todo items open and unchecked changes is sent back once, with both notes
 /// in one message.

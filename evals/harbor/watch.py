@@ -456,6 +456,10 @@ def finish_lines(ev: dict) -> list[str]:
     check = ev.get("verification")
     if isinstance(check, dict) and check.get("missing"):
         out.append(f"  {YELLOW}files the task asks for that don't exist: {', '.join(check['missing'])}{RESET}")
+    over = [o for o in (check.get("over_limit") or [] if isinstance(check, dict) else []) if isinstance(o, dict)]
+    if over:
+        sizes = ", ".join(f"{o.get('file')} {int(o.get('size') or 0):,} bytes ({int(o.get('limit') or 0):,} at most)" for o in over)
+        out.append(f"  {YELLOW}files over the size the task allows: {sizes}{RESET}")
     return out
 
 

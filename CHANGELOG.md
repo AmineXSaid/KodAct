@@ -2,6 +2,21 @@
 
 ## 0.1.0 (unreleased)
 
+### The result says when a file is over the size the request allows
+- **What happened.** gpt2-codegolf (2026-11-15) asked for a C file "<5000
+  bytes". The file ended at 5,093 bytes, and the run's result said `success`
+  with nothing flagged. KodAct had read the limit from the request, but only
+  the `constraints` nudge, off by default, used it.
+- **Now** the result's `verification` lists such files under `over_limit`,
+  with their size and the most bytes the request allows, beside `missing`:
+  `{"over_limit": [{"file": "/app/gpt2.c", "size": 5093, "limit": 4999}]}`.
+  It is there whatever the nudges: it tells the caller, not the model. A
+  script running `kodact -p --output-format json` can fail or retry on it
+  instead of trusting `success`.
+- **Where it shows.** `kodact-eval`'s runs table, beside the missing files;
+  the Harbor kit's live view (`watch.py`); and a trial's details in its
+  report (`KodAct's result flagged: …`).
+
 ### The plan's task in progress turns as a ring
 - **In the Plan pane.** The sidebar marked the plan's task in progress with
   a braille cell that filled and drained, as it marks a server connecting or

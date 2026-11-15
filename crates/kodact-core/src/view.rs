@@ -161,6 +161,7 @@ impl SessionView {
             verification: None,
             finish: None,
             missing: vec![],
+            over_limit: vec![],
         }
     }
 

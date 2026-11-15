@@ -88,6 +88,20 @@ def test_tests_that_ran_and_failed_stay_false_success(tmp_path):
 def test_plain_wrong_answer_is_false_success(tmp_path):
     t = make_trial(tmp_path, "gpt2-codegolf", "0.0", GPT2_REAL_FAIL, ran_tests=1)
     assert t.verdict == "false success"
+    assert "flagged" not in t.details(), "nothing flagged when the result names nothing"
+
+
+def test_the_details_say_what_kodacts_result_flagged(tmp_path):
+    # gpt2-codegolf, 2026-11-15: 5,093 bytes for "<5000 bytes". The verdict stays a false success
+    # (the result said success); the details show that KodAct's result said the limit was unmet.
+    t = make_trial(tmp_path, "gpt2-codegolf", "0.0", GPT2_REAL_FAIL, ran_tests=1)
+    stream = next((tmp_path).glob("gpt2-codegolf__TEST/agent/kodact.jsonl"))
+    result = json.loads(stream.read_text())
+    result["verification"] = {"over_limit": [{"file": "/app/gpt2.c", "size": 5093, "limit": 4999}], "missing": ["out.txt"]}
+    stream.write_text(json.dumps(result) + "\n")
+    t = report.Trial(stream.parent.parent)
+    assert t.verdict == "false success"
+    assert "- KodAct's result flagged: out.txt missing; /app/gpt2.c 5,093 bytes, 4,999 at most" in t.details(), t.details()
 
 
 def test_verifier_error_is_left_out_of_valid_trials(tmp_path):

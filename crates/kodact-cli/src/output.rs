@@ -38,6 +38,19 @@ pub fn stdout_line(args: std::fmt::Arguments) {
     }
 }
 
+/// What the turn's request asks for that the work doesn't meet, measured: `missing` files and
+/// files `over_limit`. `None` when it meets both, or with the verification loop off.
+fn verification(r: &TurnResult) -> Option<serde_json::Value> {
+    let mut v = serde_json::Map::new();
+    if !r.missing.is_empty() {
+        v.insert("missing".into(), serde_json::json!(r.missing));
+    }
+    if !r.over_limit.is_empty() {
+        v.insert("over_limit".into(), serde_json::json!(r.over_limit));
+    }
+    (!v.is_empty()).then_some(serde_json::Value::Object(v))
+}
+
 pub fn result_message(r: &TurnResult, session_id: &str) -> ResultMessage {
     ResultMessage {
         subtype: r.subtype,
@@ -54,9 +67,10 @@ pub fn result_message(r: &TurnResult, session_id: &str) -> ResultMessage {
         permission_denials: r.permission_denials.clone(),
         structured_output: r.structured_output.clone(),
         errors: r.errors.clone(),
-        // Only the files asked for that don't exist. How the last check ended is not reported:
-        // a check's exit code says too little about the work to hand a script as "passed".
-        verification: (!r.missing.is_empty()).then(|| serde_json::json!({"missing": r.missing})),
+        // The files asked for that don't exist, and those over the size the request allows. How
+        // the last check ended is not reported: a check's exit code says too little about the
+        // work to hand a script as "passed".
+        verification: verification(r),
         finish: r.finish.clone(),
         uuid: new_uuid(),
         immediate: None,

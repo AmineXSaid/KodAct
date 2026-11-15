@@ -799,6 +799,11 @@ pub struct TurnResult {
     /// a request asks for is read from its words, a guess. Empty with the verification loop
     /// off.
     pub missing: Vec<String>,
+    /// The files the request states a size limit for that are over it when the turn ends: the
+    /// result's `verification.over_limit`. Told to the caller whatever the nudges, as `missing`
+    /// is: the model is told only with `nudges.constraints`. Empty with the verification loop
+    /// off.
+    pub over_limit: Vec<crate::named::OverLimit>,
 }
 
 pub struct Engine {
@@ -2558,6 +2563,7 @@ impl Engine {
             verification: None,
             finish: None,
             missing: vec![],
+            over_limit: vec![],
         }
     }
 
@@ -2659,6 +2665,7 @@ impl Engine {
             result.verification = self.verification_state().await;
             if result.verification.is_some() {
                 result.missing = self.watched.still_missing();
+                result.over_limit = self.named.over_limits(&self.shared.tool_ctx.project_dir);
             }
         }
         self.handle.set_turn_running(false);
@@ -4612,6 +4619,7 @@ impl Engine {
             verification: None,
             finish,
             missing: vec![],
+            over_limit: vec![],
         }
     }
 

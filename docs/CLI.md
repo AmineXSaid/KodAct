@@ -357,7 +357,7 @@ Measures the harness; see `evals/README.md`. `run` writes `report.json` and
  "modelUsage": {"<model>": {"inputTokens": 0, "outputTokens": 0, "costUSD": 0.0}},
  "permission_denials": [{"tool_name": "Bash", "tool_use_id": "…", "tool_input": {}}],
  "errors": [], "structured_output": null,
- "verification": {"missing": ["out/report.txt"]},
+ "verification": {"missing": ["out/report.txt"], "over_limit": [{"file": "tiny.py", "size": 150, "limit": 99}]},
  "finish": {"summary": "…", "verified": true}, "uuid": "uuid", "exit_code": 0}
 ```
 
@@ -375,8 +375,19 @@ either. A name alone that ends a path the request also names (`algo.py`
 beside `/app/repo/algo.py`) is that path. Two files named as alternatives
 (`requirements.txt or pyproject.toml`) are one deliverable: when either
 exists, neither is listed. Which files a request asks for is read
-from its words, a guess. The field is absent when nothing is
-missing, and with the verification loop off.
+from its words, a guess.
+
+`verification.over_limit` lists the files the request states a size limit
+for that are over it when the turn ends, each with its size and the most
+bytes the request allows (`under 100 bytes` and `<100 bytes`: 99). A limit is
+a size with its unit after "at most", "under", "no more than", "less than",
+"below", `<` and the like, for the file its sentence names, or, when the
+sentence names none ("your program must be <5000 bytes"), for the one file
+the request asks for. It is reported whatever the nudges:
+`nudges.constraints` also tells the model, while it can still act on it.
+
+The `verification` field is absent when nothing is missing or over its
+limit, and with the verification loop off.
 
 ```bash
 kodact -p "write the report to out/report.txt" --output-format json | jq -e '.verification == null'

@@ -162,6 +162,14 @@ def test_the_end_says_what_is_missing():
     assert "don't exist" not in text(watch.Chat().render(dict(end, verification=None)))
 
 
+def test_the_end_says_what_is_over_its_size_limit():
+    end = {"type": "result", "subtype": "success", "is_error": False, "num_turns": 32,
+           "verification": {"over_limit": [{"file": "/app/gpt2.c", "size": 5093, "limit": 4999}]}}
+    shown = text(watch.Chat().render(end))
+    assert "files over the size the task allows: /app/gpt2.c 5,093 bytes (4,999 at most)" in shown, shown
+    assert "over the size" not in text(watch.Chat().render(dict(end, verification=None)))
+
+
 def test_a_step_whose_start_came_before_the_watch_says_over():
     chat = watch.Chat()
     chat.took, chat.took_over = 138, True

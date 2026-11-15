@@ -206,6 +206,14 @@ Each pillar lists what KodAct does about it and what shows that it works.
     (`src/parser.py`): both were listed missing, so the model was told to
     make them (task `named-elsewhere`: three names listed in 3/3 scripted
     runs before, none after);
+  - `verification.over_limit` names the files over the size the request
+    states for them when the turn ends, with their size and the limit:
+    gpt2-codegolf (2026-11-15) left its C file at 5,093 bytes for "<5000
+    bytes" and the result said `success` with nothing flagged, though KodAct
+    had read the limit. It is the caller's to read, so it doesn't wait for
+    the `constraints` nudge (which tells the model); `kodact-eval` records
+    `verification_over_limit` (task `size-limit`), and the Harbor kit shows
+    it live and in a trial's details;
   - a tool asked only about itself (`gcc --version`, `pytest --help`,
     `gcc -v`) is not a check and builds nothing: before, a version probe after
     an edit marked the change as tested and silenced the reminder;

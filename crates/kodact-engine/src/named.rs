@@ -237,6 +237,11 @@ impl Named {
         self.commands.iter().filter(|c| !ran.iter().any(|r| r.contains(&squash(c)))).cloned().collect()
     }
 
+    /// Named files over the limit the request states for them, as the run's result reports them.
+    pub fn over_limits(&self, project: &Path) -> Vec<OverLimit> {
+        self.over_limit(project).into_iter().map(|(file, size, limit, _)| OverLimit { file, size, limit }).collect()
+    }
+
     /// Named files over the limit the request states for them: (file, size, limit, the words).
     pub fn over_limit(&self, project: &Path) -> Vec<(String, u64, u64, String)> {
         self.limits
@@ -287,6 +292,18 @@ pub(crate) fn report(
         "over_limit": over.iter().map(|(f, size, max, _)| serde_json::json!({"file": f, "size": size, "limit": max})).collect::<Vec<_>>(),
     });
     Some((format!("<system-reminder>\n{}\n</system-reminder>", lines.join("\n")), record))
+}
+
+/// A file the request states a size limit for, over it when the turn ends: one entry of the
+/// result's `verification.over_limit`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OverLimit {
+    /// The file as the request names it.
+    pub file: String,
+    /// Its size in bytes.
+    pub size: u64,
+    /// The most bytes the request allows it (`<5000 bytes`: 4,999).
+    pub limit: u64,
 }
 
 /// A file as it is on disk: its size and modification time.

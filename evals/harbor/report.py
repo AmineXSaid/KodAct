@@ -369,6 +369,13 @@ class Trial:
         self.subtype = r.get("subtype") or ("" if not self.kodact else "no result (killed or crashed)")
         self.stop_reason = r.get("stop_reason") or ""
         self.errors = r.get("errors") or []
+        # What KodAct's result said the work doesn't meet: files missing, files over a size limit.
+        check = r.get("verification") if isinstance(r.get("verification"), dict) else {}
+        self.flagged = [f"{m} missing" for m in check.get("missing") or []] + [
+            f"{o.get('file')} {int(o.get('size') or 0):,} bytes, {int(o.get('limit') or 0):,} at most"
+            for o in check.get("over_limit") or []
+            if isinstance(o, dict)
+        ]
         stderr = "\n".join(v for k, v in self.other_logs.items() if k.endswith("stderr.txt"))
         self.http_429 = stderr.count("HTTP 429") + sum("429" in e for e in self.retries)
         self.crash_reason = ""
@@ -477,6 +484,8 @@ class Trial:
             out.append(f"- exception: {self.exception}: {clip(self.exception_message, 300)}")
         if self.kodact:
             out.append(f"- finish: {self.subtype} / {self.stop_reason or '-'}")
+        if getattr(self, "flagged", None):
+            out.append("- KodAct's result flagged: " + "; ".join(self.flagged))
         for e in self.errors:
             out.append(f"- error: {clip(e, 400)}")
         if self.system:
