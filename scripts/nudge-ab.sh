@@ -12,7 +12,9 @@
 #
 # GROUP (default: shellEdit, constraints, snapshots, limits):
 #   shellEdit    rename-keyword        none                 vs shellEdit
-#   constraints  named-deliverables    none                 vs constraints,namedChecks
+#   constraints  tasks tagged constraints (named-deliverables, size-limit, named-elsewhere,
+#                rename-file, named-in-new-folder)
+#                                      none                 vs constraints,namedChecks
 #   snapshots    optimize-under-time   none                 vs passingSnapshots
 #   limits       two-plan-scheduler    none                 vs limitVerdicts,staleDeliverables
 #   effort       two-plan-scheduler    none                 vs adaptiveEffort (give both an --effort)
@@ -57,7 +59,7 @@ fi
 spec() {
   case "$1" in
     shellEdit) echo "rename-keyword|none|shellEdit" ;;
-    constraints) echo "named-deliverables|none|constraints,namedChecks" ;;
+    constraints) echo "constraints|none|constraints,namedChecks" ;;  # the tag: its tasks, quiet ones too
     snapshots) echo "optimize-under-time|none|passingSnapshots" ;;
     limits) echo "two-plan-scheduler|none|limitVerdicts,staleDeliverables" ;;
     effort) echo "two-plan-scheduler|none|adaptiveEffort" ;;

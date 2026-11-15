@@ -2,6 +2,19 @@
 
 ## 0.1.0 (unreleased)
 
+### Measurement tools for what the 2026-11-15 run left open
+- `scripts/probe-effort.py` also sends the level in a model's chat-template
+  arguments (`chat_template_kwargs.reasoning_effort`), named and as the
+  number KodAct sends on DeepSeek's [1, 100] scale, to tell an endpoint that
+  ignores `--effort` from one that honours it.
+- `scripts/background-waits.py` counts KodAct's end-of-turn waits for
+  background commands across recorded runs, with the time left, whether the
+  wait began in the run's last fifth, and what the model did next.
+- `scripts/nudge-ab.sh`'s `constraints` group runs every task tagged
+  `constraints`, size limits and the quiet named-file tasks included.
+- Nothing changes in KodAct: each measures a question before a change is
+  proposed.
+
 ### A file the turn made where the request said is not reported missing
 - **A name alone beside its full path is that file.** A request that names
   `/app/repo/algo.py` and later says "algo.py" was read as asking for two

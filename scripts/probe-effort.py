@@ -3,9 +3,16 @@
 
 KodAct's `--effort` reaches an endpoint as `reasoning_effort`. Some gateways ignore it, some
 refuse it, some read another form. This sends one short reasoning question several times: with
-no level, then each level in the two common forms (`reasoning_effort`, and `reasoning:
-{"effort": ...}`), and prints what came back. A level that is honoured changes the reasoning
-tokens; one that is ignored leaves them where the no-level request put them.
+no level, then each level in four forms, and prints what came back:
+- `reasoning_effort` (what KodAct sends);
+- `reasoning: {"effort": ...}`;
+- `chat_template_kwargs: {"reasoning_effort": ...}`, the place a model's chat template reads it
+  behind vLLM, named;
+- the same as a number on [1, 100] (DeepSeek V4.1's own refusal names that scale), where KodAct
+  puts each level (effort_levels.rs: low 26, medium 51, high 75).
+A level that is honoured changes the reasoning tokens; one that is ignored leaves them where the
+no-level request put them. KodAct learns a form from a refusal, never from an endpoint that
+accepts a level and ignores it: this tells the two apart.
 
 Needs no package and no API key in the command line: it reads the endpoint the way kodact does.
 
@@ -65,6 +72,18 @@ def facts(resp):
     }
 
 
+# Where KodAct puts a level on a number scale (kodact-api effort_levels.rs, `share`).
+SHARE = {"minimal": 0.1, "low": 0.25, "medium": 0.5, "high": 0.75, "xhigh": 0.9, "max": 1.0}
+
+
+def scale_point(level, lo=1, hi=100):
+    """The number KodAct sends for `level` on a [lo, hi] scale (rounded half away from zero)."""
+    if level not in SHARE:
+        return None
+    x = (hi - lo) * SHARE[level]
+    return lo + int(x + 0.5) if x >= 0 else lo
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("model")
@@ -94,6 +113,12 @@ def main():
     settings = [("no level", {})]
     settings += [(f"reasoning_effort={lv}", {"reasoning_effort": lv}) for lv in levels]
     settings += [(f"reasoning.effort={lv}", {"reasoning": {"effort": lv}}) for lv in levels]
+    settings += [(f"template.effort={lv}", {"chat_template_kwargs": {"reasoning_effort": lv}}) for lv in levels]
+    settings += [
+        (f"template.effort={scale_point(lv)} ({lv})", {"chat_template_kwargs": {"reasoning_effort": scale_point(lv)}})
+        for lv in levels
+        if scale_point(lv) is not None
+    ]
 
     rows = []
     for name, extra in settings:
