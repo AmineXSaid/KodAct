@@ -19,7 +19,8 @@ edit changes), each result (exit code and the first and last lines of the
 output; red when it failed), KodAct's reminders and events (retries, output
 limit, compaction, nudges), how the run ended and the task's reward: passed,
 failed, or, as report.py says it, a verifier error when the tests couldn't judge
-the work, left out of the score. While the model thinks or a command runs, a
+the work or an API error when the model endpoint didn't answer, both left out of
+the score. While the model thinks or a command runs, a
 line every minute says so and for how long.
 
 KodAct's stream-json (kodact.jsonl) and Pi's event stream (pi.jsonl, read
@@ -472,6 +473,9 @@ class Chat:
         self.took_over = False  # its start wasn't seen: it took at least `took`
         self.events = 0
         self.ended: set[str] = set()  # the errors the run ended with, as KodAct also prints them
+        # The run ended because the model endpoint didn't answer (as report.py decides it): its
+        # tests say nothing about the agent, and its reward is left out of the score.
+        self.api_error = False
 
     def render(self, ev: dict) -> list[str]:
         self.events += 1
@@ -481,15 +485,20 @@ class Chat:
         if kind == "user":
             return self.user(ev)
         if kind == "result":
-            self.done = True
-            self.running.clear()
-            self.ended |= {str(e).strip() for e in ev.get("errors") or [] if str(e).strip()}
-            if ev.get("is_error") and str(ev.get("result") or "").strip():
-                self.ended.add(str(ev["result"]).strip())
+            self.end(ev)
             return finish_lines(ev)
         if kind == "system":
             return system_lines(ev)
         return []
+
+    def end(self, ev: dict) -> None:
+        """The run's `result` event, shown in full or compact: how it ended."""
+        self.done = True
+        self.running.clear()
+        self.ended |= {str(e).strip() for e in ev.get("errors") or [] if str(e).strip()}
+        if ev.get("is_error") and str(ev.get("result") or "").strip():
+            self.ended.add(str(ev["result"]).strip())
+        self.api_error = ev.get("stop_reason") == "api_error" or any("API Error" in e for e in self.ended)
 
     def assistant(self, ev: dict) -> list[str]:
         msg = ev.get("message") or {}
@@ -625,7 +634,12 @@ def handle(line: str, is_err: bool, chat: "Chat | None" = None, pi: PiStream | N
         events = [event]
     if events is not None:
         chat = chat or Chat()
-        return [text for ev in events for text in (render_compact(ev, chat.who) if OPT.compact else chat.render(ev))]
+        if not OPT.compact:
+            return [text for ev in events for text in chat.render(ev)]
+        for ev in events:
+            if ev.get("type") == "result":
+                chat.end(ev)  # how the run ended counts for the score, compact or not
+        return [text for ev in events for text in render_compact(ev, chat.who)]
     if isinstance(event, dict):
         return [] if OPT.compact else [f"{DIM}· {event.get('type', 'event')}{RESET}"]
     if is_err:
@@ -638,16 +652,20 @@ def handle(line: str, is_err: bool, chat: "Chat | None" = None, pi: PiStream | N
     return [line]
 
 
-def reward_line(path: Path) -> tuple[str, str]:
-    """The task's reward as report.py reads it, and its line: "passed", "failed", or "verifier
-    error" when the tests couldn't judge the work (they couldn't fetch what they need, or their
-    tools couldn't run), which the report leaves out of the score. ("", "") until it's written."""
+def reward_line(path: Path, api_error: bool = False) -> tuple[str, str]:
+    """The task's reward as report.py reads it, and its line: "passed", "failed", "api error"
+    when the run ended because the model endpoint didn't answer (`api_error`), or "verifier error"
+    when the tests couldn't judge the work (they couldn't fetch what they need, or their tools
+    couldn't run). The report leaves the last two out of the score. ("", "") until it's written."""
     try:
         value = float(path.read_text().strip())
     except (OSError, ValueError):
         return "", ""
     if value >= 1:
         return "passed", f"{GREEN}{BOLD}reward {value:g} ✔ passed{RESET}"
+    if api_error:
+        line = f"{YELLOW}{BOLD}reward {value:g} · api error{RESET}{YELLOW}: the model endpoint didn't answer{RESET}"
+        return "api error", line
     try:
         tests = (json.loads((path.parent / "ctrf.json").read_text()).get("results") or {}).get("tests") or []
     except (OSError, ValueError, AttributeError):
@@ -668,9 +686,10 @@ def reward_line(path: Path) -> tuple[str, str]:
 
 
 def score_line(score: list[int]) -> str:
-    """How many passed of the trials the tests judged; a verifier error is left out, as in the
-    report."""
-    left_out = f", {count(score[2], 'verifier error')} left out" if score[2] else ""
+    """How many passed of the trials the tests judged; a verifier error and an API error are left
+    out (score[2], score[3]), as in the report."""
+    parts = [count(n, what) for n, what in ((score[2], "verifier error"), (score[3], "API error")) if n]
+    left_out = f", {' and '.join(parts)} left out" if parts else ""
     return f"{DIM}· {score[0]}/{score[1]} passed so far{left_out}{RESET}"
 
 
@@ -894,7 +913,7 @@ def main() -> None:
     rewarded: set[Path] = set()
     started: set[Path] = set()
     failed: set[Path] = set()
-    score = [0, 0, 0]
+    score = [0, 0, 0, 0]
     first_scan = True
 
     while True:
@@ -906,7 +925,7 @@ def main() -> None:
                 state.clear()
             for state in (rewarded, started, failed, guessed):
                 state.clear()
-            score = [0, 0, 0]
+            score = [0, 0, 0, 0]
             screen.last = None
             from_start = True
         now = time.time()
@@ -981,12 +1000,14 @@ def main() -> None:
                 failed.add(trial)
                 screen.show(trial.name, [text])
             reward = trial / "verifier" / "reward.txt"
-            if reward not in rewarded and (got := reward_line(reward))[1]:
+            api_error = any(c.api_error for lg, c in chats.items() if lg.parent.parent == trial)
+            if reward not in rewarded and (got := reward_line(reward, api_error))[1]:
                 verdict, text = got
                 rewarded.add(reward)
                 score[0] += verdict == "passed"
-                score[1] += verdict != "verifier error"
+                score[1] += verdict not in ("verifier error", "api error")
                 score[2] += verdict == "verifier error"
+                score[3] += verdict == "api error"
                 screen.show(trial.name, [f"{text} {score_line(score)}"])
         first_scan = False
         if args.once:

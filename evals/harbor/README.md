@@ -63,6 +63,7 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | `KODACT_HARBOR_DATASET` | `terminal-bench@2.0` | Harbor dataset |
 | `KODACT_HARBOR_JOBS` | `2` | Tasks in parallel |
 | `KODACT_HARBOR_ARGS` | | Extra `kodact` flags, e.g. `--max-turns 100`; the job name gets `-args-max-turns-100` |
+| `KODACT_HARBOR_GATE` | `1` | Before each trial's agent starts, asks the endpoint whether it answers (`endpoint_gate.py`, the same request as the probe below, so no tokens). While it doesn't, the trial waits in Harbor's setup, not in the agent's time, and holds its slot, so no trial starts into an outage (see below). `0` turns it off |
 | `KODACT_HARBOR_PROBE` | `1` | Asks the endpoint which model it serves behind `KODACT_HARBOR_MODEL`, and its window, at job start (`probe_model.py`): printed, kept in each trial's `run.json` and the report; the window becomes `KODACT_CONTEXT_WINDOW` when that is unset, and a different one set by hand is warned about. `0` skips it |
 | `KODACT_STATIC_BIN` | `target-static/release/kodact` | Binary copied into containers |
 | `KODACT_HARBOR_AUTONOMOUS` | `1` | `kodact --autonomous`; `0` turns it off (job name gets `-noauto`) |
@@ -141,7 +142,8 @@ which isn't the task's verdict), the files the task asks for that don't exist,
 and the task's reward with the score so far. A trial whose tests couldn't judge
 the work shows `verifier error` and the line that shows why, as `report.py`
 names it, and is left out of the score (`0/0 passed so far, 1 verifier error
-left out`). While the model thinks or a
+left out`); so is one whose run ended because the model endpoint didn't answer
+(`api error`). While the model thinks or a
 command runs, a line every minute says which and for how long. Pi's events are
 shown the same way; other agents' logs (Ante, ...) as they are.
 
@@ -163,8 +165,14 @@ When a job ends, `run.sh`, `run-forgecode.sh`, `run-ante.sh` and `run-pi.sh` wri
   (said done, checker failed), gave up, refused, api error (before any work or
   later), verifier error (the test phase could not fetch its own packages or
   data — a cert/network failure before any test ran — so it judged nothing;
-  set apart like an api error, not counted as the agent failing), timeout,
-  crashed.
+  set apart like an api error, not counted as the agent failing), didn't run
+  (Harbor never started the agent: its container didn't start, or its setup
+  failed or ran out of time), timeout, crashed.
+- **Run again:** the trials outside the score (api error, verifier error,
+  didn't run), with the command that runs them again with the same settings,
+  one attempt each (`run.sh subset -i <task> …`, and `-l <n>` past 10 tasks).
+  Harbor's `-i` must take several tasks for it; check `harbor run --help` the
+  first time. The JSON data lists them as `run_again`.
 - **Trials table:** reward, verdict, turns, agent time against the limit,
   tokens, tool calls and errors, API retries, KodAct's own reminders
   (verification, loop guard, act, attempt, next step, todo), how the run ended.
@@ -283,6 +291,16 @@ the same directory say why.
   as this machine resolves it, in each container's `/etc/hosts`. The address
   itself must still be reachable from Docker. A gateway reachable only
   on a company network or VPN may not be reachable from Docker.
+- **Outages.** If the endpoint stops answering during a job (a name that no
+  longer resolves, TLS failing, a gateway's 502/503/504), each trial waits in
+  its setup until it answers again (`endpoint_gate.py`): one request a minute,
+  shared by the waiting trials, a line on stderr for each, and the wait in its
+  `run.json` (`endpoint_wait_s`). A trial already running waits the outage out
+  itself, as any unattended KodAct run does, and ends on an API error if it
+  outlasts its time. Harbor's setup limit ends a longer wait: the report counts
+  such a trial as `didn't run` and lists it to run again. On 2026-11-15, before
+  the gate, ten trials started into an outage and spent 2 h 38 min with no
+  reply.
 - **Rate limits and cost.** The full run is 89 × 5 trials. Run the subset first.
 - **Keys.** The key is copied into every task container. Use a key made for
   benchmark runs.

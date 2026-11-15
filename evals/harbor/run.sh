@@ -11,6 +11,8 @@
 #   KODACT_HARBOR_DATASET  default terminal-bench@2.0
 #   KODACT_HARBOR_JOBS     tasks in parallel (default 2)
 #   KODACT_HARBOR_ARGS     extra kodact flags for every task (job name gets -args-<flags>)
+#   KODACT_HARBOR_GATE     0: start trials even while the model endpoint doesn't answer (by default
+#                         each waits in its setup until it does: endpoint_gate.py)
 #   KODACT_HARBOR_PROBE    0 skips asking the endpoint which model it serves and its window
 #   KODACT_HARBOR_AUTONOMOUS  0 runs kodact without --autonomous (job name gets -noauto)
 #   KODACT_HARBOR_TIME_LIMIT  seconds for --max-time (default: the task's own limit)

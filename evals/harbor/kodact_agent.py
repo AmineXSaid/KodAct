@@ -40,6 +40,9 @@ Configuration comes from the environment of the `harbor` process:
   the agent's run, when there is none (provide_uv): a test script whose own
   download of uv fails then runs all the same. Default: this machine's `uv`;
   `none` turns it off.
+- `KODACT_HARBOR_GATE`: a trial waits in its setup, before the agent's time starts, while
+  the model endpoint doesn't answer (endpoint_gate.py), so an outage doesn't turn every trial
+  started during it into a run with no reply; `0` turns it off.
 - `KODACT_HARBOR_UV_CACHE`, `KODACT_HARBOR_PIP_CACHE`, `KODACT_HARBOR_APT_CACHE`:
   downloads made once on this machine (warm_*.py), copied in before the agent
   starts: the tests' packages, what the agent pip-installs (Torch), and what it
@@ -66,6 +69,7 @@ import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
+from endpoint_gate import wait_for_endpoint
 from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
@@ -460,6 +464,11 @@ class KodAct(BaseInstalledAgent):
         binary = Path(os.environ.get("KODACT_STATIC_BIN", DEFAULT_BIN))
         if not binary.is_file():
             raise RuntimeError(f"{binary} not found: run evals/harbor/build-static.sh first")
+        # A trial started while the model endpoint doesn't answer gets no reply at all: it waits
+        # here, in Harbor's setup, not in the agent's time (endpoint_gate.py).
+        logs = getattr(self, "logs_dir", None)
+        model = (self.model_name or "").split("/", 1)[-1]
+        self.endpoint_wait = await wait_for_endpoint(model, Path(logs).parent.name if logs else "")
         await environment.upload_file(binary, REMOTE_BIN)
         await self.exec_as_root(environment, command=f"chmod 755 {REMOTE_BIN} && {REMOTE_BIN} --version")
         hosts = pinned_hosts()
@@ -512,6 +521,10 @@ class KodAct(BaseInstalledAgent):
             "time_limit_s": limit,
             "settings": settings(env),
         }
+        waited, said = getattr(self, "endpoint_wait", (0.0, []))
+        if said:  # the trial waited for the endpoint before it started (endpoint_gate.py)
+            meta["endpoint_wait_s"] = round(waited)
+            meta["endpoint_gate"] = said
         command = (
             f"mkdir -p {LOG_DIR}; "
             + record_run("KODACT_TASK", meta)

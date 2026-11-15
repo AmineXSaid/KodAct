@@ -299,3 +299,95 @@ def test_the_report_names_the_model_the_endpoint_served(tmp_path):
     job = report.Job(job.path)
     text = job.report()
     assert "served by `deepseek-v4-flash` (window 524288 tokens)" in text, text[:600]
+
+
+def api_end(turns: int) -> dict:
+    """KodAct's result after the model endpoint stopped answering (2026-11-15, after its retries)."""
+    return {
+        "type": "result",
+        "subtype": "error_during_execution",
+        "is_error": True,
+        "stop_reason": "api_error",
+        "num_turns": turns,
+        "errors": ["API Error: network error: Name does not resolve. Check KODACT_OPENAI_BASE_URL."],
+    }
+
+
+def set_stream(trial: report.Trial, *events: dict) -> report.Trial:
+    (trial.path / "agent" / "kodact.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    return report.Trial(trial.path)
+
+
+def test_a_trial_whose_agent_never_ran_is_left_out_and_listed_to_run_again(tmp_path):
+    # mteb-retrieve (2026-11-15): its container didn't start in 1,800 s, so Harbor never ran the
+    # agent. It was counted as a valid failure ("crashed"); the agent had nothing to do with it.
+    job = make_job(tmp_path, [("mteb-retrieve", 0.0, 0, []), ("fix-git", 1.0, 600, [])])
+    d = job.path / "mteb-retrieve__T"
+    (d / "agent" / "kodact.jsonl").unlink()
+    (d / "result.json").write_text(json.dumps({
+        "task_name": "mteb-retrieve",
+        "agent_setup": None,
+        "agent_execution": None,
+        "exception_info": {
+            "exception_type": "EnvironmentStartTimeoutError",
+            "exception_message": "Environment start timed out after 1800.0 seconds",
+        },
+    }))
+    job = report.Job(job.path)
+    trial = next(t for t in job.trials if t.task == "mteb-retrieve")
+    assert trial.verdict == "didn't run (EnvironmentStartTimeoutError)"
+    text = job.report()
+    assert "valid trials (model reached, verifier ran): 1/2; passed among them: 1/1" in text, text[:900]
+    assert "## Run again" in text and "evals/harbor/run.sh subset -i mteb-retrieve\n" in text, text[:1500]
+    assert "- mteb-retrieve: didn't run (EnvironmentStartTimeoutError)" in text
+    assert "| 1/2 | 1 |" in report.comparison([job]), "the comparison counts the same valid trials"
+
+
+def test_the_model_endpoint_going_down_is_an_api_error_unless_the_work_passed(tmp_path):
+    job = make_job(tmp_path, [("chess-best-move", 0.0, 780, []), ("path-tracing", 0.0, 1660, []),
+                              ("regex-chess", 1.0, 3498, [])])
+    by = {t.task: t for t in job.trials}
+    # No reply at all (10 trials, 2026-11-15), then cut short with work done (2 trials).
+    assert set_stream(by["chess-best-move"], api_end(0)).verdict == "api error before any work"
+    assert set_stream(by["path-tracing"], api_end(28)).verdict == "api error"
+    # regex-chess had saved work that passed before the endpoint went down: a pass is a pass.
+    assert set_stream(by["regex-chess"], api_end(32)).verdict == "passed"
+    job = report.Job(job.path)
+    assert [t.task for t in job.run_again()] == ["chess-best-move", "path-tracing"]
+
+
+def test_more_than_ten_trials_to_run_again_lift_the_subsets_limit(tmp_path):
+    tasks = [(f"task-{i:02d}", 0.0, 60, []) for i in range(12)]
+    job = make_job(tmp_path, tasks)
+    for t in job.trials:
+        set_stream(t, api_end(0))
+    text = report.Job(job.path).report()
+    assert "evals/harbor/run.sh subset -l 12 -i task-00 -i task-01" in text, text[:1500]
+
+
+# reshard-c4-data (2026-11-15): the tests' setup loads an unseen C4 shard from the Hugging Face Hub,
+# which the verifier couldn't reach; the datasets library then fell back to the image's cached
+# shard of another configuration. Nothing about the agent's work was judged.
+HF_UNREACHABLE = """\
+Installed 41 packages in 21.12s
+============================= test session starts ==============================
+collected 1 item
+
+../tests/test_outputs.py E                                               [100%]
+
+==================================== ERRORS ====================================
+_____________ ERROR at setup of test_compress_decompress_workflow ______________
+E           ValueError: Couldn't find cache for allenai/c4 for config 'default-c33333bd6ac7ada4'
+E           Available configs in the cache: ['default-b04fc8a0b8562884']
+---------------------------- Captured stderr setup -----------------------------
+Using the latest cached version of the dataset since allenai/c4 couldn't be found on the Hugging Face Hub
+=========================== short test summary info ============================
+ERROR ../tests/test_outputs.py::test_compress_decompress_workflow - ValueErro...
+=============================== 1 error in 8.74s ===============================
+"""
+
+
+def test_tests_that_could_not_reach_the_hub_are_a_verifier_error(tmp_path):
+    error = ctrf_test("test_compress_decompress_workflow", "error", "E   ValueError: Couldn't find cache for allenai/c4")
+    t = make_trial(tmp_path, "reshard-c4-data", "0", HF_UNREACHABLE, ran_tests=1, tests=[error])
+    assert t.verdict == "verifier error"

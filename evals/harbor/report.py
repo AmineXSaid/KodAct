@@ -23,6 +23,7 @@ their job ends.
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import time
@@ -208,6 +209,14 @@ def short_exception(message: str) -> str:
     return clip(head + (f": {err}" if err else ""), 140)
 
 
+# Verdicts left out of the score: the model was never reached or stopped answering ("api error",
+# "api error before any work"), the tests couldn't judge the work ("verifier error"), or the agent
+# never ran ("didn't run": its container didn't start, or its setup failed or ran out of time, as
+# when endpoint_gate.py holds a trial while the model endpoint doesn't answer). None says anything
+# about the agent; each is listed in the report to run again.
+INVALID = ("api error", "verifier error", "didn't run")
+
+
 # KodAct's own reminders (`system` events). Each is either needed or a false positive, so a change
 # that makes fewer of them is only better if the pass rate holds.
 REMINDERS = (
@@ -391,6 +400,10 @@ class Trial:
         api_error = self.stop_reason == "api_error" or any("API Error" in e for e in self.errors)
         if self.reward is not None and self.reward >= 1:
             return "passed"
+        # The agent never ran: Harbor records no `agent_execution` when the container didn't start
+        # (EnvironmentStartTimeoutError) or the agent's setup failed or ran out of time.
+        if self.exception and "agent_execution" in self.result and not self.result["agent_execution"]:
+            return f"didn't run ({self.exception})"
         # Out of time: killed by Harbor at the limit, or stopped by KodAct itself (`--max-time`).
         if self.exception == "AgentTimeoutError" or self.stop_reason == "max_time":
             return "timeout"
@@ -596,11 +609,15 @@ class Job:
     def score(self) -> tuple[int, int]:
         return sum(1 for t in self.trials if (t.reward or 0) >= 1), len(self.trials)
 
+    def run_again(self) -> list["Trial"]:
+        """The trials outside the score (INVALID): to run again, as they say nothing yet."""
+        return [t for t in self.trials if t.verdict.startswith(INVALID)]
+
     def report(self) -> str:
         passed, n = self.score()
         verdicts = Counter(t.verdict for t in self.trials)
-        invalid = ("api error", "verifier error")
-        valid = [t for t in self.trials if not t.verdict.startswith(invalid)]
+        valid = [t for t in self.trials if not t.verdict.startswith(INVALID)]
+        again = self.run_again()
         wall = None
         if self.started and self.finished:
             a, b = parse_time(self.started), parse_time(self.finished)
@@ -627,6 +644,27 @@ class Job:
             f"passed among them: {sum(1 for t in valid if (t.reward or 0) >= 1)}/{len(valid) or 1}",
             "- verdicts: " + ", ".join(f"{k} {v}" for k, v in verdicts.most_common()),
             "",
+        ]
+        if again:
+            tasks = list(dict.fromkeys(t.task for t in again))
+            out += [
+                "## Run again",
+                "",
+                f"{len(again)} trial{'' if len(again) == 1 else 's'} outside the score: the model endpoint didn't "
+                "answer, the tests couldn't judge the work, or the agent never ran. Run them again with the "
+                "same settings, one attempt each:",
+                "",
+                "```bash",
+                # subset is one attempt of the first 10 tasks: a later -l lifts that limit.
+                "evals/harbor/run.sh subset "
+                + (f"-l {len(tasks)} " if len(tasks) > 10 else "")
+                + " ".join(f"-i {shlex.quote(task)}" for task in tasks),
+                "```",
+                "",
+            ]
+            out += [f"- {t.task}: {t.verdict}" for t in again]
+            out.append("")
+        out += [
             "## Trials",
             "",
             "| task | reward | verdict | turns | agent time | tokens in/out | tool calls/errors | API retries "
@@ -678,6 +716,7 @@ class Job:
             "trials": n,
             "valid_trials": len(valid),
             "verdicts": dict(verdicts),
+            "run_again": [t.task for t in again],
             "per_trial": [t.summary() for t in self.trials],
         }
         out += ["## Data", "", "```json", json.dumps(data, indent=1, ensure_ascii=False), "```", ""]
@@ -716,7 +755,7 @@ def comparison(jobs: list[Job]) -> str:
     ]
     for j in jobs:
         p, n = j.score()
-        valid = sum(1 for t in j.trials if not t.verdict.startswith(("api error", "verifier error")))
+        valid = sum(1 for t in j.trials if not t.verdict.startswith(INVALID))
         v = ", ".join(f"{k} {c}" for k, c in Counter(t.verdict for t in j.trials).most_common())
         # All agent time spent, failed trials included, per task solved: minutes per solved task.
         per_pass = fmt_s(sum(t.agent_s or 0 for t in j.trials) / p) if p else "–"
@@ -765,6 +804,8 @@ def main() -> None:
         print(f"{job.name}: {passed}/{n} passed -> {p / 'report.md'}")
         for t in job.trials:
             print(f"  {t.task:36s} {'?' if t.reward is None else f'{t.reward:g}':>3}  {t.verdict}")
+        if again := job.run_again():
+            print(f"  {len(again)} outside the score, to run again: see 'Run again' in the report")
         if export:
             export.mkdir(parents=True, exist_ok=True)
             shutil.copy(p / "report.md", export / f"{job.name}.md")

@@ -311,3 +311,17 @@ def test_a_package_database_left_broken_is_the_agents_failure(tmp_path):
     (tmp_path / "reward.txt").write_text("0")
     verdict, line = watch.reward_line(tmp_path / "reward.txt")
     assert verdict == "failed" and watch.ANSI.sub("", line) == "reward 0 ✘ failed: left dpkg interrupted"
+
+
+def test_a_run_the_model_endpoint_never_answered_is_left_out_of_the_score(tmp_path):
+    # 2026-11-15: ten trials started while the model gateway was down; each ended on an API error
+    # with no reply, and the tests then ran on the untouched files. As in report.py, that says
+    # nothing about the agent.
+    end = {"type": "result", "subtype": "error_during_execution", "is_error": True, "stop_reason": "api_error",
+           "num_turns": 0, "errors": ["API Error: network error: Name does not resolve"]}
+    job = make_job(tmp_path, [end], finished=True)
+    (job / "demo-task__AbC123" / "verifier" / "reward.txt").write_text("0")
+    out = run_watch(["--once", str(job)])
+    assert "reward 0 · api error: the model endpoint didn't answer" in out, out
+    assert "0/0 passed so far, 1 API error left out" in out, out
+    assert "✘ failed" not in out, out

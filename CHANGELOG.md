@@ -2,6 +2,31 @@
 
 ## 0.1.0 (unreleased)
 
+### Harbor: no trial starts into a dead endpoint; trials that say nothing are listed to run again
+- **The endpoint gate.** Before each trial's agent starts, the KodAct agent
+  asks the model endpoint whether it answers (`endpoint_gate.py`, with the
+  request `probe_model.py` already sends, which costs no tokens). While it
+  doesn't (no answer, or a gateway's 502/503/504), the trial waits in
+  Harbor's setup, not in the agent's time, and holds its slot, so no other
+  trial starts. One request a minute is shared by the waiting trials; when
+  the endpoint answers, they all go on. `KODACT_HARBOR_GATE=0` turns it off.
+  On 2026-11-15 the model gateway stopped answering at about 06:00: ten
+  trials started afterwards, each waited the outage out as an unattended
+  KodAct run should, and they spent 2 h 38 min with no reply. Every one of
+  them started after this machine could no longer resolve the gateway.
+- **"didn't run".** A trial whose agent Harbor never started (a container
+  that didn't start, a setup that failed or ran out of time) was counted as a
+  valid failure ("crashed"). It is now its own verdict, outside the score
+  like an API error or a verifier error. On the 2026-11-15 job, the valid
+  trials become 17, of which 15 passed (the report said 15 of 18).
+- **Run again.** The report lists the trials outside the score with the
+  command that runs them again, one attempt each (`run_again` in its data).
+- **watch.py's score** leaves out a run that ended because the endpoint
+  didn't answer, as the report does; before, it counted as a failure, in
+  `--compact` mode too.
+- Nothing changes in KodAct itself: this is the Terminal-Bench runner, and the
+  numbers every KodAct change is judged by.
+
 ### Harbor: deep-thinking runs give the model a 65,536-token reply limit
 - **`KODACT_HARBOR_MAX_OUTPUT`** gives the run's model a reply limit, passed
   to `kodact` as `modelLimits` through `--settings`, and the job name gets
