@@ -17,11 +17,12 @@
   reasoning in Chinese (three bytes a character) fits the same room. A large
   window gets the whole reasoning back; a nearly full small one gets what
   fits, from its start and its end.
-- **Nothing of it is lost.** When part is left out, the whole reasoning is
-  saved in the session's spill directory, where long tool output already
-  goes and which is read without a prompt, and the reminder names the file
-  to Grep or Read instead of working it out again; its long lines are
-  wrapped, since Read cuts lines past 2,000 characters. Sub-agents now save
+- **Nothing of it is lost.** Whenever anything is left out (what doesn't
+  fit, or a repeat), the whole reasoning is saved in the session's spill
+  directory, where long tool output already goes and which is read without
+  a prompt, and the reminder names the file to Grep or Read instead of
+  working it out again; its long lines are wrapped, since Read cuts lines
+  past 2,000 characters. Sub-agents now save
   there too, their long tool output included, and each file name is claimed
   with an exclusive create, so two writers never share one.
 - **Repeats come back once, and drafts stay whole.** A paragraph the
@@ -30,11 +31,14 @@
   was, a short marker says it is repeated below. A second cut-off in a row
   doesn't hand back again what the first one gave, which is still in the
   conversation: a marker says it was handed back above. Code inside fences
-  always comes back as written.
-- **Reminders no longer count as the person's turns** for micro-compaction,
-  which keeps the tool results of the last three turns: a few act reminders
-  in a row had pushed the person's current turn out, and its file reads
-  were cleared just as the model was told to act on them.
+  always comes back as written, everything kept comes back byte for byte,
+  and a cut falls at a line start.
+- **Reminders in a row count as one turn** for micro-compaction, which keeps
+  the tool results of the last three turns: a few act reminders in a row
+  had pushed the person's current turn out, and its file reads were cleared
+  just as the model was told to act on them. A reminder between tool rounds
+  still marks a turn, as unattended runs (one message of the person's) take
+  their turns from those.
 - **What it costs.** A turn with no such reply: nothing. When it fires, the
   reasoning handed back stays in the conversation until compaction, up to
   about one reply cap of tokens per reminder (three in a row for cut-off or
@@ -44,7 +48,7 @@
 - **Measured by** `scripts/act-after-cutoff.py`: for each handback in a run's
   stream, whether the next reply acted, answered, or reasoned to the limit
   again, whether the saved file was read, and how much came back. Task
-  `reasoning-cutoff-resume` caps the reply at 4,000 tokens and sets a
+  `reasoning-cutoff-resume` caps the reply at 6,000 tokens and sets a
   20,000-token window, so a reasoning model is cut off mid-analysis and part
   of its reasoning comes back with the rest saved, and passes only if the
   reply after the handback acts or answers. kodact-eval now flushes a run's

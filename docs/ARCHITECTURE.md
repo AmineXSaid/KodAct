@@ -207,7 +207,9 @@ KodAct shrinks context in three ways.
 - **What is eligible:** a `tool_result` that is all of the following:
   - from a tool whose output can be fetched again (Read, Grep, Glob, LS, Bash,
     BashOutput, WebFetch, MCP read tools);
-  - older than the 3 most recent user turns;
+  - older than the 3 most recent turns: the person's messages, and reminders
+    between tool rounds (reminders in a row, with no tool call between them,
+    count once);
   - larger than 8,000 characters.
 - **When it runs:** when the next request's context (see "The size" below)
   exceeds 50% of the auto-compact threshold.

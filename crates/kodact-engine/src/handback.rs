@@ -1,10 +1,11 @@
 //! What an act reminder hands back of a reply's reasoning, where the provider doesn't send
 //! reasoning back (chat completions): a reply cut off at the reply cap, stopped by the thinking
 //! time limit, or ended with no answer would otherwise lose it, and the next reply works it out
-//! again. How much comes back follows the model's limits ([`budget_bytes`]); what doesn't fit is
-//! saved whole in the session's spill directory. A paragraph repeated word for word is shown once,
-//! at the last place the reminder shows it, and none that an earlier reminder already gave is
-//! shown again; code inside fences always comes back as written.
+//! again. How much comes back follows the model's limits ([`budget_bytes`]). A paragraph repeated
+//! word for word is shown once, at the last place the reminder shows it, and none that an earlier
+//! reminder already gave is shown again; code inside fences always comes back as written, and
+//! everything kept comes back byte for byte. Whenever anything is left out, the whole reasoning is
+//! saved in the session's spill directory and the reminder names the file.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -27,8 +28,11 @@ const MARGIN_TOKENS: u64 = 512;
 /// A paragraph shorter than this is never taken for a repeat: short ones ("Wait.", a closing
 /// brace) recur naturally and carry the shape of a draft.
 const MIN_REPEAT_CHARS: usize = 40;
-/// The longest line in a saved reasoning file: Read cuts lines past 2,000 characters.
-const SAVED_LINE_CHARS: usize = 1_000;
+/// The longest line in a saved reasoning file: half of what Read shows of a line.
+const SAVED_LINE_CHARS: usize = kodact_tools::builtin::MAX_LINE_CHARS / 2;
+/// A cut moves to the nearest line start within this many bytes, so it never splits a line
+/// such as a code fence.
+const NEAR_LINE_BYTES: usize = 1_000;
 /// The tags around reasoning in an act reminder: whole, or how it began and where it stopped.
 const TAGS: [&str; 3] = ["reasoning", "reasoning_start", "reasoning_end"];
 
@@ -74,8 +78,8 @@ pub(crate) fn budget_bytes(cap: u64, room: u64) -> usize {
 
 /// The reminder: `what` happened, the reasoning as far as `room` (bytes) holds, and the ask to go
 /// on from it and act. `above` holds the paragraphs earlier reminders gave ([`handed_back`]).
-/// When part is left out, `save` keeps the whole reasoning, its long lines wrapped so Read can
-/// take all of it, and the reminder names the file.
+/// When anything is left out (the part that doesn't fit, or a repeat), `save` keeps the whole
+/// reasoning, its long lines wrapped so Read can take all of it, and the reminder names the file.
 pub(crate) fn notes(
     what: &str,
     reasoning: &str,
@@ -85,41 +89,38 @@ pub(crate) fn notes(
 ) -> Handback {
     let reasoning = reasoning.trim();
     let whole = without_repeats(&[(reasoning, false)], above).remove(0);
-    let (shown, kept, saved) = if whole.len() <= room {
-        let kept = whole.chars().count();
-        (format!(" Here it is:\n\n<reasoning>\n{whole}\n</reasoning>"), kept, None)
+    let fits = whole.len() <= room;
+    let saved = if fits && whole == reasoning { None } else { save(&wrapped(reasoning, SAVED_LINE_CHARS)) };
+    let file = saved.as_ref().map_or(String::new(), |p| {
+        format!(
+            "\n\nThe full reasoning ({} characters) is saved at {}. Grep it, or Read it with offset and limit, \
+             instead of working it out again.",
+            reasoning.chars().count(),
+            p.display()
+        )
+    });
+    let (shown, kept) = if fits {
+        (format!(" Here it is:\n\n<reasoning>\n{whole}\n</reasoning>{file}"), whole.chars().count())
+    } else if room == 0 {
+        (format!(" The conversation has no room for it now.{file}"), 0)
     } else {
-        let saved = save(&wrapped(reasoning, SAVED_LINE_CHARS));
-        let file = saved.as_ref().map_or(String::new(), |p| {
+        // Cut first, at line starts, then give each repeat once within what is shown, so the copy
+        // kept is one the model sees.
+        let head_end = line_floor(reasoning, room / HEAD_SHARE);
+        let tail_start = line_ceil(reasoning, reasoning.len().saturating_sub(room - room / HEAD_SHARE)).max(head_end);
+        let head = reasoning[..head_end].trim_end_matches(['\n', '\r']);
+        let tail = &reasoning[tail_start..];
+        let gap = reasoning[head.len()..tail_start].chars().count();
+        let parts = without_repeats(&[(head, false), (tail, fence_open_at(reasoning, tail_start))], above);
+        let kept = parts.iter().map(|p| p.chars().count()).sum();
+        (
             format!(
-                "\n\nThe full reasoning ({} characters) is saved at {}. Grep it, or Read it with offset and \
-                 limit, instead of working it out again.",
-                reasoning.chars().count(),
-                p.display()
-            )
-        });
-        if room == 0 {
-            (format!(" The conversation has no room for it now.{file}"), 0, saved)
-        } else {
-            // Cut first, then give each repeat once within what is shown, so the copy kept is one
-            // the model sees.
-            let head_end = floor_boundary(reasoning, room / HEAD_SHARE);
-            let tail_start =
-                ceil_boundary(reasoning, reasoning.len().saturating_sub(room - room / HEAD_SHARE)).max(head_end);
-            let (head, tail) = (&reasoning[..head_end], &reasoning[tail_start..]);
-            let gap = reasoning[head_end..tail_start].chars().count();
-            let parts = without_repeats(&[(head, false), (tail, fence_open_at(reasoning, tail_start))], above);
-            let kept = parts.iter().map(|p| p.chars().count()).sum();
-            (
-                format!(
-                    " Here is how it began and where it stopped ({gap} characters in between left out):\n\n\
-                     <reasoning_start>\n{}\n</reasoning_start>\n\n<reasoning_end>\n{}\n</reasoning_end>{file}",
-                    parts[0], parts[1]
-                ),
-                kept,
-                saved,
-            )
-        }
+                " Here is how it began and where it stopped ({gap} characters in between left out):\n\n\
+                 <reasoning_start>\n{}\n</reasoning_start>\n\n<reasoning_end>\n{}\n</reasoning_end>{file}",
+                parts[0], parts[1]
+            ),
+            kept,
+        )
     };
     let text = format!(
         "<system-reminder>\n{what} Your reasoning is not kept from one reply to the next.{shown}\n\n\
@@ -144,7 +145,7 @@ pub(crate) fn handed_back(messages: &[Message]) -> HashSet<String> {
         for text in m.content.iter().filter_map(|b| b.as_text()).filter(|t| t.contains("<system-reminder>")) {
             for tag in TAGS {
                 for part in tagged(text, &format!("<{tag}>\n"), &format!("\n</{tag}>")) {
-                    seen.extend(keyed(part, false).into_iter().filter_map(|(_, k)| k).map(str::to_string));
+                    seen.extend(keyed(part, false).into_iter().filter_map(|p| p.key).map(str::to_string));
                 }
             }
         }
@@ -169,16 +170,24 @@ fn marker(why: Dropped, n: usize) -> String {
     }
 }
 
+/// A paragraph of a text: where it starts and ends (bytes, without its line breaks), and the key
+/// it is matched on as a repeat.
+struct Para<'a> {
+    start: usize,
+    end: usize,
+    key: Option<&'a str>,
+}
+
 /// `parts` (each with whether it starts inside a code fence), shown in order, with each repeated
 /// paragraph given once, at its last place among them, so a revised draft keeps all of its
 /// parts; and with none that `above` already holds. What is left out leaves a short marker
-/// (several in a row, one). A part with nothing left out comes back as it is.
+/// (several in a row, one); everything else, and the blank lines between, stays byte for byte.
 fn without_repeats(parts: &[(&str, bool)], above: &HashSet<String>) -> Vec<String> {
-    let keyed: Vec<Vec<(&str, Option<&str>)>> = parts.iter().map(|(text, fenced)| keyed(text, *fenced)).collect();
+    let keyed: Vec<Vec<Para>> = parts.iter().map(|(text, fenced)| keyed(text, *fenced)).collect();
     let mut last: HashMap<&str, (usize, usize)> = HashMap::new();
     for (pi, paras) in keyed.iter().enumerate() {
-        for (i, (_, k)) in paras.iter().enumerate() {
-            if let Some(k) = k {
+        for (i, p) in paras.iter().enumerate() {
+            if let Some(k) = p.key {
                 last.insert(k, (pi, i));
             }
         }
@@ -188,11 +197,11 @@ fn without_repeats(parts: &[(&str, bool)], above: &HashSet<String>) -> Vec<Strin
         .zip(parts)
         .enumerate()
         .map(|(pi, (paras, (text, _)))| {
-            let mut out: Vec<String> = Vec::with_capacity(paras.len());
-            let mut run: Option<(Dropped, usize)> = None;
-            let mut dropped = false;
-            for (i, (p, k)) in paras.iter().enumerate() {
-                let why = k.and_then(|k| {
+            let why: Vec<Option<Dropped>> = paras
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let k = p.key?;
                     if above.contains(k) {
                         Some(Dropped::Above)
                     } else if last[k] != (pi, i) {
@@ -200,43 +209,42 @@ fn without_repeats(parts: &[(&str, bool)], above: &HashSet<String>) -> Vec<Strin
                     } else {
                         None
                     }
-                });
-                match (why, run) {
-                    (Some(w), Some((r, n))) if w == r => run = Some((r, n + 1)),
-                    (Some(w), _) => {
-                        if let Some((r, n)) = run {
-                            out.push(marker(r, n));
-                        }
-                        run = Some((w, 1));
-                    }
-                    (None, _) => {
-                        if let Some((r, n)) = run.take() {
-                            out.push(marker(r, n));
-                        }
-                        out.push((*p).to_string());
-                    }
+                })
+                .collect();
+            if why.iter().all(Option::is_none) {
+                return (*text).to_string();
+            }
+            let mut out = String::with_capacity(text.len());
+            let mut copied = 0;
+            let mut i = 0;
+            while i < paras.len() {
+                let Some(w) = why[i] else {
+                    i += 1;
+                    continue;
+                };
+                let mut j = i;
+                while j + 1 < paras.len() && why[j + 1] == Some(w) {
+                    j += 1;
                 }
-                dropped |= why.is_some();
+                out.push_str(&text[copied..paras[i].start]);
+                out.push_str(&marker(w, j - i + 1));
+                copied = paras[j].end;
+                i = j + 1;
             }
-            if let Some((r, n)) = run {
-                out.push(marker(r, n));
-            }
-            if dropped {
-                out.join("\n\n")
-            } else {
-                (*text).to_string()
-            }
+            out.push_str(&text[copied..]);
+            out
         })
         .collect()
 }
 
-/// `text`'s paragraphs, each with the key it is matched on as a repeat: trimmed, long enough,
-/// and not code inside a fence (``` or ~~~), which always comes back as written. `fenced`: the
-/// text starts inside a fence.
-fn keyed(text: &str, mut fenced: bool) -> Vec<(&str, Option<&str>)> {
+/// `text`'s paragraphs, each keyed for matching as a repeat: trimmed, long enough, and not code
+/// inside a fence (``` or ~~~), which always comes back as written. `fenced`: the text starts
+/// inside a fence.
+fn keyed(text: &str, mut fenced: bool) -> Vec<Para<'_>> {
     paragraphs(text)
         .into_iter()
-        .map(|p| {
+        .map(|(start, end)| {
+            let p = &text[start..end];
             let mut code = fenced;
             for line in p.lines() {
                 if is_fence(line) {
@@ -245,7 +253,7 @@ fn keyed(text: &str, mut fenced: bool) -> Vec<(&str, Option<&str>)> {
                 }
             }
             let key = Some(p.trim()).filter(|k| !code && k.chars().count() >= MIN_REPEAT_CHARS);
-            (p, key)
+            Para { start, end, key }
         })
         .collect()
 }
@@ -260,14 +268,15 @@ fn fence_open_at(text: &str, at: usize) -> bool {
     text[..at].lines().filter(|l| is_fence(l)).count() % 2 == 1
 }
 
-/// `text`'s paragraphs (separated by blank lines), as slices without their line breaks.
-fn paragraphs(text: &str) -> Vec<&str> {
+/// Where `text`'s paragraphs (separated by blank lines) start and end, in bytes, without their
+/// line breaks.
+fn paragraphs(text: &str) -> Vec<(usize, usize)> {
     let mut out = vec![];
     let (mut start, mut end, mut pos) = (None, 0, 0);
     for line in text.split_inclusive('\n') {
         if line.trim().is_empty() {
             if let Some(s) = start.take() {
-                out.push(&text[s..end]);
+                out.push((s, end));
             }
         } else {
             start.get_or_insert(pos);
@@ -276,7 +285,7 @@ fn paragraphs(text: &str) -> Vec<&str> {
         pos += line.len();
     }
     if let Some(s) = start {
-        out.push(&text[s..end]);
+        out.push((s, end));
     }
     out
 }
@@ -294,22 +303,32 @@ fn tagged<'a>(text: &'a str, open: &str, close: &str) -> Vec<&'a str> {
     out
 }
 
-/// The largest char boundary of `s` at or before byte `i`.
-fn floor_boundary(s: &str, i: usize) -> usize {
+/// Byte `i` of `s`, moved back to the start of its line when that is near, else to a char boundary.
+fn line_floor(s: &str, i: usize) -> usize {
     let mut i = i.min(s.len());
     while !s.is_char_boundary(i) {
         i -= 1;
     }
-    i
+    match s[..i].rfind('\n') {
+        Some(j) if i - (j + 1) <= NEAR_LINE_BYTES => j + 1,
+        _ => i,
+    }
 }
 
-/// The smallest char boundary of `s` at or after byte `i`.
-fn ceil_boundary(s: &str, i: usize) -> usize {
+/// Byte `i` of `s`, moved on to the start of the next line when that is near, else to a char
+/// boundary.
+fn line_ceil(s: &str, i: usize) -> usize {
     let mut i = i.min(s.len());
     while !s.is_char_boundary(i) {
         i += 1;
     }
-    i
+    if i == 0 || s.as_bytes()[i - 1] == b'\n' {
+        return i;
+    }
+    match s[i..].find('\n') {
+        Some(j) if j < NEAR_LINE_BYTES => i + j + 1,
+        _ => i,
+    }
 }
 
 /// `text` with every line longer than `max` characters broken after its last space within the
@@ -347,6 +366,10 @@ mod tests {
         without_repeats(&[(text, false)], above).remove(0)
     }
 
+    fn shown<'a>(h: &'a Handback, tag: &str) -> &'a str {
+        tagged(&h.text, &format!("<{tag}>\n"), &format!("\n</{tag}>"))[0]
+    }
+
     #[test]
     fn the_budget_follows_the_room_and_never_fills_it() {
         // A large window: half the room, far more than a reply's reasoning.
@@ -365,8 +388,9 @@ mod tests {
     #[test]
     fn paragraphs_split_at_blank_lines_of_any_kind() {
         let text = "one\r\ntwo\r\n\r\nthree\n   \n\nfour";
-        assert_eq!(paragraphs(text), ["one\r\ntwo", "three", "four"]);
-        assert_eq!(paragraphs("no blank line at all"), ["no blank line at all"]);
+        let found: Vec<&str> = paragraphs(text).into_iter().map(|(s, e)| &text[s..e]).collect();
+        assert_eq!(found, ["one\r\ntwo", "three", "four"]);
+        assert_eq!(paragraphs("no blank line at all"), [(0, 20)]);
         assert!(paragraphs("\n\n  \n").is_empty());
     }
 
@@ -390,16 +414,41 @@ mod tests {
     }
 
     #[test]
+    fn what_is_kept_stays_byte_for_byte() {
+        // A repeat is dropped, and everything else keeps its own blank lines, spaces included.
+        let prose = "The table at offset 0x40 holds the settings: grid size, scale and the step count.";
+        let text = format!("{prose}\n\n\n  first   \n    \nsecond\n\n{prose}");
+        assert_eq!(
+            one(&text, &none()),
+            format!("[a paragraph repeated below]\n\n\n  first   \n    \nsecond\n\n{prose}")
+        );
+    }
+
+    #[test]
     fn code_in_fences_comes_back_as_written() {
-        let block = "fn scale(x: f32) -> f32 {\n    x * 4.0 // the grid's scale, decoded above\n}";
-        let text = format!("Draft:\n\n```rust\n{block}\n\n{block}\n```\n\nDone.");
+        let block = "    let scale = 4.0; // the grid's scale, decoded from the table above";
+        let text = format!("Draft:\n\n```rust\nfn grid() {{\n\n{block}\n\n{block}\n\n}}\n```\n\nDone.");
         assert_eq!(one(&text, &none()), text, "a repeat inside a fence is kept");
-        let above: HashSet<String> = [block.to_string()].into();
+        let above: HashSet<String> = [block.trim().to_string()].into();
         assert_eq!(one(&text, &above), text, "and so is code handed back before");
         // Outside the fence, the same rule as any paragraph.
-        let prose = "The table at offset 0x40 holds the settings: grid size, scale and the step count.";
-        let mixed = format!("```\nx\n```\n\n{prose}\n\n{prose}");
-        assert_eq!(one(&mixed, &none()), format!("```\nx\n```\n\n[a paragraph repeated below]\n\n{prose}"));
+        let mixed = format!("```\nx\n```\n\n{block}\n\n{block}");
+        assert_eq!(one(&mixed, &none()), format!("```\nx\n```\n\n[a paragraph repeated below]\n\n{block}"));
+    }
+
+    #[test]
+    fn a_tail_that_starts_inside_a_fence_is_code() {
+        let block = "    let scale = 4.0; // the grid's scale, decoded from the table above";
+        let reasoning = format!(
+            "Reading the task.\n\n{}\n\n```rust\nfn grid() {{\n{}\n\n{block}\n\n{block}\n\n}}\n```\n\nDone.",
+            "Decode the next block.\n".repeat(400),
+            "    let step = 1;\n".repeat(200)
+        );
+        // The tail starts among the `let step` lines, inside the fence.
+        let h = notes("Cut off.", &reasoning, &none(), 1_000, |_| None);
+        let end = shown(&h, "reasoning_end");
+        assert_eq!(end.matches(block).count(), 2, "{end}");
+        assert!(!end.contains("repeated below"));
     }
 
     #[test]
@@ -412,6 +461,11 @@ mod tests {
         assert!(above.contains(found));
         let out = one(&format!("Restate.\n\n{found}\n\n{found}\n\nNext: write it."), &above);
         assert_eq!(out, "Restate.\n\n[2 paragraphs handed back above]\n\nNext: write it.");
+        // From a handback that was itself cut: its start and its end count too.
+        let cut =
+            notes("Cut off.", &format!("{found}\n\n{}\n\n{found}x", "y ".repeat(3_000)), &none(), 1_000, |_| None);
+        let above = handed_back(&[Message::user_text(cut.text)]);
+        assert!(above.contains(found) && above.contains(format!("{found}x").as_str()), "{above:?}");
         // A tool call since then: that handback no longer counts.
         let acted = Message::assistant(vec![kodact_types::ContentBlock::ToolUse {
             id: "t".into(),
@@ -452,6 +506,14 @@ mod tests {
         // It fits: whole, nothing saved.
         let h = notes("Cut off.", "short", &none(), 10_000, |_| panic!("nothing to save"));
         assert!(h.text.contains("<reasoning>\nshort\n</reasoning>") && h.saved.is_none());
+        // It fits once a repeat is dropped: the marker loses nothing, as the whole is saved.
+        let found = "The table at offset 0x40 holds the settings: grid size, scale and the step count.";
+        let twice = format!("{found}\n\n{found}");
+        let h = notes("Cut off.", &twice, &none(), 10_000, |w| {
+            assert_eq!(w, twice);
+            Some(PathBuf::from("/s/reasoning-3.txt"))
+        });
+        assert!(h.text.contains("repeated below") && h.text.contains("/s/reasoning-3.txt"), "{}", h.text);
     }
 
     #[test]
@@ -459,10 +521,18 @@ mod tests {
         // Three bytes a character: 30,000 characters are 90,000 bytes, more than 32,000 of room.
         let reasoning = "推理继续。".repeat(6_000);
         let h = notes("Cut off.", &reasoning, &none(), 32_000, |_| None);
-        let shown: usize = tagged(&h.text, "<reasoning_start>\n", "\n</reasoning_start>")[0].len()
-            + tagged(&h.text, "<reasoning_end>\n", "\n</reasoning_end>")[0].len();
-        assert!(shown <= 32_000 && shown > 31_000, "{shown}");
+        let bytes = shown(&h, "reasoning_start").len() + shown(&h, "reasoning_end").len();
+        assert!(bytes <= 32_000 && bytes > 31_000, "{bytes}");
         assert!(h.kept < 11_000, "{}", h.kept);
+    }
+
+    #[test]
+    fn a_cut_falls_at_a_line_start() {
+        // The head's 400 bytes would end inside the fence line: it stops before it instead.
+        let reasoning = format!("{}\n```rust\nfn main() {{}}\n```\n{}", "a".repeat(395), "b\n".repeat(5_000));
+        let h = notes("Cut off.", &reasoning, &none(), 2_000, |_| None);
+        assert_eq!(shown(&h, "reasoning_start"), "a".repeat(395));
+        assert!(shown(&h, "reasoning_end").starts_with('b'));
     }
 
     #[test]
@@ -473,7 +543,7 @@ mod tests {
         let reasoning =
             format!("{opening}\n\n{}\n\n{opening}\n\n{}\n\nThe end.", "a ".repeat(20_000), "b ".repeat(20_000));
         let h = notes("Cut off.", &reasoning, &none(), 10_000, |_| None);
-        let start = tagged(&h.text, "<reasoning_start>\n", "\n</reasoning_start>")[0];
+        let start = shown(&h, "reasoning_start");
         assert!(start.starts_with(opening), "{start:.200}");
         assert!(!h.text.contains("repeated below"));
     }

@@ -84,7 +84,9 @@ def calls(ev):
 def after(evs, i):
     """What the next reply did after the reminder at `i`, and the first tool call it made."""
     for ev in evs[i + 1 :]:
-        if handback(ev):
+        # Any act reminder before an action (another handback, or a reply stopped for repeating
+        # itself) means the next reply didn't act.
+        if handback(ev) or (ev.get("type") == "system" and ev.get("subtype") == "act_reminder"):
             return "again", None
         c = calls(ev)
         if c:
@@ -111,11 +113,12 @@ def report(path):
         saved = ev.get("saved")
         read = None
         if saved:
-            # Read at any point later in the run, by any tool (Read, Grep, a shell command), by
-            # its path, its name, or a search of its directory.
-            name, folder = os.path.basename(saved), os.path.dirname(saved)
+            # Read at any point later in the run, by any tool (Read, Grep, a shell command), by its
+            # path or its name. The directory also holds long tool output: a search of it alone
+            # isn't counted.
+            name = os.path.basename(saved)
             later = [json.dumps(c.get("input")) for e in evs[i + 1 :] for c in calls(e)]
-            read = any(saved in text or name in text or (folder and folder in text) for text in later)
+            read = any(saved in text or name in text for text in later)
         rows.append(
             {
                 "kind": kind,

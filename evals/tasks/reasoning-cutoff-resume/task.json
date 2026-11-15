@@ -9,7 +9,7 @@
   ],
   "timeout_secs": 600,
   "env": {
-    "KODACT_MAX_OUTPUT_TOKENS": "4000",
+    "KODACT_MAX_OUTPUT_TOKENS": "6000",
     "KODACT_CONTEXT_WINDOW": "20000"
   }
 }

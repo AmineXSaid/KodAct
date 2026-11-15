@@ -27,7 +27,7 @@ pub use ls::Ls;
 pub use memory::{drop_checkpoint, notes_path, Checkpoint, Checkpoints, Notes, NotesStore};
 pub use near::{NearKind, NearMatch};
 pub use notebook::NotebookEdit;
-pub use read::Read;
+pub use read::{Read, MAX_LINE_CHARS};
 pub use todo::TodoWrite;
 pub use web::{normalize_url, WebBackend, WebFetch, WebSearch};
 pub use write::Write;

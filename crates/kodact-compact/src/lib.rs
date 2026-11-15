@@ -39,21 +39,45 @@ pub fn micro_threshold(window: u64, max_output: u32) -> u64 {
     autocompact_threshold(window, max_output) / 2
 }
 
-/// Is this user message a person's turn: text of their own, not only tool results or the
-/// harness's reminders (`<system-reminder>`)? Counted as turns, a few reminders in a row (the
-/// act reminders after replies cut off while reasoning) pushed the person's current turn out of
-/// the turns kept, and its file reads were cleared just as the model was told to act on them.
-fn is_user_turn(m: &Message) -> bool {
-    m.role == Role::User
-        && m.content.iter().any(
-            |b| matches!(b, ContentBlock::Text { text, .. } if !text.trim_start().starts_with("<system-reminder>")),
-        )
-        && !m.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+/// Where the conversation's turns start, for micro-compaction: each message of the person's, and
+/// each of the harness's reminders that stands alone (only `<system-reminder>` text, no tool
+/// results), except that reminders in a row with no tool call between them count once. An
+/// unattended run has one message of the person's and takes its turns from the reminders between
+/// its tool rounds. Counted one by one, a few reminders in a row (act reminders after replies cut
+/// off while reasoning) pushed the current turn out of the turns kept, and its file reads were
+/// cleared just as the model was told to act on them.
+fn turn_starts(messages: &[Message]) -> Vec<usize> {
+    let mut out = vec![];
+    // The last turn started with a reminder, and no tool call has come since.
+    let mut reminding = false;
+    for (i, m) in messages.iter().enumerate() {
+        if m.role == Role::Assistant {
+            reminding &= !m.content.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+            continue;
+        }
+        if m.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })) {
+            continue;
+        }
+        let texts: Vec<&str> = m.content.iter().filter_map(|b| b.as_text()).collect();
+        if texts.is_empty() {
+            continue;
+        }
+        if texts.iter().all(|t| t.trim_start().starts_with("<system-reminder>")) {
+            if !reminding {
+                out.push(i);
+                reminding = true;
+            }
+        } else {
+            out.push(i);
+            reminding = false;
+        }
+    }
+    out
 }
 
 /// Tool-result ids that micro-compaction may clear now.
 pub fn micro_candidates(messages: &[Message], already: &HashSet<String>) -> Vec<String> {
-    let turns: Vec<usize> = messages.iter().enumerate().filter(|(_, m)| is_user_turn(m)).map(|(i, _)| i).collect();
+    let turns = turn_starts(messages);
     if turns.len() <= MICRO_KEEP_TURNS {
         return vec![];
     }
@@ -269,16 +293,14 @@ mod tests {
     }
 
     #[test]
-    fn reminders_are_not_turns_and_keep_no_read_from_its_turn() {
-        // The person's turn, its read, then three reminders (replies cut off while reasoning):
-        // the read is still in one of the last turns, so it stays.
+    fn reminders_in_a_row_count_as_one_turn() {
+        // The person's turn, its read, then three reminders in a row (replies cut off while
+        // reasoning): they count once, so the read is still in one of the last turns and stays.
+        let reminder =
+            || Message::user_text("<system-reminder>\nYour reply reached the output token limit.\n</system-reminder>");
         let mut msgs = vec![Message::user_text("turn 1"), Message::user_text("turn 2"), Message::user_text("turn 3")];
         msgs.extend(tool_round("current_read", "Read", 20_000));
-        for _ in 0..3 {
-            msgs.push(Message::user_text(
-                "<system-reminder>\nYour reply reached the output token limit.\n</system-reminder>",
-            ));
-        }
+        msgs.extend([reminder(), reminder(), reminder()]);
         assert!(micro_candidates(&msgs, &HashSet::new()).is_empty());
         // A person's message that carries reminders alongside their own text is a turn.
         msgs.push(Message::user(vec![
@@ -288,6 +310,18 @@ mod tests {
         msgs.push(Message::user_text("turn 5"));
         msgs.push(Message::user_text("turn 6"));
         assert_eq!(micro_candidates(&msgs, &HashSet::new()), vec!["current_read".to_string()]);
+    }
+
+    #[test]
+    fn reminders_between_tool_rounds_mark_the_turns_of_an_unattended_run() {
+        // One message of the person's, then reads, each followed by a reminder: the reminders
+        // are the turns, and the oldest reads become candidates as before.
+        let mut msgs = vec![Message::user_text("the one prompt")];
+        for k in 0..5 {
+            msgs.extend(tool_round(&format!("read_{k}"), "Read", 20_000));
+            msgs.push(Message::user_text("<system-reminder>\nThe build has not been run.\n</system-reminder>"));
+        }
+        assert_eq!(micro_candidates(&msgs, &HashSet::new()), ["read_0", "read_1", "read_2"]);
     }
 
     #[test]

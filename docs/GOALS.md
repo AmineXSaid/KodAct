@@ -68,7 +68,8 @@ Each pillar lists what KodAct does about it and what shows that it works.
     output, by sub-agents too, and the reminder names the file. Measured in
     bytes, as the context is. A paragraph it repeats is shown once, at the
     last place shown, one an earlier handback gave is marked, not repeated,
-    and fenced code comes back as written (task `reasoning-cutoff-resume`,
+    fenced code comes back as written, and whenever anything is left out the
+    whole is saved (task `reasoning-cutoff-resume`,
     `scripts/act-after-cutoff.py`);
   - no repeated reads: reading the same range of unchanged content returns a
     short note. That stops once the earlier result was cleared by compaction;

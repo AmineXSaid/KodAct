@@ -1832,7 +1832,9 @@ async fn a_reply_that_was_all_reasoning_gets_it_back_where_it_is_not_kept() {
     assert_eq!(r.result.as_deref(), Some("wrote render.c"));
     assert!(reqs[1].tool_choice.is_none() && !h.transcript_text().contains("compact_boundary"));
     let asked = last_user_text(&reqs[1]);
-    assert!(asked.contains("开始推理。") && asked.contains("最后一步。") && asked.len() < 34_000, "{}", asked.len());
+    // About 32,000 bytes of reasoning: far more than 8,000 characters' worth, and still in the room.
+    assert!(asked.contains("开始推理。") && asked.contains("最后一步。"));
+    assert!((31_000..34_000).contains(&asked.len()), "{}", asked.len());
 
     // A repeated paragraph comes back once, at its last place, and leaves a marker where it was.
     let found = "The table at offset 0x40 holds the settings: grid size, scale and the step count.";

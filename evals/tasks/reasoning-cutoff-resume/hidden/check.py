@@ -2,11 +2,11 @@
 the reply after the reminder acted (called a tool or answered) instead of reasoning to the limit
 again.
 
-task.json caps the reply at 4,000 tokens, so a model that works the values out in its reasoning
+task.json caps the reply at 6,000 tokens, so a model that works the values out in its reasoning
 is cut off mid-analysis, and sets a 20,000-token window, so the reasoning doesn't all fit the
 room left before compaction: part comes back and the whole is saved to a file. The window setting
-applies to a model whose own window isn't known (KODACT_CONTEXT_WINDOW); with a known one, the
-reasoning comes back whole. kodact-eval writes the run's stream next to the workspace
+applies to a model whose own window isn't known and whose endpoint doesn't report one
+(KODACT_CONTEXT_WINDOW); otherwise the reasoning comes back whole. kodact-eval writes the run's stream next to the workspace
 (transcript.jsonl); without one (task validation), or with no cut-off in it, only scene.json is
 checked, and the output says so.
 """
@@ -52,9 +52,10 @@ def acted(ev):
 
 
 def again(ev):
-    """Another reminder for a reply that was all reasoning, or such a reply cut off with no reminder."""
+    """Another act reminder (for a reply that was all reasoning, or one that repeated itself), or a
+    reply cut off while reasoning with no reminder left to give."""
     if ev.get("type") == "system":
-        return (ev.get("subtype") == "act_reminder" and ev.get("kind") in ("reasoning_cutoff", "empty_reply")) or (
+        return ev.get("subtype") == "act_reminder" or (
             ev.get("subtype") == "nudge" and ev.get("kind") == "thinking_time_box"
         )
     msg = ev.get("message") or {}
@@ -75,11 +76,13 @@ first = next(
     None,
 )
 if first is None:
-    print("no reply was cut off while reasoning: only scene.json was checked")
+    print("no reply was cut off while reasoning, so the handback was not exercised: only scene.json was checked")
     sys.exit(0)
 print(f"cut off while reasoning; {events[first].get('reasoning_chars', 0):,} characters handed back")
 for ev in events[first + 1 :]:
     if acted(ev):
         break
+    if ev.get("type") == "result" and ev.get("is_error"):
+        sys.exit(f"the run ended in an error after the handback, before a reply acted: {ev.get('subtype')}")
     if again(ev) or ev.get("type") == "result":
-        sys.exit("after its reasoning was handed back, the next reply did not act: it reasoned to the limit again")
+        sys.exit("after its reasoning was handed back, the next reply did not act: it was cut off or stopped again")
