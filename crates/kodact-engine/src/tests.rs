@@ -2369,6 +2369,30 @@ async fn the_clock_tells_where_the_run_stands_once_per_tenth() {
     let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     e.submit(prompt(ask)).await;
     assert!(notes(&e).is_empty());
+
+    // Everyday use, no time limit: every 10 replies of a request, how long it has run. A request
+    // of fewer replies never hears it, and the next request counts from zero.
+    let steps = |h: &Harness, n: usize| {
+        for i in 0..n {
+            h.provider.push(MockTurn::tool("Bash", json!({"command": format!("echo {i}")})));
+        }
+        h.provider.push(MockTurn::text("done"));
+    };
+    let h = Harness::new(vec![]);
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    steps(&h, 12);
+    let mut e =
+        h.engine_with(nudged_cfg("clock"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt(ask)).await;
+    let told = notes(&e);
+    assert_eq!(told.len(), 1, "once, at the 10th reply: {told:?}");
+    assert!(told[0].contains("Time: this request has run "), "{}", told[0]);
+    assert!(told[0].contains(": 10 replies, "), "{}", told[0]);
+    assert!(told[0].contains("Files the request asks for that don't exist yet: `gpt2.c`."), "{}", told[0]);
+    assert!(!told[0].contains("left"), "no limit, no time left: {}", told[0]);
+    steps(&h, 5);
+    e.submit(prompt("Now explain what gpt2.c would do.")).await;
+    assert_eq!(notes(&e).len(), 1, "a short request never hears it");
 }
 
 #[tokio::test]

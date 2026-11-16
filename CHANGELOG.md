@@ -15,6 +15,11 @@
   how long one takes (89% of that run was the model's own replies, about a
   minute each), files the request asks for that don't exist yet, files over the size it allows. No advice: what to do with
   them is the model's call. Recorded as `system/nudge` events of kind `clock`.
+- **Everyday use, without `--max-time`:** every 10 replies of a request, how
+  long the request has run, its replies and their average length, the tokens
+  it wrote, and the same file lines. A short request never hears it, and each
+  request counts from zero. Turn it on with `KODACT_NUDGES=clock` or
+  `"nudges": {"clock": true}` in settings.
 
 ### A file a shell command printed whole counts as read
 - **What happened.** Edit and Write refuse a file the model hasn't read, or

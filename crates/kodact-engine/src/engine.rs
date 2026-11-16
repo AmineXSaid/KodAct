@@ -130,6 +130,10 @@ pub(crate) fn request_budget(window: u64) -> usize {
 }
 
 /// "about 12 minutes", for time-limit notes.
+/// Replies of a request between two clock notes, in a run without a time limit: the model's own
+/// pace sets how often it speaks (every 10 replies, the reference CLI's task-list cadence).
+const CLOCK_REPLIES: u32 = 10;
+
 /// A span as the clock says it: `45s`, `27m05s`.
 fn clock_time(d: Duration) -> String {
     let s = d.as_secs();
@@ -859,6 +863,8 @@ pub struct Engine {
     todo_steps: (u32, u32),
     /// Tenths of the time limit the clock (`nudges.clock`) has told so far.
     clock_told: u32,
+    /// Without a time limit: how many times the clock has spoken in this request.
+    clock_turn_told: u32,
     /// Shell commands run this turn, for the constraint report.
     ran_commands: Vec<String>,
     /// The constraint report was given this turn.
@@ -1020,6 +1026,7 @@ impl Engine {
             shell_edit_told: false,
             todo_steps: (0, crate::nudges::TODO_STEPS),
             clock_told: 0,
+            clock_turn_told: 0,
             ran_commands: vec![],
             constraints_told: false,
             passing: None,
@@ -2702,6 +2709,7 @@ impl Engine {
     async fn run_turn(&mut self, prompt: MessageContent) -> TurnResult {
         self.adopt_model();
         let started = Instant::now();
+        self.clock_turn_told = 0;
         let cancel = self.new_turn_token();
         // `--max-time` stops the run at its limit: the turn is cancelled as by an interrupt, a
         // model call or a tool in flight included, and `finish` reports the limit. A turn that
@@ -3447,7 +3455,7 @@ impl Engine {
                     }
                 }
                 if !interrupted && !budget_warned {
-                    if let Some(text) = self.clock_note() {
+                    if let Some(text) = self.clock_note(started, &turn) {
                         self.push_user(Message::user_text(text), true, None, true);
                     }
                 }
@@ -3823,15 +3831,23 @@ impl Engine {
         ))
     }
 
-    /// The clock (`nudges.clock`): in a run with a time limit, once each time another tenth of it
-    /// has gone, until the last fifth (the wrap-up warning's), the facts of where the run stands:
-    /// time used and left, tokens written, and the files the request asks for that don't exist
-    /// yet or are over the size it allows. No advice: what to do with them is the model's call.
-    fn clock_note(&mut self) -> Option<String> {
+    /// The clock (`nudges.clock`): the facts of where the work stands, no advice (what to do with
+    /// them is the model's call).
+    /// - With a time limit: once each time another tenth of it has gone, until the last fifth
+    ///   (the wrap-up warning's): time used and left, tokens written, replies and their length.
+    /// - Without one (everyday use): every [`CLOCK_REPLIES`] replies of a request, how long the
+    ///   request has run, its replies and their length, the tokens it wrote. A short request
+    ///   never hears it.
+    ///
+    /// Either way, then the files the request asks for that don't exist yet or are over the size
+    /// it allows.
+    fn clock_note(&mut self, turn_started: Instant, turn: &TurnAcc) -> Option<String> {
         if !self.cfg.reminders || self.cfg.is_subagent || !self.cfg.nudges.clock {
             return None;
         }
-        let t = self.cfg.time_limit.as_ref()?;
+        let Some(t) = self.cfg.time_limit.as_ref() else {
+            return self.request_clock_note(turn_started, turn);
+        };
         let (used, left) = (t.started.elapsed(), t.remaining());
         if left <= (t.total / 5).max(Duration::from_secs(60)) {
             return None;
@@ -3859,6 +3875,55 @@ impl Engine {
                 clock_time(Duration::from_secs_f64(mean.round()))
             ));
         }
+        let (missing, over) = self.clock_deliverables(&mut lines);
+        self.system_event(
+            "nudge",
+            json!({
+                "kind": crate::nudges::Nudge::Clock.as_str(),
+                "used_s": used.as_secs(),
+                "left_s": left.as_secs(),
+                "output_tokens": written,
+                "missing_files": missing,
+                "over_limit": over,
+            }),
+        );
+        Some(format!("<system-reminder>\n{}\n</system-reminder>", lines.join("\n")))
+    }
+
+    /// The clock without a time limit: every [`CLOCK_REPLIES`] replies of the request.
+    fn request_clock_note(&mut self, started: Instant, turn: &TurnAcc) -> Option<String> {
+        let replies = turn.api_calls;
+        if replies == 0 || replies / CLOCK_REPLIES <= self.clock_turn_told {
+            return None;
+        }
+        self.clock_turn_told = replies / CLOCK_REPLIES;
+        let ran = started.elapsed();
+        let mean = Duration::from_millis(turn.api_ms / u64::from(replies));
+        let mut lines = vec![format!(
+            "Time: this request has run {}: {replies} replies, {} each on average (your thinking and \
+             writing, without the tools). Written so far: {} tokens.",
+            clock_time(ran),
+            clock_time(Duration::from_secs(mean.as_secs_f64().round() as u64)),
+            thousands(turn.usage.output_tokens)
+        )];
+        let (missing, over) = self.clock_deliverables(&mut lines);
+        self.system_event(
+            "nudge",
+            json!({
+                "kind": crate::nudges::Nudge::Clock.as_str(),
+                "request_s": ran.as_secs(),
+                "replies": replies,
+                "output_tokens": turn.usage.output_tokens,
+                "missing_files": missing,
+                "over_limit": over,
+            }),
+        );
+        Some(format!("<system-reminder>\n{}\n</system-reminder>", lines.join("\n")))
+    }
+
+    /// The clock's lines about the request's files: those it asks for that don't exist yet, and
+    /// those over the size it allows. Returns both lists, for the record.
+    fn clock_deliverables(&self, lines: &mut Vec<String>) -> (Vec<String>, Vec<crate::named::OverLimit>) {
         let missing = self.watched.still_missing();
         if !missing.is_empty() {
             let names: Vec<String> = missing.iter().map(|f| format!("`{f}`")).collect();
@@ -3873,18 +3938,7 @@ impl Engine {
                 thousands(o.limit)
             ));
         }
-        self.system_event(
-            "nudge",
-            json!({
-                "kind": crate::nudges::Nudge::Clock.as_str(),
-                "used_s": used.as_secs(),
-                "left_s": left.as_secs(),
-                "output_tokens": written,
-                "missing_files": missing,
-                "over_limit": over,
-            }),
-        );
-        Some(format!("<system-reminder>\n{}\n</system-reminder>", lines.join("\n")))
+        (missing, over)
     }
 
     /// Background commands that exited since the model last heard of them: a note for it, and
