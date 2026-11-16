@@ -2387,7 +2387,7 @@ async fn the_clock_tells_where_the_run_stands_once_per_tenth() {
     let told = notes(&e);
     assert_eq!(told.len(), 1, "once, at the 10th reply: {told:?}");
     assert!(told[0].contains("Time: this request has run "), "{}", told[0]);
-    assert!(told[0].contains(": 10 replies, "), "{}", told[0]);
+    assert!(told[0].contains("Replies in this request: 10, "), "{}", told[0]);
     assert!(told[0].contains("Files the request asks for that don't exist yet: `gpt2.c`."), "{}", told[0]);
     assert!(!told[0].contains("left"), "no limit, no time left: {}", told[0]);
     steps(&h, 5);
@@ -2503,6 +2503,47 @@ async fn a_script_waits_out_a_network_drop_before_the_first_answer() {
     let r = e.submit(prompt("task")).await;
     assert_eq!(r.subtype, ResultSubtype::ErrorDuringExecution);
     assert_eq!(h.provider.requests().len(), 1, "said at once");
+}
+
+/// gpt2-codegolf with three times its time and the clock (2026-11-16): a reply reasoned for 9
+/// minutes, the connection dropped ("error decoding response body"), and the request went again
+/// from scratch: a fifth of the run lost. A stream that breaks mid-reply has its reasoning handed
+/// back with the request sent again, so the retry goes on from it. One that fails before anything
+/// streamed is sent again as it was.
+#[tokio::test]
+async fn a_reply_whose_stream_breaks_hands_its_reasoning_to_the_retry() {
+    let MockTurn::Message { message, .. } = MockTurn::blocks(
+        vec![ContentBlock::Thinking {
+            thinking: "The tensors are in name order, h0 first.".into(),
+            signature: String::new(),
+        }],
+        kodact_types::StopReason::EndTurn,
+    ) else {
+        unreachable!()
+    };
+    let broken = MockTurn::BrokenStream { message, keep: 3, error: "error decoding response body".into() };
+    let h = Harness::new(vec![broken, MockTurn::text("done")]);
+    let cfg = EngineConfig { one_shot: true, api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("Write gpt2.c.")).await;
+    assert_eq!((r.result.as_deref(), r.subtype), (Some("done"), ResultSubtype::Success));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 2);
+    let resent = last_user_text(&reqs[1]);
+    assert!(resent.contains("The tensors are in name order, h0 first."), "the reasoning goes back: {resent}");
+    assert!(resent.contains("cut off after") && resent.contains("error decoding response body"), "{resent}");
+    assert!(h.transcript_text().contains(r#""kind":"broken_stream""#));
+
+    // Nothing streamed before the failure: the request goes again as it was.
+    let down = MockTurn::NetworkError { message: "connection reset".into() };
+    let h = Harness::new(vec![MockTurn::text("hello"), down, MockTurn::text("done")]);
+    let cfg = EngineConfig { one_shot: true, api_retry_wait: Duration::from_millis(1), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("hi")).await;
+    e.submit(prompt("again")).await;
+    let reqs = h.provider.requests();
+    assert_eq!(last_user_text(&reqs[1]), last_user_text(&reqs[2]), "sent again unchanged");
+    assert!(!h.transcript_text().contains("broken_stream"));
 }
 
 /// With a fallback model set, a model that stays limited hands the turn over: after a few

@@ -2,6 +2,22 @@
 
 ## 0.1.0 (unreleased)
 
+### A reply whose stream breaks hands its reasoning to the retry
+- **What happened.** In gpt2-codegolf with three times its time (2026-11-16)
+  a reply reasoned for 9 minutes, then the connection dropped ("error
+  decoding response body"). KodAct sent the request again from scratch: the
+  9 minutes of reasoning were lost, a fifth of the run.
+- **Now** the reasoning a reply had streamed when its stream broke goes back
+  with the request sent again, as it does when a reply reaches the output
+  limit while still reasoning: "Your reply was cut off after 548 seconds by an
+  error (...), while you were still reasoning; the request is sent again.
+  Your reasoning is not kept from one reply to the next. Here it is: ...". A
+  request that fails before anything streamed is sent again as before.
+  Recorded as an `act_reminder` event of kind `broken_stream`.
+- **The clock counts it.** With `nudges.clock`, time spent in replies that
+  failed partway is said apart ("Replies that failed partway and were sent
+  again took 9m08s more."), so the average reply time stays the replies' own.
+
 ### The clock: where a timed run stands, as facts (`nudges.clock`)
 - **What happened.** In a run with `--max-time` the model is told the limit
   at the start and warned when a fifth is left, and nothing in between. A

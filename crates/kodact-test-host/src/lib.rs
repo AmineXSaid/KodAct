@@ -107,6 +107,25 @@ impl MockApi {
                         }
                         // An unreachable endpoint: the connection closes with no answer.
                         MockTurn::NetworkError { .. } => return,
+                        // A connection that drops mid-reply: the first events, then the socket closes.
+                        MockTurn::BrokenStream { mut message, keep, .. } => {
+                            message.model = body["model"].as_str().unwrap_or("mock").to_string();
+                            let _ = sock
+                                .write_all(
+                                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n",
+                                )
+                                .await;
+                            for ev in kodact_api::mock::events_for(&message).into_iter().take(keep) {
+                                let data = serde_json::to_string(&ev).unwrap();
+                                let kind =
+                                    serde_json::to_value(&ev).unwrap()["type"].as_str().unwrap_or("").to_string();
+                                if sock.write_all(format!("event: {kind}\ndata: {data}\n\n").as_bytes()).await.is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            return;
+                        }
                         MockTurn::StreamError { kind, message } => {
                             let err = serde_json::json!({"type": "error", "error": {"type": kind, "message": message}})
                                 .to_string();

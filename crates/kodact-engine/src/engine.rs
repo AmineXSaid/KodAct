@@ -134,6 +134,29 @@ pub(crate) fn request_budget(window: u64) -> usize {
 /// pace sets how often it speaks (every 10 replies, the reference CLI's task-list cadence).
 const CLOCK_REPLIES: u32 = 10;
 
+/// The clock's line on the model's pace: how many replies, and how long one takes on average.
+fn pace_line(secs: &[f64], what: &str) -> Option<String> {
+    if secs.is_empty() {
+        return None;
+    }
+    let mean = secs.iter().sum::<f64>() / secs.len() as f64;
+    Some(format!(
+        "{what}: {}, {} each on average (your thinking and writing, without the tools).",
+        secs.len(),
+        clock_time(Duration::from_secs_f64(mean.round()))
+    ))
+}
+
+/// The clock's line on replies that failed after running a while, and were sent again.
+fn lost_line(secs: f64) -> Option<String> {
+    (secs >= 1.0).then(|| {
+        format!(
+            "Replies that failed partway and were sent again took {} more.",
+            clock_time(Duration::from_secs_f64(secs.round()))
+        )
+    })
+}
+
 /// A span as the clock says it: `45s`, `27m05s`.
 fn clock_time(d: Duration) -> String {
     let s = d.as_secs();
@@ -865,6 +888,14 @@ pub struct Engine {
     clock_told: u32,
     /// Without a time limit: how many times the clock has spoken in this request.
     clock_turn_told: u32,
+    /// Where this request started in `reply_secs` and `lost_reply_secs`, for the clock.
+    clock_turn_marks: (usize, f64),
+    /// Seconds of model calls that failed after they had run a while (a stream that broke
+    /// mid-reply), sent again: time the clock counts apart from the replies.
+    lost_reply_secs: f64,
+    /// The reasoning a reply had streamed when its stream broke, and how long it had run: handed
+    /// back with the request sent again, so the retry goes on from it instead of starting over.
+    broken_reasoning: Mutex<Option<(String, Duration)>>,
     /// Shell commands run this turn, for the constraint report.
     ran_commands: Vec<String>,
     /// The constraint report was given this turn.
@@ -1027,6 +1058,9 @@ impl Engine {
             todo_steps: (0, crate::nudges::TODO_STEPS),
             clock_told: 0,
             clock_turn_told: 0,
+            clock_turn_marks: (0, 0.0),
+            lost_reply_secs: 0.0,
+            broken_reasoning: Mutex::new(None),
             ran_commands: vec![],
             constraints_told: false,
             passing: None,
@@ -1622,7 +1656,15 @@ impl Engine {
             tracing::debug!(dropped, "thinking left out: the history it was written on changed");
         }
         *self.last_sent.lock().unwrap() = Some(sent);
+        *self.broken_reasoning.lock().unwrap() = None;
         let started = Instant::now();
+        // A stream that breaks mid-reply: what it had reasoned is kept for the request sent again.
+        let keep_reasoning = |acc: &MessageAccumulator| {
+            let reasoning = acc.snapshot().map(|m| reasoning_of(&m.content)).unwrap_or_default();
+            if !reasoning.trim().is_empty() {
+                *self.broken_reasoning.lock().unwrap() = Some((reasoning, started.elapsed()));
+            }
+        };
         let mut stream = match self.shared.provider.stream(req, cancel.clone()).await {
             Ok(s) => s,
             Err(ApiError::Cancelled) => return StreamOutcome::Interrupted(None),
@@ -1686,6 +1728,7 @@ impl Engine {
                         }
                     }
                     if let Err(e) = acc.push(&ev) {
+                        keep_reasoning(&acc);
                         return StreamOutcome::Failed(e);
                     }
                     if emit {
@@ -1713,7 +1756,10 @@ impl Engine {
                     });
                     return StreamOutcome::Interrupted(partial.filter(|m| !m.content.is_empty()));
                 }
-                Some(Err(e)) => return StreamOutcome::Failed(e),
+                Some(Err(e)) => {
+                    keep_reasoning(&acc);
+                    return StreamOutcome::Failed(e);
+                }
                 None => break,
             }
         }
@@ -2710,6 +2756,7 @@ impl Engine {
         self.adopt_model();
         let started = Instant::now();
         self.clock_turn_told = 0;
+        self.clock_turn_marks = (self.reply_secs.len(), self.lost_reply_secs);
         let cancel = self.new_turn_token();
         // `--max-time` stops the run at its limit: the turn is cancelled as by an interrupt, a
         // model call or a tool in flight included, and `finish` reports the limit. A turn that
@@ -2962,6 +3009,8 @@ impl Engine {
             let outcome = self.stream_once(req, &cancel, watch, think_until).await;
             if matches!(outcome, StreamOutcome::Done(_)) {
                 self.reply_secs.push(t0.elapsed().as_secs_f64());
+            } else if matches!(outcome, StreamOutcome::Failed(_)) && t0.elapsed() >= Duration::from_secs(5) {
+                self.lost_reply_secs += t0.elapsed().as_secs_f64();
             }
             turn.api_ms += t0.elapsed().as_millis() as u64;
             match &outcome {
@@ -3144,6 +3193,22 @@ impl Engine {
                         tokio::select! {
                             _ = cancel.cancelled() => {}
                             _ = tokio::time::sleep(wait) => {}
+                        }
+                        // The stream broke mid-reply: its reasoning goes back with the request sent
+                        // again, so the retry goes on from it instead of starting over.
+                        let broken = self.broken_reasoning.lock().unwrap().take();
+                        if let (Some((reasoning, took)), true) = (broken, self.cfg.reminders) {
+                            let secs = took.as_secs();
+                            let what = format!(
+                                "Your reply was cut off after {secs} seconds by an error ({e}), while you were still \
+                                 reasoning; the request is sent again. Your reasoning is not kept from one reply to the \
+                                 next. Here it is:"
+                            );
+                            let h = self.reasoning_notes(&what, &model, &reasoning);
+                            let mut event = h.event("broken_stream");
+                            event["secs"] = json!(secs);
+                            self.system_event("act_reminder", event);
+                            self.push_user(Message::user_text(h.text), true, None, true);
                         }
                         continue;
                     }
@@ -3858,6 +3923,7 @@ impl Engine {
         }
         self.clock_told = tenth;
         let written = self.state.total_usage.output_tokens;
+        let lost = self.lost_reply_secs;
         let mut lines = vec![format!(
             "Time: {} of {} used, {} left. Written so far: {} tokens.",
             clock_time(used),
@@ -3867,13 +3933,11 @@ impl Engine {
             thousands(written)
         )];
         // The model's own pace, measured: how many replies so far, and how long one takes.
-        if !self.reply_secs.is_empty() {
-            let n = self.reply_secs.len();
-            let mean = self.reply_secs.iter().sum::<f64>() / n as f64;
-            lines.push(format!(
-                "Replies so far: {n}, {} each on average (your thinking and writing, without the tools).",
-                clock_time(Duration::from_secs_f64(mean.round()))
-            ));
+        if let Some(pace) = pace_line(&self.reply_secs, "Replies so far") {
+            lines.push(pace);
+        }
+        if let Some(l) = lost_line(lost) {
+            lines.push(l);
         }
         let (missing, over) = self.clock_deliverables(&mut lines);
         self.system_event(
@@ -3898,14 +3962,18 @@ impl Engine {
         }
         self.clock_turn_told = replies / CLOCK_REPLIES;
         let ran = started.elapsed();
-        let mean = Duration::from_millis(turn.api_ms / u64::from(replies));
+        let (at, lost_at) = self.clock_turn_marks;
         let mut lines = vec![format!(
-            "Time: this request has run {}: {replies} replies, {} each on average (your thinking and \
-             writing, without the tools). Written so far: {} tokens.",
+            "Time: this request has run {}. Written so far: {} tokens.",
             clock_time(ran),
-            clock_time(Duration::from_secs(mean.as_secs_f64().round() as u64)),
             thousands(turn.usage.output_tokens)
         )];
+        if let Some(pace) = pace_line(self.reply_secs.get(at..).unwrap_or_default(), "Replies in this request") {
+            lines.push(pace);
+        }
+        if let Some(l) = lost_line(self.lost_reply_secs - lost_at) {
+            lines.push(l);
+        }
         let (missing, over) = self.clock_deliverables(&mut lines);
         self.system_event(
             "nudge",
