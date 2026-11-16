@@ -9,11 +9,11 @@ terminals. `--no-tui` (or `KODACT_TUI=0`) keeps the line REPL
 | Part | State | Where |
 | --- | --- | --- |
 | Prompt editor: multiline text, word moves, kill commands, history | done, tested | `crates/kodact-cli/src/tui/editor.rs` |
-| Theme, one-line markdown, wrapping by display width | done, tested | `crates/kodact-cli/src/tui/text.rs` |
+| Theme, markdown (tables, highlighted code), wrapping by display width | done, tested | `crates/kodact-cli/src/tui/text.rs` |
 | UI state machine: keys, streaming into scrollback, tool lines, `/` menu, permission/question/plan dialogs, queued input, Esc/Ctrl-C/Shift+Tab | done, tested | `crates/kodact-cli/src/tui/app.rs` |
 | Session task (owns the Driver), `TuiSink`, `TuiPrompter` | done, tested | `crates/kodact-cli/src/tui/session.rs` |
 | Renderer for the live region (`LiveView`) | done, tested | `crates/kodact-cli/src/tui/render.rs` |
-| Terminal loop, inline viewport, scrollback writes, panic-safe restore | done, tested (`Screen`), checked by hand | `crates/kodact-cli/src/tui/mod.rs` |
+| Terminal loop, full screen by default and the inline viewport (`KODACT_TUI=inline`), scrollback writes, panic-safe restore | done, tested (`Screen`), checked by hand | `crates/kodact-cli/src/tui/mod.rs` |
 | Wiring into `main`, `--no-tui`, `KODACT_TUI`, persisted history | done | `crates/kodact-cli/src/main.rs`, `args.rs` |
 | Pickers, Ctrl+R search, `@file` completion | done, tested | `crates/kodact-core/src/commands/picker.rs`, `tui/app.rs`, `tui/session.rs` |
 | Screens: the scrolling viewer and forms; `/diff`, `/context`, `/hooks`, `/agents`; key rebinding; `/color`, `/focus` (Phase 4) | done, tested | `kodact-core` `commands/screens.rs`, `tui/app.rs` (`Viewer`, `Form`), `tui/render.rs` |
@@ -27,7 +27,9 @@ Dependencies are in `crates/kodact-cli/Cargo.toml`:
 
 ## Decision
 
-The UI is an **inline viewport**, not an alternate screen:
+The UI runs **full screen** by default, on the terminal's alternate screen
+(see "Full screen" below). `KODACT_TUI=inline` gives the **inline viewport**
+this section first described, not an alternate screen:
 - finished output (your prompts, answers, tool calls, notices) is written
   into the terminal's own scrollback, so scrolling, search, copy and the
   history after exit work as in any shell;

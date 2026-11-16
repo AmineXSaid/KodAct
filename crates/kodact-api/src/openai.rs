@@ -22,6 +22,9 @@ pub struct OpenAiConfig {
     /// Base URL up to and including `/v1` (e.g. `http://localhost:11434/v1`).
     pub base_url: String,
     pub api_key: Option<String>,
+    /// The header the key goes in: `None` sends `Authorization: Bearer <key>`; a name sends the
+    /// key as that header's whole value (Azure OpenAI's `api-key`, a gateway's `x-api-key`).
+    pub auth_header: Option<String>,
     pub extra_headers: Vec<(String, String)>,
     pub max_retries: u32,
     pub timeout: Duration,
@@ -49,6 +52,7 @@ impl Default for OpenAiConfig {
         OpenAiConfig {
             base_url: "http://localhost:8000/v1".into(),
             api_key: None,
+            auth_header: None,
             extra_headers: vec![],
             max_retries: 2,
             timeout: Duration::from_secs(300),
@@ -133,12 +137,7 @@ impl OpenAiProvider {
         }
         for url in urls {
             let mut rb = self.http.get(&url).timeout(Duration::from_secs(5));
-            if let Some(k) = &self.config.api_key {
-                rb = rb.bearer_auth(k);
-            }
-            for (k, v) in &self.config.extra_headers {
-                rb = rb.header(k, v);
-            }
+            rb = self.authed(rb);
             let Ok(res) = rb.send().await else { continue };
             if !res.status().is_success() {
                 continue;
@@ -149,6 +148,20 @@ impl OpenAiProvider {
                 }
             }
         }
+    }
+
+    /// The key, in the header the endpoint reads it from, and the custom headers.
+    fn authed(&self, mut rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(k) = &self.config.api_key {
+            rb = match &self.config.auth_header {
+                Some(name) => rb.header(name.as_str(), k),
+                None => rb.bearer_auth(k),
+            };
+        }
+        for (k, v) in &self.config.extra_headers {
+            rb = rb.header(k, v);
+        }
+        rb
     }
 
     pub fn new(config: OpenAiConfig) -> Result<Self, ApiError> {
@@ -1004,12 +1017,7 @@ impl Provider for OpenAiProvider {
     async fn list_models(&self) -> Option<Result<Vec<String>, ApiError>> {
         let url = format!("{}/models", self.config.base_url.trim_end_matches('/'));
         let mut rb = self.http.get(&url).timeout(Duration::from_secs(15));
-        if let Some(k) = &self.config.api_key {
-            rb = rb.bearer_auth(k);
-        }
-        for (k, v) in &self.config.extra_headers {
-            rb = rb.header(k, v);
-        }
+        rb = self.authed(rb);
         let r = async {
             let res = rb.send().await.map_err(crate::messages::network_error)?;
             if !res.status().is_success() {
@@ -1053,12 +1061,7 @@ impl Provider for OpenAiProvider {
         let mut refused_now: Vec<String> = Vec::new();
         let resp = loop {
             let mut rb = self.http.post(&url).json(&body);
-            if let Some(k) = &self.config.api_key {
-                rb = rb.bearer_auth(k);
-            }
-            for (k, v) in &self.config.extra_headers {
-                rb = rb.header(k, v);
-            }
+            rb = self.authed(rb);
             let res = tokio::select! {
                 _ = cancel.cancelled() => return Err(ApiError::Cancelled),
                 r = crate::messages::within(idle, async { rb.send().await.map_err(crate::messages::network_error) }) => r,
@@ -1741,6 +1744,7 @@ mod tests {
         let provider = OpenAiProvider::new(OpenAiConfig {
             base_url,
             api_key: None,
+            auth_header: None,
             extra_headers: vec![],
             max_retries: 0,
             timeout: Duration::from_secs(10),
@@ -1791,6 +1795,7 @@ mod tests {
         let provider = OpenAiProvider::new(OpenAiConfig {
             base_url,
             api_key: None,
+            auth_header: None,
             extra_headers: vec![],
             max_retries: 0,
             timeout: Duration::from_secs(10),
@@ -1848,6 +1853,7 @@ mod tests {
         let provider = OpenAiProvider::new(OpenAiConfig {
             base_url: "http://127.0.0.1:9/v1".into(),
             api_key: None,
+            auth_header: None,
             extra_headers: vec![],
             max_retries: 0,
             timeout: Duration::from_secs(1),

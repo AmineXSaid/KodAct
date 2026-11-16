@@ -321,8 +321,8 @@ The manual checks are in `docs/CHECKLIST.md`, "Terminal UI".
 
 | Feature | Status | Test | Notes |
 | --- | --- | --- | --- |
-| Inline viewport: output in the terminal's scrollback, a live region at the bottom | done | `tui::tests::commit_wraps_into_scrollback_above_the_viewport`, `tui::tests::commit_writes_long_output_in_chunks` | Not an alternate screen. The region grows at once and shrinks when idle or when a dialog closes |
-| Streaming answers, one-line markdown, tool calls and results | done | `tui::app::tests::streamed_text_moves_to_scrollback_line_by_line` | Headings, bold, inline code and fences. No syntax highlighting or tables yet |
+| Full screen by default; inline viewport (`KODACT_TUI=inline`): output in the terminal's scrollback, a live region at the bottom | done | `tui::tests::commit_wraps_into_scrollback_above_the_viewport`, `tui::tests::commit_writes_long_output_in_chunks` | Inline mode only: not an alternate screen. The region grows at once and shrinks when idle or when a dialog closes |
+| Streaming answers, one-line markdown, tool calls and results | done | `tui::app::tests::streamed_text_moves_to_scrollback_line_by_line` | Headings, bold, inline code, fences with syntax highlighting, and tables (`text.rs`) |
 | Spinner with activity and elapsed time | done | `tui::render::tests::busy_shows_the_answer_line_spinner_and_queue` | KodAct's own frames and wording |
 | Input box: multiline, word moves, kill commands, history, paste | done | `tui::editor::tests::*`, `tui::render::tests::narrow_terminals_wrap_the_input_and_keep_the_box` | Bracketed paste; Shift+Enter needs the keyboard protocol, else Alt+Enter, Ctrl+J or `\` Enter |
 | Prompt history across sessions | done | `tui::tests::history_is_per_directory_and_private` | `<state>/history.jsonl`, per directory, last 500, mode 0600 |

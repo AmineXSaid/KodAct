@@ -128,6 +128,12 @@ mod tests {
         // A secret inside a value whose key says nothing (custom headers).
         let v = json!({"env": {"KODACT_CUSTOM_HEADERS": "Authorization: Bearer abcdefgh12345\nX-Team: core"}});
         assert_eq!(redact(&v)["env"]["KODACT_CUSTOM_HEADERS"], "Authorization: Bearer <redacted>\nX-Team: core");
+        // Azure's and gateways' own key headers, as sent for chat completions (`openai.authHeader`).
+        let v = json!({"env": {"KODACT_CUSTOM_HEADERS": "api-key: abcdef123456\nX-API-Key: zyx987654\nX-Team: core"}});
+        assert_eq!(
+            redact(&v)["env"]["KODACT_CUSTOM_HEADERS"],
+            "api-key: <redacted>\nX-API-Key: <redacted>\nX-Team: core"
+        );
         // JSON or YAML text quoting the key name.
         assert_eq!(
             redact_text(r#"{"api_key": "abc123", "region": "eu"}"#),

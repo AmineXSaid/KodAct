@@ -252,7 +252,7 @@ check that the URL and key work.
 
 | Endpoint | Chosen by | Key | Sent as |
 | --- | --- | --- | --- |
-| OpenAI-compatible | `KODACT_OPENAI_BASE_URL`, else `openai.baseUrl` | `KODACT_OPENAI_API_KEY`, else `openai.apiKeyHelper` | `Authorization: Bearer` |
+| OpenAI-compatible | `KODACT_OPENAI_BASE_URL`, else `openai.baseUrl` | `KODACT_OPENAI_API_KEY`, else `openai.apiKeyHelper` | `Authorization: Bearer`; `openai.authHeader` (or `KODACT_OPENAI_AUTH_HEADER`) names another header to send the key in, as Azure OpenAI's `api-key` or a gateway's `x-api-key` |
 | Gemini API | `KODACT_GEMINI_BASE_URL`, else `gemini.baseUrl`, else `KODACT_GEMINI_API_KEY` alone (Google AI Studio, when no Messages key is set) | `KODACT_GEMINI_API_KEY`, else `gemini.apiKeyHelper` | `x-goog-api-key` for Google AI Studio, `Authorization: Bearer` for Vertex AI, both for other hosts; `gemini.authHeader` (or `KODACT_GEMINI_AUTH_HEADER`) chooses: `x-goog-api-key`, `bearer`, `both` |
 | Messages API | `KODACT_BASE_URL`, else `baseUrl`, else the default host | `KODACT_API_KEY` and/or `KODACT_AUTH_TOKEN`, else `apiKeyHelper` | `x-api-key` / `Authorization: Bearer` |
 
@@ -522,8 +522,8 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_API_KEY` | Messages API key |
 | `KODACT_AUTH_TOKEN` | Bearer token, for gateways |
 | `KODACT_BASE_URL` | API endpoint |
-| `KODACT_CUSTOM_HEADERS` | Extra headers, one `Name: value` per line |
-| `KODACT_OPENAI_BASE_URL`, `KODACT_OPENAI_API_KEY` | An OpenAI-compatible endpoint instead |
+| `KODACT_CUSTOM_HEADERS` | Extra headers, one `Name: value` per line, sent to every endpoint (Messages, OpenAI-compatible and Gemini) |
+| `KODACT_OPENAI_BASE_URL`, `KODACT_OPENAI_API_KEY`, `KODACT_OPENAI_AUTH_HEADER` | An OpenAI-compatible endpoint instead (the key in `Authorization: Bearer`, or in the header named) |
 | `KODACT_GEMINI_API_KEY`, `KODACT_GEMINI_BASE_URL`, `KODACT_GEMINI_AUTH_HEADER` | Google's Gemini API instead (Google AI Studio by default, Vertex AI or a gateway by URL) |
 | `KODACT_MODEL` | Default model |
 | `KODACT_TUI` | `inline` keeps the interactive UI in an inline viewport at the bottom of the terminal, writing output into its scrollback as it happens; by default the UI takes the whole window and prints the conversation into the scrollback when it closes |

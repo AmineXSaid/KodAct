@@ -205,3 +205,59 @@ async fn a_messages_stream_ends_at_its_stop_reason() {
     let (r, _) = run(&messages(&url), request(None)).await;
     assert!(matches!(&r, Ok(items) if items.iter().all(Result::is_ok)), "a stop reason ends it: {r:?}");
 }
+
+/// An endpoint that records the head of each request it gets, and answers a complete stream.
+async fn recording(answer: String) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let log = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let (log, answer) = (log.clone(), answer.clone());
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 1 << 16];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                log.lock().unwrap().push(String::from_utf8_lossy(&buf[..n]).to_lowercase());
+                let _ = sock.write_all(SSE.as_bytes()).await;
+                let _ = sock.write_all(answer.as_bytes()).await;
+            });
+        }
+    });
+    (format!("http://{addr}"), seen)
+}
+
+/// Azure OpenAI reads the key from `api-key`, and a company gateway may want headers of its
+/// own: chat completions and Gemini send them, as the Messages API always did.
+#[tokio::test]
+async fn the_key_header_and_custom_headers_reach_every_endpoint() {
+    let done = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n".to_string();
+    let (url, seen) = recording(done).await;
+    let p = crate::openai::OpenAiProvider::new(crate::openai::OpenAiConfig {
+        base_url: format!("{url}/v1"),
+        api_key: Some("azure-key-123".into()),
+        auth_header: Some("api-key".into()),
+        extra_headers: vec![("X-Team".into(), "core".into())],
+        max_retries: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(whole(&run(&p, request(None)).await.0));
+    let head = seen.lock().unwrap()[0].clone();
+    assert!(head.contains("api-key: azure-key-123") && head.contains("x-team: core"), "{head}");
+    assert!(!head.contains("authorization:"), "the key goes in one header only: {head}");
+
+    let gem = "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n".to_string();
+    let (url, seen) = recording(gem).await;
+    let p = crate::gemini::GeminiProvider::new(crate::gemini::GeminiConfig {
+        base_url: url,
+        api_key: Some("k".into()),
+        extra_headers: vec![("X-Team".into(), "core".into())],
+        max_retries: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    let _ = run(&p, request(None)).await;
+    let head = seen.lock().unwrap()[0].clone();
+    assert!(head.contains("x-team: core"), "{head}");
+}

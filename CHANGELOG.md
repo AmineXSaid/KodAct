@@ -2,6 +2,19 @@
 
 ## 0.1.0 (unreleased)
 
+### Azure OpenAI and gateways that want their own headers
+- `KODACT_CUSTOM_HEADERS` reached only the Messages API: an OpenAI-compatible
+  or Gemini endpoint behind a company gateway that wants a header of its own
+  got none. Every endpoint now gets them.
+- An OpenAI-compatible endpoint got its key only as `Authorization: Bearer`.
+  `openai.authHeader` (or `KODACT_OPENAI_AUTH_HEADER`) names another header to
+  send it in: Azure OpenAI's `api-key`, a gateway's `x-api-key`. Logs already
+  mask such headers.
+- The `notes-across-compaction` eval never offered the Notes tool (off by
+  default), so it measured compaction alone. Its project now turns Notes on.
+- docs/TUI.md and docs/PARITY.md said the UI was inline only, with no tables or
+  syntax highlighting: it is full screen by default and has both.
+
 ### Provider fixes found in another harness's field reports
 Checked one by one against KodAct, from AlphaCode's provider code (MIT): only
 the holes KodAct had too.

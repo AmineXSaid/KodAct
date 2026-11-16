@@ -325,6 +325,12 @@ pub(crate) fn nudges(settings: &LoadedSettings, warnings: &mut Vec<String>) -> k
 
 /// Whether an opt-in tool is offered: its variable (for A/B runs), else its setting; off by
 /// default.
+/// `KODACT_CUSTOM_HEADERS` ("Name: value" per line), sent with every request whatever the API
+/// (the Messages API reads it in `MessagesConfig::from_env`).
+fn custom_headers() -> Vec<(String, String)> {
+    env_nonempty("KODACT_CUSTOM_HEADERS").map(|h| kodact_api::messages::parse_header_lines(&h)).unwrap_or_default()
+}
+
 pub(crate) fn memory_tool(settings: &LoadedSettings, var: &str, pointer: &str) -> bool {
     match env_nonempty(var) {
         Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
@@ -487,9 +493,27 @@ fn make_provider_with_shell(
     }
     match r.backend() {
         kodact_api::auth::Backend::OpenAi => {
+            // Azure OpenAI and some gateways read the key from a header of their own.
+            let auth_header = match env_nonempty("KODACT_OPENAI_AUTH_HEADER")
+                .or_else(|| settings.get("/openai/authHeader").and_then(|v| v.as_str()).map(str::to_string))
+            {
+                None => None,
+                Some(h) if h.trim().eq_ignore_ascii_case("bearer") => None,
+                Some(h) => {
+                    let name = h.trim().to_string();
+                    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                        return Err(CoreError::Auth(format!(
+                            "openai.authHeader is \"{h}\": it takes bearer, or the name of the header the key goes in (api-key)"
+                        )));
+                    }
+                    Some(name)
+                }
+            };
             let mut cfg = OpenAiConfig {
                 base_url: r.url.clone().unwrap_or_default(),
                 api_key: key,
+                auth_header,
+                extra_headers: custom_headers(),
                 url_from: r.url_from,
                 key_helper: helper_name,
                 ..Default::default()
@@ -515,6 +539,7 @@ fn make_provider_with_shell(
                 base_url: r.url.clone().unwrap_or_else(|| endpoint::GEMINI_DEFAULT_URL.to_string()),
                 api_key: key,
                 auth_header,
+                extra_headers: custom_headers(),
                 url_from: r.url_from,
                 key_helper: helper_name,
                 ..Default::default()
