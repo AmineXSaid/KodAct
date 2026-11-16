@@ -18,6 +18,8 @@ pub mod openai;
 pub mod pdf_text;
 pub mod repair;
 pub mod sse;
+#[cfg(test)]
+mod wire_tests;
 
 use std::pin::Pin;
 use std::time::Duration;

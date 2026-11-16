@@ -163,17 +163,35 @@ impl OpenAiProvider {
 
 /// Every object schema given `properties`, `{}` where it has none: LM Studio, among others,
 /// refuses an object schema without it, and an MCP tool that takes no arguments often sends
-/// just `{"type": "object"}`.
+/// just `{"type": "object"}`. Only schema positions are walked (properties, items, combinators,
+/// definitions), never values such as `default`, `const` or `examples`.
 fn with_properties(v: &mut Value) {
-    match v {
-        Value::Object(o) => {
-            if o.get("type").and_then(Value::as_str) == Some("object") && !o.contains_key("properties") {
-                o.insert("properties".into(), json!({}));
-            }
-            o.values_mut().for_each(with_properties);
+    let Value::Object(o) = v else { return };
+    let object = match o.get("type") {
+        Some(Value::String(t)) => t == "object",
+        Some(Value::Array(ts)) => ts.iter().any(|t| t == "object"),
+        _ => false,
+    };
+    if object && !o.contains_key("properties") {
+        o.insert("properties".into(), json!({}));
+    }
+    for key in ["properties", "patternProperties", "$defs", "definitions"] {
+        if let Some(Value::Object(m)) = o.get_mut(key) {
+            m.values_mut().for_each(with_properties);
         }
-        Value::Array(a) => a.iter_mut().for_each(with_properties),
-        _ => {}
+    }
+    for key in ["items", "additionalProperties", "not", "if", "then", "else", "contains"] {
+        if let Some(s) = o.get_mut(key) {
+            match s {
+                Value::Array(a) => a.iter_mut().for_each(with_properties),
+                s => with_properties(s),
+            }
+        }
+    }
+    for key in ["anyOf", "oneOf", "allOf", "prefixItems"] {
+        if let Some(Value::Array(a)) = o.get_mut(key) {
+            a.iter_mut().for_each(with_properties);
+        }
     }
 }
 
@@ -406,9 +424,11 @@ fn push_message(out: &mut Vec<Value>, m: &Message, w: &Writing) {
             if calls.is_empty() && text.is_empty() {
                 msg["content"] = json!("");
             }
-            // Carried reasoning: DeepSeek's thinking mode refuses a tool-call message without
-            // `reasoning_content` once any is sent back. A step that reasoned nothing gets a blank.
-            if w.carry && !calls.is_empty() && msg.get("reasoning_content").is_none() {
+            // Carried reasoning: DeepSeek's thinking mode asks for `reasoning_content` on every
+            // earlier assistant message once tools are used, "even for turns where the model did
+            // not perform a tool call". A reply whose reasoning is gone (none, or left out after a
+            // model switch) gets a blank.
+            if w.carry && msg.get("reasoning_content").is_none() {
                 msg["reasoning_content"] = json!(" ");
             }
             if !calls.is_empty() {
@@ -1025,6 +1045,7 @@ impl Provider for OpenAiProvider {
             }
         }
         let url = format!("{}/chat/completions", self.config.base_url.trim_end_matches('/'));
+        let idle = crate::messages::idle_limit(self.config.timeout, &request);
         let mut attempt = 0;
         // Another try with the body each refusal asks for (see `adapt_to_refusal`),
         // a few times at most: each one takes a key out or swaps a length name.
@@ -1040,7 +1061,7 @@ impl Provider for OpenAiProvider {
             }
             let res = tokio::select! {
                 _ = cancel.cancelled() => return Err(ApiError::Cancelled),
-                r = rb.send() => r.map_err(crate::messages::network_error),
+                r = crate::messages::within(idle, async { rb.send().await.map_err(crate::messages::network_error) }) => r,
             };
             let res = match res {
                 Ok(r) if r.status().is_success() => Ok(r),
@@ -1119,11 +1140,13 @@ impl Provider for OpenAiProvider {
             .and_then(|v| v.to_str().ok())
             .is_some_and(|ct| ct.contains("application/json"));
         if whole {
-            let body: Value = resp.json().await.map_err(|e| ApiError::Parse(format!("a whole completion: {e}")))?;
+            let body: Value = crate::messages::within(idle, async {
+                resp.json().await.map_err(|e| ApiError::Parse(format!("a whole completion: {e}")))
+            })
+            .await?;
             let events = tr.push_completion(&body)?;
             return Ok(Box::pin(futures::stream::iter(events.into_iter().map(Ok))));
         }
-        let idle = crate::messages::idle_limit(self.config.timeout, &request);
         Ok(spawn_sse_pump(resp, cancel, idle, move |ev| match ev {
             Some(ev) => match tr.push(&ev.data) {
                 Ok(events) => events.into_iter().map(Ok).collect(),
@@ -2055,6 +2078,19 @@ mod gemini_tests {
         let body = to_chat_request(&request("local-model", vec![Message::user_text("hi")], vec![t, bare], None));
         assert_eq!(body["tools"][0]["function"]["parameters"]["properties"]["opts"]["properties"], json!({}));
         assert_eq!(body["tools"][1]["function"]["parameters"], json!({"type": "object", "properties": {}}));
+        // Values are left alone, and a nullable object counts as an object.
+        let t = tool(
+            "Cfg",
+            json!({"type": "object", "properties": {
+                "opts": {"type": ["object", "null"], "default": {"type": "object"}},
+                "list": {"type": "array", "items": {"type": "object"}}
+            }}),
+        );
+        let body = to_chat_request(&request("local-model", vec![Message::user_text("hi")], vec![t], None));
+        let p = &body["tools"][0]["function"]["parameters"]["properties"];
+        assert_eq!(p["opts"]["properties"], json!({}));
+        assert_eq!(p["opts"]["default"], json!({"type": "object"}), "a default value isn't a schema");
+        assert_eq!(p["list"]["items"]["properties"], json!({}));
     }
 
     /// What DeepSeek's API validates: an assistant message carries content or tool calls (a reply
@@ -2086,7 +2122,25 @@ mod gemini_tests {
             assert_eq!(sent[1].get("reasoning_content").is_some(), carry);
             assert_eq!(sent[3]["content"], Value::Null, "a call's message keeps null content");
             assert_eq!(sent[3].get("reasoning_content"), carry.then(|| json!(" ")).as_ref(), "carry {carry}");
+            // The plain reply asking "act now" isn't an assistant message; the user's is untouched.
+            assert!(sent[2].get("reasoning_content").is_none());
         }
+        // A text reply whose reasoning is gone (none given, or left out after a model switch):
+        // with reasoning carried, a blank too, as DeepSeek asks for every earlier turn.
+        let req = MessagesRequest {
+            carry_reasoning: true,
+            ..request(
+                "deep-thinking",
+                vec![
+                    Message::user_text("hi"),
+                    Message::assistant(vec![ContentBlock::text("hello")]),
+                    Message::user_text("go"),
+                ],
+                vec![],
+                None,
+            )
+        };
+        assert_eq!(to_chat_request(&req)["messages"][1]["reasoning_content"], " ");
     }
 
     /// Carried reasoning stays in the tool loop: KodAct's reminders that come with tool results go

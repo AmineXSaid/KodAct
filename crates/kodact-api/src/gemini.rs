@@ -814,13 +814,14 @@ impl Conn {
     ) -> Result<reqwest::Response, ApiError> {
         let url = format!("{}:streamGenerateContent?alt=sse", self.config.model_url(&req.model));
         let mut adapt = self.adapted.lock().ok().and_then(|m| m.get(&req.model).copied()).unwrap_or_default();
+        let idle = crate::messages::idle_limit(self.config.timeout, req);
         let (mut attempt, mut adaptations) = (0, 0);
         loop {
             let body = to_gemini_request(req, names, &adapt, note);
             let rb = self.authed(self.http.post(&url).json(&body));
             let res = tokio::select! {
                 _ = cancel.cancelled() => return Err(ApiError::Cancelled),
-                r = rb.send() => r.map_err(crate::messages::network_error),
+                r = crate::messages::within(idle, async { rb.send().await.map_err(crate::messages::network_error) }) => r,
             };
             let err = match res {
                 Ok(r) if r.status().is_success() => return Ok(r),

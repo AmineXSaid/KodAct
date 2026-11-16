@@ -226,26 +226,61 @@ fn header_value(v: &str) -> Result<HeaderValue, ApiError> {
     HeaderValue::from_str(v).map_err(|e| ApiError::Parse(format!("invalid header value: {e}")))
 }
 
-/// Turn a non-2xx response into an [`ApiError::Http`].
-/// Take out what other providers attached to blocks (`provider`): this wire's
-/// API rejects fields it doesn't know.
 /// What the Messages API refuses that an MCP server's tools or another endpoint's history can
 /// bring, made to fit:
 /// - a tool schema with `anyOf`, `oneOf` or `allOf` at its top ("input_schema does not support
-///   oneOf, allOf, or anyOf at the top level"): their properties are merged into one object, those
-///   of `anyOf`/`oneOf` branches optional, since only one branch need hold; the tool still checks
-///   its own input;
+///   oneOf, allOf, or anyOf at the top level"): the branches' properties are merged into one
+///   object, those of `anyOf`/`oneOf` branches optional, since only one branch need hold; a
+///   property the branches define differently keeps every definition (a nested `anyOf`, which the
+///   API takes), so a discriminated union still offers each of its tags. The tool still checks its
+///   own input;
 /// - a tool call id outside `^[a-zA-Z0-9_-]+$` (an id another endpoint gave, `functions.Read:0`):
-///   the other characters become `_`, in the call and its result alike.
+///   the other characters become `_`, in the call and its result alike, made unique if two ids
+///   would meet.
 pub(crate) fn fit_for_messages_api(body: &mut Value) {
     if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
         for schema in tools.iter_mut().filter_map(|t| t.get_mut("input_schema")) {
             flatten_top_combinators(schema);
         }
     }
-    let safe = |id: &str| -> String {
-        id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect()
-    };
+    let ok = |id: &str| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    let mut ids: Vec<String> = vec![];
+    for m in body.get("messages").and_then(Value::as_array).into_iter().flatten() {
+        for b in m.get("content").and_then(Value::as_array).into_iter().flatten() {
+            for key in ["id", "tool_use_id"] {
+                let tool = matches!(
+                    (b.get("type").and_then(Value::as_str), key),
+                    (Some("tool_use"), "id") | (Some("tool_result"), "tool_use_id")
+                );
+                if let (true, Some(id)) = (tool, b.get(key).and_then(Value::as_str)) {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+    }
+    if ids.iter().all(|id| ok(id)) {
+        return;
+    }
+    // Every id the request holds keeps its own: a valid one as it is, another rewritten to one no
+    // other id has.
+    let mut taken: std::collections::HashSet<String> = ids.iter().filter(|id| ok(id)).cloned().collect();
+    let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for id in ids.iter().filter(|id| !ok(id)) {
+        if map.contains_key(id) {
+            continue;
+        }
+        let base: String =
+            id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
+        let base = if base.is_empty() { "toolu".to_string() } else { base };
+        let mut new = base.clone();
+        let mut n = 2;
+        while taken.contains(&new) {
+            new = format!("{base}_{n}");
+            n += 1;
+        }
+        taken.insert(new.clone());
+        map.insert(id.clone(), new);
+    }
     for m in body.get_mut("messages").and_then(Value::as_array_mut).into_iter().flatten() {
         for b in m.get_mut("content").and_then(Value::as_array_mut).into_iter().flatten() {
             let key = match b.get("type").and_then(Value::as_str) {
@@ -253,37 +288,62 @@ pub(crate) fn fit_for_messages_api(body: &mut Value) {
                 Some("tool_result") => "tool_use_id",
                 _ => continue,
             };
-            if let Some(id) = b.get(key).and_then(Value::as_str).map(safe) {
-                b[key] = Value::String(id);
+            if let Some(new) = b.get(key).and_then(Value::as_str).and_then(|id| map.get(id)).cloned() {
+                b[key] = Value::String(new);
             }
         }
     }
 }
 
-fn flatten_top_combinators(schema: &mut Value) {
-    let Some(obj) = schema.as_object_mut() else { return };
-    let mut props = obj.get("properties").and_then(Value::as_object).cloned().unwrap_or_default();
-    let mut required: Vec<Value> = obj.get("required").and_then(Value::as_array).cloned().unwrap_or_default();
-    let mut found = false;
-    for key in ["anyOf", "oneOf", "allOf"] {
-        let Some(Value::Array(branches)) = obj.remove(key) else { continue };
-        found = true;
-        for b in &branches {
-            for (k, v) in b.get("properties").and_then(Value::as_object).into_iter().flatten() {
-                props.entry(k.clone()).or_insert_with(|| v.clone());
-            }
-            if key == "allOf" {
-                for r in b.get("required").and_then(Value::as_array).into_iter().flatten() {
-                    if !required.contains(r) {
-                        required.push(r.clone());
-                    }
-                }
-            }
+/// The properties a schema offers at its top, its own and its combinators' (nested ones
+/// included), each name with every distinct definition given for it.
+fn collect_properties(schema: &Value, into: &mut Vec<(String, Vec<Value>)>) {
+    for (k, v) in schema.get("properties").and_then(Value::as_object).into_iter().flatten() {
+        match into.iter_mut().find(|(name, _)| name == k) {
+            Some((_, defs)) if !defs.contains(v) => defs.push(v.clone()),
+            Some(_) => {}
+            None => into.push((k.clone(), vec![v.clone()])),
         }
     }
-    if !found {
+    for key in ["anyOf", "oneOf", "allOf"] {
+        for b in schema.get(key).and_then(Value::as_array).into_iter().flatten() {
+            collect_properties(b, into);
+        }
+    }
+}
+
+/// The fields every branch requires, through `allOf` only: one branch of `anyOf`/`oneOf` need
+/// not hold.
+fn collect_required(schema: &Value, into: &mut Vec<Value>) {
+    for r in schema.get("required").and_then(Value::as_array).into_iter().flatten() {
+        if !into.contains(r) {
+            into.push(r.clone());
+        }
+    }
+    for b in schema.get("allOf").and_then(Value::as_array).into_iter().flatten() {
+        collect_required(b, into);
+    }
+}
+
+fn flatten_top_combinators(schema: &mut Value) {
+    if !["anyOf", "oneOf", "allOf"].iter().any(|k| schema.get(k).is_some()) {
         return;
     }
+    let mut props = vec![];
+    collect_properties(schema, &mut props);
+    let mut required = vec![];
+    collect_required(schema, &mut required);
+    let Some(obj) = schema.as_object_mut() else { return };
+    for key in ["anyOf", "oneOf", "allOf"] {
+        obj.remove(key);
+    }
+    let props: serde_json::Map<String, Value> = props
+        .into_iter()
+        .map(|(k, mut defs)| {
+            let v = if defs.len() == 1 { defs.remove(0) } else { serde_json::json!({ "anyOf": defs }) };
+            (k, v)
+        })
+        .collect();
     obj.insert("type".into(), Value::String("object".into()));
     obj.insert("properties".into(), Value::Object(props));
     if required.is_empty() {
@@ -293,6 +353,9 @@ fn flatten_top_combinators(schema: &mut Value) {
     }
 }
 
+/// Turn a non-2xx response into an [`ApiError::Http`].
+/// Take out what other providers attached to blocks (`provider`): this wire's
+/// API rejects fields it doesn't know.
 pub(crate) fn strip_provider_data(body: &mut Value) {
     for m in body.get_mut("messages").and_then(Value::as_array_mut).into_iter().flatten() {
         for b in m.get_mut("content").and_then(Value::as_array_mut).into_iter().flatten() {
@@ -442,9 +505,23 @@ pub(crate) fn idle_limit(base: Duration, req: &MessagesRequest) -> Duration {
 }
 
 /// The client's own read timeout: the longest silence any request may be given
-/// ([`idle_limit`]), so the per-request limit is the one that applies.
+/// ([`idle_limit`]), so it never cuts first. Each request bounds its own waits with its idle
+/// limit ([`within`] for the answer's start, the pump for its body); a request with no level
+/// asked waits as long as before.
 pub(crate) fn client_read_timeout(base: Duration) -> Duration {
     base * 4
+}
+
+/// `fut`, failed as a network error when it takes longer than `idle`: the wait for a reply's
+/// start (its headers, or a whole JSON body), bounded by the request's own idle limit.
+pub(crate) async fn within<T>(
+    idle: Duration,
+    fut: impl std::future::Future<Output = Result<T, ApiError>>,
+) -> Result<T, ApiError> {
+    match tokio::time::timeout(idle, fut).await {
+        Ok(r) => r,
+        Err(_) => Err(ApiError::network(format!("the endpoint sent nothing for {}s", idle.as_secs()))),
+    }
 }
 
 #[async_trait::async_trait]
@@ -490,11 +567,12 @@ impl Provider for MessagesProvider {
         let mut body = serde_json::to_value(&request).map_err(|e| ApiError::Parse(e.to_string()))?;
         strip_provider_data(&mut body);
         fit_for_messages_api(&mut body);
+        let idle = idle_limit(self.config.timeout, &request);
         let mut attempt = 0;
         let resp = loop {
             let res = tokio::select! {
                 _ = cancel.cancelled() => return Err(ApiError::Cancelled),
-                r = self.send_once(&body, &request.betas) => r,
+                r = within(idle, self.send_once(&body, &request.betas)) => r,
             };
             match res {
                 Ok(r) => break r,
@@ -516,16 +594,24 @@ impl Provider for MessagesProvider {
                 Err(e) => return Err(e.with_origin(origin)),
             }
         };
-        // A body that ends before `message_stop` was cut (a proxy or the network dropped it):
-        // said so, so the engine sends the request again instead of taking half a reply.
-        let mut stopped = false;
-        let idle = idle_limit(self.config.timeout, &request);
+        // A body that ends before the reply did (no stop reason, no `message_stop`) was cut (a
+        // proxy or the network dropped it): said so, so the engine sends the request again
+        // instead of taking half a reply. A stop reason without `message_stop` is a whole reply,
+        // as a finish reason without `[DONE]` is on chat completions.
+        let mut ended = false;
         Ok(spawn_sse_pump(resp, cancel, idle, move |ev| match ev {
-            None if stopped => vec![],
-            None => vec![Err(ApiError::Parse("stream ended before message_stop".into()))],
+            None if ended => vec![],
+            None => vec![Err(ApiError::Parse("stream ended before the reply's stop reason".into()))],
             Some(ev) => match parse_event(&ev.data) {
                 Ok(Some(e)) => {
-                    stopped |= matches!(e, StreamEvent::MessageStop);
+                    ended |= matches!(
+                        &e,
+                        StreamEvent::MessageStop
+                            | StreamEvent::MessageDelta {
+                                delta: kodact_types::MessageDeltaBody { stop_reason: Some(_), .. },
+                                ..
+                            }
+                    );
                     vec![Ok(e)]
                 }
                 Ok(None) => vec![],
@@ -537,6 +623,7 @@ impl Provider for MessagesProvider {
     async fn count_tokens(&self, request: &MessagesRequest) -> Option<u64> {
         let mut body = serde_json::to_value(request).ok()?;
         strip_provider_data(&mut body);
+        fit_for_messages_api(&mut body);
         let obj = body.as_object_mut()?;
         for k in ["max_tokens", "stream", "metadata", "temperature"] {
             obj.remove(k);
@@ -544,6 +631,7 @@ impl Provider for MessagesProvider {
         let resp = self
             .http
             .post(self.endpoint("/v1/messages/count_tokens"))
+            .timeout(self.config.timeout)
             .headers(self.headers(&request.betas).ok()?)
             .json(&body)
             .send()
@@ -674,6 +762,56 @@ mod tests {
         assert_eq!(body["tools"][1], plain, "a schema that fits is left as it is");
         assert_eq!(body["messages"][0]["content"][0]["id"], "functions_Read_0");
         assert_eq!(body["messages"][1]["content"][0]["tool_use_id"], "functions_Read_0");
+        // A discriminated union (zod, Pydantic): every tag stays offered, and a nested
+        // combinator's properties are kept.
+        let mut body = json!({"tools": [{"name": "act", "input_schema": {"oneOf": [
+            {"type": "object", "properties": {"action": {"const": "get"}, "id": {"type": "string"}}, "required": ["action", "id"]},
+            {"type": "object", "properties": {"action": {"const": "list"}}, "required": ["action"]},
+            {"allOf": [{"anyOf": [{"properties": {"page": {"type": "integer"}}}]}]}
+        ]}}]});
+        fit_for_messages_api(&mut body);
+        let s = &body["tools"][0]["input_schema"];
+        assert_eq!(s["properties"]["action"], json!({"anyOf": [{"const": "get"}, {"const": "list"}]}), "{s}");
+        assert!(s["properties"].get("page").is_some() && s["properties"].get("id").is_some(), "{s}");
+        assert!(s.get("required").is_none(), "no field is required by every branch: {s}");
+
+        // Ids that would meet get their own, an empty one gets a valid one, and a call keeps
+        // its result.
+        let mut body = json!({"messages": [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "a.b", "name": "R", "input": {}},
+                {"type": "tool_use", "id": "a:b", "name": "R", "input": {}},
+                {"type": "tool_use", "id": "a_b", "name": "R", "input": {}},
+                {"type": "tool_use", "id": "", "name": "R", "input": {}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "a.b", "content": "1"},
+                {"type": "tool_result", "tool_use_id": "a:b", "content": "2"},
+                {"type": "tool_result", "tool_use_id": "a_b", "content": "3"},
+                {"type": "tool_result", "tool_use_id": "", "content": "4"}
+            ]}
+        ]});
+        fit_for_messages_api(&mut body);
+        let calls: Vec<&str> =
+            body["messages"][0]["content"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
+        let results: Vec<&str> = body["messages"][1]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["tool_use_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(calls, results);
+        assert_eq!(calls[2], "a_b", "a valid id stays as it is");
+        let mut unique = calls.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 4, "{calls:?}");
+        assert!(
+            calls
+                .iter()
+                .all(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')),
+            "{calls:?}"
+        );
     }
 
     #[test]
