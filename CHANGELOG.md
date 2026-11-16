@@ -16,7 +16,7 @@ the holes KodAct had too.
   high level that silence ran past the fixed 5-minute read timeout, and the
   request failed and was sent again from the start. The limit now grows with
   the level asked for: twice at `high`, three times at `xhigh`, four times at
-  `max`.
+  `max`, on chat completions, the Messages API and Gemini alike.
 - **MCP tool schemas the endpoint refused.** An object schema without
   `properties` (an MCP tool that takes no arguments) is sent with
   `properties: {}`, which LM Studio and others require. On the Messages API, a

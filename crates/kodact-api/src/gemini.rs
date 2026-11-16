@@ -861,7 +861,7 @@ impl GeminiProvider {
     pub fn new(config: GeminiConfig) -> Result<Self, ApiError> {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(30))
-            .read_timeout(config.timeout)
+            .read_timeout(crate::messages::client_read_timeout(config.timeout))
             .build()
             .map_err(|e| ApiError::network(e.to_string()))?;
         Ok(GeminiProvider { conn: Conn { config, http, adapted: Default::default() } })
@@ -875,6 +875,7 @@ async fn pump(
     tr: &mut GeminiTranslator,
     tx: &mpsc::Sender<Result<StreamEvent, ApiError>>,
     cancel: &CancellationToken,
+    idle: Duration,
 ) -> Result<(), Option<ApiError>> {
     let mut body = resp.bytes_stream();
     let mut decoder = SseDecoder::new();
@@ -884,7 +885,14 @@ async fn pump(
                 let _ = tx.send(Err(ApiError::Cancelled)).await;
                 return Err(None);
             }
-            c = body.next() => c,
+            // Silent past the request's idle limit (`messages::idle_limit`): dropped.
+            c = tokio::time::timeout(idle, body.next()) => match c {
+                Ok(c) => c,
+                Err(_) => {
+                    let message = format!("the endpoint sent nothing for {}s", idle.as_secs());
+                    return Err(Some(ApiError::network(message)));
+                }
+            },
         };
         let (events, done) = match chunk {
             Some(Ok(bytes)) => (decoder.push(&bytes), false),
@@ -978,13 +986,14 @@ impl Provider for GeminiProvider {
         let names = tool_names(&request);
         let first = self.conn.open(&request, &names, None, &cancel).await?;
         let conn = self.conn.clone();
+        let idle = crate::messages::idle_limit(self.conn.config.timeout, &request);
         let (tx, rx) = mpsc::channel::<Result<StreamEvent, ApiError>>(64);
         tokio::spawn(async move {
             let mut tr = GeminiTranslator::new(&request.model).with_tool_names(names.clone());
             let mut resp = first;
             let mut retried = false;
             loop {
-                match pump(resp, &mut tr, &tx, &cancel).await {
+                match pump(resp, &mut tr, &tx, &cancel, idle).await {
                     Ok(()) => {}
                     Err(Some(e)) => {
                         let _ = tx.send(Err(e)).await;
