@@ -22,6 +22,13 @@
 //!   doesn't exist yet, or, of several, of the one whose type the sentence names ("c program":
 //!   `model.c`; "the Python script": `run.py`).
 //!
+//! A file is one to make only where the request asks for it. Named in a clause where the person
+//! says what they will do ("I will run it /app/a.out", "I will test it by calling gcc -o image
+//! image.c && ./image"), with no "you" or "your" in between and no "write it" after, it is
+//! theirs to build or run. Named
+//! in a sentence that only says what was ("the file was named launchcode.txt"), it is
+//! described. Either way it is named but not asked for, unless another sentence asks for it.
+//!
 //! A sentence that says not to do something, or sets something aside ("don't run `make
 //! deploy`", "never touch secrets.env", "avoid `git push`", "use X instead of Y", "without
 //! `sudo`"), names nothing: what it names is not asked for. A request that isn't in English
@@ -42,6 +49,10 @@ pub(crate) struct Named {
     /// Files named as alternatives, `a.txt or b.toml` (`either … or …`): one of them is asked
     /// for, not each.
     pub either: Vec<(String, String)>,
+    /// Files named only as what the person will build or run themselves ("I will run it
+    /// /app/a.out"), or in a sentence that only says what was ("the file was named
+    /// launchcode.txt"): named, not asked to be made.
+    pub not_asked: Vec<String>,
 }
 
 /// Words that turn a sentence into a prohibition, or set aside what it names: whole words,
@@ -64,6 +75,40 @@ const PROHIBITIONS: [&str; 17] = [
     "instead of",
     "except",
     "skip",
+];
+/// Words that ask for work: a sentence in the past tense with one of them still asks ("the
+/// report was wrong, so write report.md again").
+const ASK_WORDS: [&str; 30] = [
+    "write",
+    "create",
+    "make",
+    "save",
+    "put",
+    "store",
+    "output",
+    "produce",
+    "generate",
+    "build",
+    "compile",
+    "should",
+    "must",
+    "need",
+    "needs",
+    "please",
+    "ensure",
+    "call",
+    "add",
+    "implement",
+    "fix",
+    "update",
+    "modify",
+    "edit",
+    "change",
+    "keep",
+    "return",
+    "print",
+    "copy",
+    "move",
 ];
 /// Words just before a command that ask to run it ("run `make test`", "then execute `./x.sh`").
 const RUN_WORDS: [&str; 8] = ["run", "rerun", "re-run", "execute", "invoke", "launch", "start", "call"];
@@ -125,6 +170,8 @@ impl Named {
         }
         // Limits stated without a file: (the file types their sentence names, bytes, words).
         let mut unattached: Vec<(Vec<&'static str>, u64, String)> = vec![];
+        // Files some sentence asks for, and those named only where none does.
+        let (mut asked, mut not_asked): (Vec<String>, Vec<String>) = (vec![], vec![]);
         for sentence in sentences(text) {
             let lower = sentence.to_lowercase().replace('\u{2019}', "'");
             if PROHIBITIONS.iter().any(|w| has_word(&lower, w)) {
@@ -132,6 +179,8 @@ impl Named {
             }
             // In the order the sentence names them: backticked spans and plain words alike.
             let mut files_here = vec![];
+            // Those named where the person says what they will do with them.
+            let mut theirs_here: Vec<String> = vec![];
             // The sentence's words so far, lower case: what comes just before a name.
             let mut before: Vec<String> = vec![];
             let tokens = tokens(&sentence);
@@ -147,6 +196,9 @@ impl Named {
                     } else if is_file_word(&span) && file_evidence(&span, project, &before, !files_here.is_empty()) {
                         note_either(&mut n.either, &files_here, &before, &span);
                         push(&mut files_here, span.clone());
+                        if person_says(&before) {
+                            push(&mut theirs_here, span.clone());
+                        }
                     }
                     before.push(span.to_lowercase());
                     continue;
@@ -156,6 +208,9 @@ impl Named {
                     if is_file_word(w) && file_evidence(w, project, &before, !files_here.is_empty()) {
                         note_either(&mut n.either, &files_here, &before, w);
                         push(&mut files_here, w.to_string());
+                        if person_says(&before) {
+                            push(&mut theirs_here, w.to_string());
+                        }
                     }
                     before.push(w.to_lowercase());
                 }
@@ -166,15 +221,30 @@ impl Named {
                 _ => {}
             }
             let removing = asks_to_remove(&lower);
+            let described = describes_past(&lower);
+            // "I'm going to open notes.md, so write it": the sentence asks for what it named.
+            let asks_for_it = ASK_WORDS.iter().any(|w| has_word(&lower, &format!("{w} it")));
             for f in files_here {
                 if removing {
                     push(&mut n.removed, f);
                 } else {
+                    if described || (theirs_here.contains(&f) && !asks_for_it) {
+                        push(&mut not_asked, f.clone());
+                    } else {
+                        push(&mut asked, f.clone());
+                    }
                     push(&mut n.files, f);
                 }
             }
         }
-        n.merge_aliases();
+        let alias = n.merge_aliases();
+        let to = |f: &String| alias.iter().find(|(a, _)| a == f).map_or_else(|| f.clone(), |(_, p)| p.clone());
+        let asked: Vec<String> = asked.iter().map(to).collect();
+        for f in not_asked.iter().map(to) {
+            if !asked.contains(&f) {
+                push(&mut n.not_asked, f);
+            }
+        }
         // A limit without a file: the one new file the request asks for, or the one of its
         // type. Files there already are what the request reads, not what it asks to be made.
         if unattached.is_empty() {
@@ -183,7 +253,7 @@ impl Named {
         let located = locate(&n.files, project);
         let new: Vec<&String> = located
             .iter()
-            .filter(|(f, at)| !n.removed.contains(f) && !at.iter().any(|p| p.exists()))
+            .filter(|(f, at)| !n.removed.contains(f) && !n.not_asked.contains(f) && !at.iter().any(|p| p.exists()))
             .map(|(f, _)| f)
             .collect();
         for (types, bytes, said) in unattached {
@@ -208,7 +278,9 @@ impl Named {
     /// `/app/repo/algo.py`) is that file: it is dropped, and a limit or an alternative given for
     /// it is the path's. Read as a file of its own at the project's root, it was reported missing
     /// (a run of 2026-11-15) once the model had made it where the request said.
-    fn merge_aliases(&mut self) {
+    /// A name alone that ends a path the request also names is that path: merged into it.
+    /// Returns the pairs (name, path), so lists kept beside these follow them.
+    fn merge_aliases(&mut self) -> Vec<(String, String)> {
         let alias: Vec<(String, String)> = self
             .files
             .iter()
@@ -219,7 +291,7 @@ impl Named {
             })
             .collect();
         if alias.is_empty() {
-            return;
+            return alias;
         }
         let to = |f: &String| alias.iter().find(|(a, _)| a == f).map_or_else(|| f.clone(), |(_, p)| p.clone());
         self.files.retain(|f| !alias.iter().any(|(a, _)| a == f));
@@ -229,6 +301,7 @@ impl Named {
         for (a, b) in &mut self.either {
             (*a, *b) = (to(a), to(b));
         }
+        alias
     }
 
     /// Named commands no command run this turn contains.
@@ -348,7 +421,7 @@ impl Watched {
         }
         let mut deliverables = vec![];
         for (f, _, st) in &files {
-            if st.is_none() && !n.removed.contains(f) {
+            if st.is_none() && !n.removed.contains(f) && !n.not_asked.contains(f) {
                 push(&mut deliverables, f.clone());
             }
         }
@@ -514,6 +587,39 @@ fn asks_to_remove(lower: &str) -> bool {
                 || *w == "clean-up"
                 || (w.starts_with("clean") && words.get(i + 1) == Some(&"up"))
         })
+}
+
+/// The person says what they will do, in the clause the next word belongs to: "I will",
+/// "I'll", "we will", "I'm going to", and no "you" or "your" since. What follows is theirs to
+/// build or run ("I will run it /app/a.out"), not asked of the model ("I will need you to write
+/// report.md", "I'll run your script solve.py" ask for it).
+fn person_says(before: &[String]) -> bool {
+    let word = |i: usize| before.get(i).map(|w| w.replace('\u{2019}', "'")).unwrap_or_default();
+    for i in (0..before.len()).rev() {
+        let w = word(i);
+        if matches!(w.as_str(), "you" | "your" | "yours" | "you'll" | "you're" | "you've" | "you'd") {
+            return false;
+        }
+        let prev = if i > 0 { word(i - 1) } else { String::new() };
+        let prev2 = if i > 1 { word(i - 2) } else { String::new() };
+        let future = matches!(w.as_str(), "i'll" | "we'll")
+            || (matches!(w.as_str(), "will" | "shall") && matches!(prev.as_str(), "i" | "we"))
+            || (w == "going"
+                && (matches!(prev.as_str(), "i'm" | "we're")
+                    || (prev == "am" && prev2 == "i")
+                    || (prev == "are" && prev2 == "we")));
+        if future {
+            return true;
+        }
+    }
+    false
+}
+
+/// A sentence that only says what was ("The file was named launchcode.txt", "The password in
+/// launchcode.txt was written in this format"): in the past tense, with no word asking for work.
+/// What it names is described, not asked for.
+fn describes_past(lower: &str) -> bool {
+    ["was", "were", "had"].iter().any(|w| has_word(lower, w)) && !ASK_WORDS.iter().any(|w| has_word(lower, w))
 }
 
 fn has_word(text: &str, w: &str) -> bool {
@@ -1287,6 +1393,52 @@ mod tests {
         assert_eq!(w.still_missing(), ["report.txt"]);
     }
 
+    /// gpt2-codegolf (2026-11-16): "I will run it /app/a.out …" was read as a file to make, and the
+    /// run's result said it was missing, though it is the person's own build of the program. In
+    /// password-recovery (2026-11-15) "The file was named launchcode.txt", a deleted file, was
+    /// said missing too, on a run that passed. A file named only where the person says what they
+    /// will do with it, or in a sentence that only says what was, is named but not asked for.
+    #[test]
+    fn a_file_the_person_will_build_or_run_or_one_only_described_is_not_asked_for() {
+        let missing = |text: &str| {
+            let d = tempfile::tempdir().unwrap();
+            Watched::at_start(&Named::from_request(text, d.path()), d.path()).still_missing()
+        };
+        let gpt2 = "Write me a dependency-free C file. Call your program gpt2.c, I will compile with gcc -O3 -lm. \
+                    Your c program must be <5000 bytes. I will run it ./a.out gpt2-124M.ckpt vocab.bpe \"hello\" and \
+                    you should continue the output.";
+        let n = named(gpt2);
+        assert!(n.files.contains(&"./a.out".to_string()), "still named: {n:?}");
+        assert!(n.not_asked.contains(&"./a.out".to_string()), "{n:?}");
+        assert!(!n.not_asked.contains(&"gpt2.c".to_string()), "named before \"I will\": asked for");
+        assert_eq!(missing(gpt2), ["gpt2.c"]);
+        assert_eq!(n.limits, [("gpt2.c".to_string(), 4999, "<5000 bytes".to_string())], "the one new file's limit");
+
+        let recovery = "A system administrator has accidentally deleted an important file containing a password. \
+                        The file was named launchcode.txt and was located somewhere within this folder. Your task \
+                        is to recover the PASSWORD from the deleted file. The password in launchcode.txt was \
+                        written in this format: PASSWORD=XXXXXXXXXX. Write each matching password you find, one \
+                        per line, to the file: recovered_passwords.txt";
+        assert_eq!(named(recovery).not_asked, ["launchcode.txt"]);
+        assert_eq!(missing(recovery), ["recovered_passwords.txt"]);
+
+        let tracing = "Write a c program image.c that I can run and compile and will generate an image. Your \
+                       output should be to a new file reconstructed.ppm in the cwd. I will test it by calling gcc \
+                       -static -o image image.c -lm && ./image and expect that the file will be identical.";
+        assert_eq!(missing(tracing), ["image.c", "reconstructed.ppm"], "./image is the person's build");
+
+        // Asked for in another sentence, it is one to make.
+        assert!(named("Write run.sh. I will run run.sh with bash.").not_asked.is_empty());
+        assert_eq!(missing("Write run.sh. I will run run.sh with bash."), ["run.sh"]);
+        // "You" or "your" in between: the person asks the model for it.
+        assert!(named("I will need you to write report.md.").not_asked.is_empty());
+        assert!(named("I'll run your script solve.py.").not_asked.is_empty());
+        assert!(named("I\u{2019}m going to open notes.md, so write it.").not_asked.is_empty());
+        // A past sentence that asks for work still asks.
+        assert!(named("The old report was wrong, so write report.md again.").not_asked.is_empty());
+        assert_eq!(named("We'll open output.csv in Excel.").not_asked, ["output.csv"]);
+    }
+
     /// The reading of many requests at once, to measure a change to it across cases before making
     /// it (docs/goal.md, rule 4). `KODACT_NAMED_CORPUS` names a folder: every `instruction.txt`
     /// under it (the trials of Harbor job folders) and every eval task's `task.json` is read, in an
@@ -1329,6 +1481,9 @@ mod tests {
             println!("{}\n  to make: {}", path.display(), made.join(", "));
             if !n.removed.is_empty() {
                 println!("  removed: {}", n.removed.join(", "));
+            }
+            if !n.not_asked.is_empty() {
+                println!("  named, not asked: {}", n.not_asked.join(", "));
             }
             if !limits.is_empty() {
                 println!("  limits: {}", limits.join(", "));

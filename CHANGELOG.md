@@ -2,6 +2,28 @@
 
 ## 0.1.0 (unreleased)
 
+### A file the person builds or runs, or one only described, isn't "missing"
+- **What happened.** The result's `verification.missing` named files the
+  request never asked the model to make:
+  - gpt2-codegolf (2026-11-16): `/app/a.out`, from "I will compile with gcc
+    … I will run it /app/a.out": the person's own build of the program;
+  - password-recovery (2026-11-15, a run that passed): `launchcode.txt`,
+    from "The file was named launchcode.txt", a file that was deleted.
+
+  With the `constraints` nudge on, the model was told to make them too.
+- **Now** a file named only where the person says what they will do with it
+  ("I will …", "I'll …", "we will …", with no "you" or "your" in between
+  and no "write it" after) is theirs to build or run, and one named only in
+  a sentence that says what was ("was", "were", "had", and no word asking
+  for work) is described. Neither is listed missing nor told to the model,
+  unless another sentence asks for it ("Write run.sh. I will run run.sh"
+  still asks for run.sh).
+- **Measured on the requests at hand.** Across the 31 recorded
+  Terminal-Bench requests and KodAct's eval tasks, the reading changed for
+  those two files, path-tracing's `./image` (the output of the person's
+  `gcc -o image`), and files that exist when the run starts, which were
+  never listed.
+
 ### The result says when a file is over the size the request allows
 - **What happened.** gpt2-codegolf (2026-11-15) asked for a C file "<5000
   bytes". The file ended at 5,093 bytes, and the run's result said `success`

@@ -374,7 +374,12 @@ its own (a package's `__init__.py`, `tests/test_parser.py`) isn't missing
 either. A name alone that ends a path the request also names (`algo.py`
 beside `/app/repo/algo.py`) is that path. Two files named as alternatives
 (`requirements.txt or pyproject.toml`) are one deliverable: when either
-exists, neither is listed. Which files a request asks for is read
+exists, neither is listed. A file named only where the person says what
+they will do with it ("I will run it /app/a.out", "I will test it by
+calling gcc -o image image.c && ./image") is theirs to build or run, and
+one named only in a sentence that says what was ("the file was named
+launchcode.txt") is described: neither is listed, unless another sentence
+asks for it. Which files a request asks for is read
 from its words, a guess.
 
 `verification.over_limit` lists the files the request states a size limit

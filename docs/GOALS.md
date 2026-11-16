@@ -205,7 +205,13 @@ Each pillar lists what KodAct does about it and what shows that it works.
     named alone (`parser.py`) is the one elsewhere in the project
     (`src/parser.py`): both were listed missing, so the model was told to
     make them (task `named-elsewhere`: three names listed in 3/3 scripted
-    runs before, none after);
+    runs before, none after). A file named only where the person says what
+    they will do with it ("I will run it /app/a.out") or in a sentence that
+    says what was ("the file was named launchcode.txt") isn't listed either:
+    on recorded runs both were (gpt2-codegolf 2026-11-16, password-recovery
+    2026-11-15, a run that passed); across the 31 recorded Terminal-Bench
+    requests and the eval tasks the reading changed for those, path-tracing's
+    `./image`, and files there at the start (never listed);
   - `verification.over_limit` names the files over the size the request
     states for them when the turn ends, with their size and the limit:
     gpt2-codegolf (2026-11-15) left its C file at 5,093 bytes for "<5000
