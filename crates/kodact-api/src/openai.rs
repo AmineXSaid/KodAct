@@ -154,10 +154,26 @@ impl OpenAiProvider {
     pub fn new(config: OpenAiConfig) -> Result<Self, ApiError> {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(30))
-            .read_timeout(config.timeout)
+            .read_timeout(crate::messages::client_read_timeout(config.timeout))
             .build()
             .map_err(|e| ApiError::network(e.to_string()))?;
         Ok(OpenAiProvider { config, http, refused: Default::default(), efforts: Default::default() })
+    }
+}
+
+/// Every object schema given `properties`, `{}` where it has none: LM Studio, among others,
+/// refuses an object schema without it, and an MCP tool that takes no arguments often sends
+/// just `{"type": "object"}`.
+fn with_properties(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            if o.get("type").and_then(Value::as_str) == Some("object") && !o.contains_key("properties") {
+                o.insert("properties".into(), json!({}));
+            }
+            o.values_mut().for_each(with_properties);
+        }
+        Value::Array(a) => a.iter_mut().for_each(with_properties),
+        _ => {}
     }
 }
 
@@ -216,8 +232,13 @@ pub fn to_chat_request(req: &MessagesRequest) -> Value {
         .map(|t| {
             let mut f = json!({"name": names.sent(&t.name), "description": t.description});
             // Gemini takes a narrower schema, and none for a tool without arguments.
-            let params =
-                if gemini { gemini_rules::sanitize_schema(&t.input_schema) } else { Some(t.input_schema.clone()) };
+            let params = if gemini {
+                gemini_rules::sanitize_schema(&t.input_schema)
+            } else {
+                let mut schema = t.input_schema.clone();
+                with_properties(&mut schema);
+                Some(schema)
+            };
             if let Some(p) = params {
                 f["parameters"] = p;
             }
@@ -824,6 +845,22 @@ impl ChunkTranslator {
         Ok(out)
     }
 
+    /// The body ended. After `[DONE]`, nothing more; with a finish reason but no `[DONE]` (some
+    /// servers leave it out), the reply is closed as complete. With neither, the stream was cut
+    /// (a proxy or the network dropped it): said so, so the request is sent again instead of
+    /// half a reply being taken for the whole of it.
+    pub fn end_of_body(&mut self) -> Vec<Result<StreamEvent, ApiError>> {
+        if self.finished {
+            return vec![];
+        }
+        if self.stop.is_none() {
+            return vec![Err(ApiError::Parse("stream ended before a finish reason or [DONE]".into()))];
+        }
+        let mut out = Vec::new();
+        self.finish_into(&mut out);
+        out.into_iter().map(Ok).collect()
+    }
+
     /// Close everything; idempotent.
     pub fn finish_into(&mut self, out: &mut Vec<StreamEvent>) {
         if self.finished {
@@ -1086,9 +1123,13 @@ impl Provider for OpenAiProvider {
             let events = tr.push_completion(&body)?;
             return Ok(Box::pin(futures::stream::iter(events.into_iter().map(Ok))));
         }
-        Ok(spawn_sse_pump(resp, cancel, move |ev| match tr.push(&ev.data) {
-            Ok(events) => events.into_iter().map(Ok).collect(),
-            Err(e) => vec![Err(e)],
+        let idle = crate::messages::idle_limit(self.config.timeout, &request);
+        Ok(spawn_sse_pump(resp, cancel, idle, move |ev| match ev {
+            Some(ev) => match tr.push(&ev.data) {
+                Ok(events) => events.into_iter().map(Ok).collect(),
+                Err(e) => vec![Err(e)],
+            },
+            None => tr.end_of_body(),
         }))
     }
 }
@@ -1965,6 +2006,55 @@ mod gemini_tests {
         carried.carry_reasoning = true;
         let body = to_chat_request(&carried);
         assert_eq!(body["messages"][1]["reasoning_content"], "Look at the file first.");
+    }
+
+    /// A body that ends with neither a finish reason nor `[DONE]` was cut: said so, so the engine
+    /// sends the request again (it retries a "stream ended" error, handing back the reasoning so
+    /// far). A finish reason without `[DONE]` is a complete reply; after `[DONE]` nothing is added.
+    #[test]
+    fn a_stream_cut_before_its_end_is_told_from_one_that_ended() {
+        let half = r#"{"choices":[{"delta":{"content":"The answer is"}}]}"#;
+        let mut tr = ChunkTranslator::new("m");
+        tr.push(half).unwrap();
+        let end = tr.end_of_body();
+        assert!(matches!(&end[..], [Err(ApiError::Parse(m))] if m.starts_with("stream ended")), "{end:?}");
+
+        let mut tr = ChunkTranslator::new("m");
+        tr.push(r#"{"choices":[{"delta":{"content":"42"},"finish_reason":"stop"}]}"#).unwrap();
+        let end = tr.end_of_body();
+        assert!(end.iter().all(Result::is_ok) && matches!(end.last(), Some(Ok(StreamEvent::MessageStop))), "{end:?}");
+
+        let mut tr = ChunkTranslator::new("m");
+        tr.push(half).unwrap();
+        assert!(!tr.push("[DONE]").unwrap().is_empty());
+        assert!(tr.end_of_body().is_empty());
+    }
+
+    /// A silent reasoner gets longer before its stream counts as dropped, the higher its level.
+    #[test]
+    fn the_idle_limit_grows_with_the_reasoning_level() {
+        let base = Duration::from_secs(300);
+        let at = |effort: Option<&str>| {
+            let mut r = request("o-model", vec![Message::user_text("hi")], vec![], None);
+            r.output_config = effort.map(|e| json!({"effort": e}));
+            crate::messages::idle_limit(base, &r).as_secs()
+        };
+        assert_eq!(
+            [at(None), at(Some("medium")), at(Some("high")), at(Some("xhigh")), at(Some("max"))],
+            [300, 300, 600, 900, 1200]
+        );
+        assert_eq!(crate::messages::client_read_timeout(base).as_secs(), 1200, "the client never cuts first");
+    }
+
+    /// An object schema without `properties` (an MCP tool with no arguments, or a nested one) is
+    /// sent with `properties: {}`, which LM Studio and others require.
+    #[test]
+    fn object_schemas_always_have_properties() {
+        let t = tool("Ping", json!({"type": "object", "properties": {"opts": {"type": "object"}}}));
+        let bare = tool("Clock", json!({"type": "object"}));
+        let body = to_chat_request(&request("local-model", vec![Message::user_text("hi")], vec![t, bare], None));
+        assert_eq!(body["tools"][0]["function"]["parameters"]["properties"]["opts"]["properties"], json!({}));
+        assert_eq!(body["tools"][1]["function"]["parameters"], json!({"type": "object", "properties": {}}));
     }
 
     /// What DeepSeek's API validates: an assistant message carries content or tool calls (a reply

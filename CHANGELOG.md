@@ -2,6 +2,35 @@
 
 ## 0.1.0 (unreleased)
 
+### Provider fixes found in another harness's field reports
+Checked one by one against KodAct, from AlphaCode's provider code (MIT): only
+the holes KodAct had too.
+- **A stream cut before its end is sent again.** A chat-completions body that
+  ends with neither a finish reason nor `[DONE]`, or a Messages body that ends
+  before `message_stop`, was taken for the whole reply: half an answer, or a
+  turn ended mid-sentence. It is now a "stream ended" error, which the engine
+  retries, handing back the reasoning streamed so far. A finish reason without
+  `[DONE]` (some servers leave it out) is still a complete reply.
+- **A silent reasoner isn't cut off mid-thought.** Some models reason without
+  streaming anything (OpenAI's reasoning models over chat completions); at a
+  high level that silence ran past the fixed 5-minute read timeout, and the
+  request failed and was sent again from the start. The limit now grows with
+  the level asked for: twice at `high`, three times at `xhigh`, four times at
+  `max`.
+- **MCP tool schemas the endpoint refused.** An object schema without
+  `properties` (an MCP tool that takes no arguments) is sent with
+  `properties: {}`, which LM Studio and others require. On the Messages API, a
+  schema with `anyOf`, `oneOf` or `allOf` at its top, which it refuses, is
+  sent as one object holding the branches' properties, those of `anyOf` and
+  `oneOf` optional.
+- **Tool call ids from another endpoint.** On the Messages API, an id outside
+  `[A-Za-z0-9_-]` (`functions.Read:0`, as some gateways give) has those
+  characters replaced, in the call and its result alike.
+- Not taken: retry budgets per kind of failure (KodAct already tells quotas,
+  outages, long waits and first contact apart), text-wrapped tool calls
+  (`textcall.rs` already reads them), and AlphaCode's string-matched error
+  classes (KodAct reads the status and error type).
+
 ### The model's reasoning can go back with each request (`carryReasoning`)
 - **What happened.** On chat completions KodAct sends a model's reasoning back
   only to Gemini models. `deep-thinking` (served by vLLM; deepseek-v4-flash, as

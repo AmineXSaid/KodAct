@@ -130,7 +130,7 @@ impl MessagesProvider {
         let http = reqwest::Client::builder()
             .user_agent(config.user_agent.clone())
             .connect_timeout(Duration::from_secs(30))
-            .read_timeout(config.timeout)
+            .read_timeout(client_read_timeout(config.timeout))
             .build()
             .map_err(|e| ApiError::network(e.to_string()))?;
         Ok(MessagesProvider { config, http })
@@ -229,6 +229,70 @@ fn header_value(v: &str) -> Result<HeaderValue, ApiError> {
 /// Turn a non-2xx response into an [`ApiError::Http`].
 /// Take out what other providers attached to blocks (`provider`): this wire's
 /// API rejects fields it doesn't know.
+/// What the Messages API refuses that an MCP server's tools or another endpoint's history can
+/// bring, made to fit:
+/// - a tool schema with `anyOf`, `oneOf` or `allOf` at its top ("input_schema does not support
+///   oneOf, allOf, or anyOf at the top level"): their properties are merged into one object, those
+///   of `anyOf`/`oneOf` branches optional, since only one branch need hold; the tool still checks
+///   its own input;
+/// - a tool call id outside `^[a-zA-Z0-9_-]+$` (an id another endpoint gave, `functions.Read:0`):
+///   the other characters become `_`, in the call and its result alike.
+pub(crate) fn fit_for_messages_api(body: &mut Value) {
+    if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
+        for schema in tools.iter_mut().filter_map(|t| t.get_mut("input_schema")) {
+            flatten_top_combinators(schema);
+        }
+    }
+    let safe = |id: &str| -> String {
+        id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect()
+    };
+    for m in body.get_mut("messages").and_then(Value::as_array_mut).into_iter().flatten() {
+        for b in m.get_mut("content").and_then(Value::as_array_mut).into_iter().flatten() {
+            let key = match b.get("type").and_then(Value::as_str) {
+                Some("tool_use") => "id",
+                Some("tool_result") => "tool_use_id",
+                _ => continue,
+            };
+            if let Some(id) = b.get(key).and_then(Value::as_str).map(safe) {
+                b[key] = Value::String(id);
+            }
+        }
+    }
+}
+
+fn flatten_top_combinators(schema: &mut Value) {
+    let Some(obj) = schema.as_object_mut() else { return };
+    let mut props = obj.get("properties").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut required: Vec<Value> = obj.get("required").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut found = false;
+    for key in ["anyOf", "oneOf", "allOf"] {
+        let Some(Value::Array(branches)) = obj.remove(key) else { continue };
+        found = true;
+        for b in &branches {
+            for (k, v) in b.get("properties").and_then(Value::as_object).into_iter().flatten() {
+                props.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+            if key == "allOf" {
+                for r in b.get("required").and_then(Value::as_array).into_iter().flatten() {
+                    if !required.contains(r) {
+                        required.push(r.clone());
+                    }
+                }
+            }
+        }
+    }
+    if !found {
+        return;
+    }
+    obj.insert("type".into(), Value::String("object".into()));
+    obj.insert("properties".into(), Value::Object(props));
+    if required.is_empty() {
+        obj.remove("required");
+    } else {
+        obj.insert("required".into(), Value::Array(required));
+    }
+}
+
 pub(crate) fn strip_provider_data(body: &mut Value) {
     for m in body.get_mut("messages").and_then(Value::as_array_mut).into_iter().flatten() {
         for b in m.get_mut("content").and_then(Value::as_array_mut).into_iter().flatten() {
@@ -306,9 +370,17 @@ pub fn parse_event(data: &str) -> Result<Option<StreamEvent>, ApiError> {
 }
 
 /// Pump an SSE byte stream into a channel of [`StreamEvent`]s.
-pub(crate) fn spawn_sse_pump<F>(resp: reqwest::Response, cancel: CancellationToken, mut parse: F) -> EventStream
+/// Read a streamed reply's events. `parse` gets each event, then `None` once the body ends, to
+/// close the reply or say it was cut. A body silent for `idle` fails as a network error: an
+/// endpoint gone quiet, not a model thinking (see [`idle_limit`]).
+pub(crate) fn spawn_sse_pump<F>(
+    resp: reqwest::Response,
+    cancel: CancellationToken,
+    idle: Duration,
+    mut parse: F,
+) -> EventStream
 where
-    F: FnMut(&crate::sse::SseEvent) -> Vec<Result<StreamEvent, ApiError>> + Send + 'static,
+    F: FnMut(Option<&crate::sse::SseEvent>) -> Vec<Result<StreamEvent, ApiError>> + Send + 'static,
 {
     let (tx, rx) = mpsc::channel::<Result<StreamEvent, ApiError>>(64);
     tokio::spawn(async move {
@@ -320,7 +392,14 @@ where
                     let _ = tx.send(Err(ApiError::Cancelled)).await;
                     return;
                 }
-                c = body.next() => c,
+                c = tokio::time::timeout(idle, body.next()) => match c {
+                    Ok(c) => c,
+                    Err(_) => {
+                        let message = format!("the endpoint sent nothing for {}s", idle.as_secs());
+                        let _ = tx.send(Err(ApiError::network(message))).await;
+                        return;
+                    }
+                },
             };
             let (events, finished) = match chunk {
                 Some(Ok(bytes)) => (decoder.push(&bytes), false),
@@ -330,11 +409,13 @@ where
                 }
                 None => (decoder.finish().into_iter().collect(), true),
             };
-            for ev in &events {
-                for item in parse(ev) {
-                    if tx.send(item).await.is_err() {
-                        return;
-                    }
+            let mut items: Vec<_> = events.iter().flat_map(|ev| parse(Some(ev))).collect();
+            if finished {
+                items.extend(parse(None));
+            }
+            for item in items {
+                if tx.send(item).await.is_err() {
+                    return;
                 }
             }
             if finished {
@@ -343,6 +424,27 @@ where
         }
     });
     Box::pin(ReceiverStream::new(rx))
+}
+
+/// How long a streamed reply may stay silent before it counts as dropped: the endpoint's read
+/// timeout, longer at a higher reasoning level. Some models reason without streaming anything
+/// (OpenAI's reasoning models over chat completions), and at a high level that silence can run
+/// past a fixed limit, which then failed the request mid-thought and sent it again from the
+/// start. `high` doubles it, `xhigh` triples it, `max` gives four times.
+pub(crate) fn idle_limit(base: Duration, req: &MessagesRequest) -> Duration {
+    let effort = req.output_config.as_ref().and_then(|c| c.get("effort")).and_then(Value::as_str);
+    base * match effort {
+        Some("high") => 2,
+        Some("xhigh") => 3,
+        Some("max") => 4,
+        _ => 1,
+    }
+}
+
+/// The client's own read timeout: the longest silence any request may be given
+/// ([`idle_limit`]), so the per-request limit is the one that applies.
+pub(crate) fn client_read_timeout(base: Duration) -> Duration {
+    base * 4
 }
 
 #[async_trait::async_trait]
@@ -387,6 +489,7 @@ impl Provider for MessagesProvider {
         request.stream = true;
         let mut body = serde_json::to_value(&request).map_err(|e| ApiError::Parse(e.to_string()))?;
         strip_provider_data(&mut body);
+        fit_for_messages_api(&mut body);
         let mut attempt = 0;
         let resp = loop {
             let res = tokio::select! {
@@ -413,10 +516,21 @@ impl Provider for MessagesProvider {
                 Err(e) => return Err(e.with_origin(origin)),
             }
         };
-        Ok(spawn_sse_pump(resp, cancel, |ev| match parse_event(&ev.data) {
-            Ok(Some(e)) => vec![Ok(e)],
-            Ok(None) => vec![],
-            Err(e) => vec![Err(e)],
+        // A body that ends before `message_stop` was cut (a proxy or the network dropped it):
+        // said so, so the engine sends the request again instead of taking half a reply.
+        let mut stopped = false;
+        let idle = idle_limit(self.config.timeout, &request);
+        Ok(spawn_sse_pump(resp, cancel, idle, move |ev| match ev {
+            None if stopped => vec![],
+            None => vec![Err(ApiError::Parse("stream ended before message_stop".into()))],
+            Some(ev) => match parse_event(&ev.data) {
+                Ok(Some(e)) => {
+                    stopped |= matches!(e, StreamEvent::MessageStop);
+                    vec![Ok(e)]
+                }
+                Ok(None) => vec![],
+                Err(e) => vec![Err(e)],
+            },
         }))
     }
 
@@ -529,6 +643,38 @@ mod provider_data_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    /// An MCP tool whose schema is a top-level `oneOf`, and a history with an id another endpoint
+    /// gave: both refused by the Messages API, both made to fit.
+    #[test]
+    fn what_the_messages_api_refuses_is_made_to_fit() {
+        let mut body = json!({
+            "tools": [{"name": "fetch", "input_schema": {
+                "type": "object",
+                "properties": {"timeout": {"type": "integer"}},
+                "allOf": [{"properties": {"verbose": {"type": "boolean"}}, "required": ["verbose"]}],
+                "oneOf": [
+                    {"properties": {"url": {"type": "string"}}, "required": ["url"]},
+                    {"properties": {"path": {"type": "string"}}, "required": ["path"]}
+                ]
+            }}, {"name": "plain", "input_schema": {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}}],
+            "messages": [
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Read:0", "name": "Read", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Read:0", "content": "x"}]}
+            ]
+        });
+        let plain = body["tools"][1].clone();
+        fit_for_messages_api(&mut body);
+        let s = &body["tools"][0]["input_schema"];
+        assert!(s.get("oneOf").is_none() && s.get("allOf").is_none(), "{s}");
+        let props: Vec<&String> = s["properties"].as_object().unwrap().keys().collect();
+        assert_eq!(props.len(), 4, "{props:?}");
+        assert_eq!(s["required"], json!(["verbose"]), "only allOf's fields stay required");
+        assert_eq!(body["tools"][1], plain, "a schema that fits is left as it is");
+        assert_eq!(body["messages"][0]["content"][0]["id"], "functions_Read_0");
+        assert_eq!(body["messages"][1]["content"][0]["tool_use_id"], "functions_Read_0");
+    }
 
     #[test]
     fn unknown_events_are_skipped() {
