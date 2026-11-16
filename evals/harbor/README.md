@@ -68,6 +68,7 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | `KODACT_STATIC_BIN` | `target-static/release/kodact` | Binary copied into containers |
 | `KODACT_HARBOR_AUTONOMOUS` | `1` | `kodact --autonomous`; `0` turns it off (job name gets `-noauto`) |
 | `KODACT_HARBOR_TIME_LIMIT` | the task's own limit | Seconds for `kodact --max-time` (job name gets `-time<N>`). Harbor still stops the agent at the task's own limit: to give it more time, also pass `--agent-timeout-multiplier N` after the mode |
+| `KODACT_CARRY_REASONING` | | `1` sends the model its reasoning back with each request (`carryReasoning`, see docs/CLI.md); `0`, `false`, `no` or `off` leave it off. The job name gets `-carry`. Check the endpoint first with `scripts/probe-reasoning.py` |
 | `KODACT_HARBOR_MAX_OUTPUT` | `65536` for `deep-thinking`, none for other models | The model's reply limit, given to `kodact` as `modelLimits` (`--settings`); `0` gives none. `deep-thinking` is served by vLLM, which bounds a reply only by its window and states no reply limit, so KodAct would keep its 32,000 default (`max-output.sh`; job name gets `-maxout65536`). A `--settings` in `KODACT_HARBOR_ARGS` wins |
 | `KODACT_HARBOR_CA_BUNDLE` | | Extra CAs to trust inside containers (see below) |
 | `KODACT_HARBOR_HF_ENDPOINT` | hf-mirror.com only where huggingface.co is blocked | The Hugging Face Hub address for the agent and the tests, checked at the start; `off` never uses a mirror, a URL picks one (job name gets `-hfmirror`; see below) |

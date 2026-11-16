@@ -60,17 +60,26 @@ Each pillar lists what KodAct does about it and what shows that it works.
     tool's output over 50k, keeps its head and tail. The full text is saved
     under the cache directory, which can be read back without a prompt, and
     the result names the file;
-  - reasoning a reply loses to the reply cap or the thinking time limit,
-    where the provider doesn't send it back, is handed back as far as the
-    room before compaction holds (half of it, and at least a quarter of the
-    reply cap when it fits), never so much that the next request compacts it
-    away; when part is left out, the whole of it is saved with the tool
-    output, by sub-agents too, and the reminder names the file. Measured in
-    bytes, as the context is. A paragraph it repeats is shown once, at the
-    last place shown, one an earlier handback gave is marked, not repeated,
-    fenced code comes back as written, and whenever anything is left out the
-    whole is saved (task `reasoning-cutoff-resume`,
+  - reasoning a reply loses to the reply cap or the thinking time limit, where
+    it isn't sent back (by the provider, or `carryReasoning`), is handed back
+    as far as the room before compaction holds (half of it, and at least a
+    quarter of the reply cap when it fits), never so much that the next
+    request compacts it away; when part is left out, the whole of it is saved
+    with the tool output, by sub-agents too, and the reminder names the file.
+    Measured in bytes, as the context is. A paragraph it repeats is shown
+    once, at the last place shown, one an earlier handback gave is marked, not
+    repeated, fenced code comes back as written, and whenever anything is left
+    out the whole is saved (task `reasoning-cutoff-resume`,
     `scripts/act-after-cutoff.py`);
+  - the model's reasoning carried (`carryReasoning`, off until measured):
+    where the endpoint drops it between requests (chat completions), every
+    reply's reasoning still in the conversation goes back with each request,
+    as DeepSeek's thinking mode asks when tools are used. It counts toward the
+    context and is compacted with the rest. Without it, a deep-thinking model
+    that writes its conclusions only in its reasoning worked the same tensor
+    layout out again in 23 of 38 replies (gpt2-codegolf, 2026-11-16).
+    `scripts/probe-reasoning.py` tells whether an endpoint passes it to the
+    model (task `layer-order`);
   - no repeated reads: reading the same range of unchanged content returns a
     short note. That stops once the earlier result was cleared by compaction;
   - memory files and the task list re-attached after compaction;
@@ -93,7 +102,9 @@ Each pillar lists what KodAct does about it and what shows that it works.
 - **Measured by:** pass rate and cost on long tasks, and context tokens per
   turn (task `log-needle`); after a reasoning handback, the share of next
   replies that act instead of reasoning to the limit again
-  (`scripts/act-after-cutoff.py`).
+  (`scripts/act-after-cutoff.py`); with the reasoning carried, turns and wall
+  time per task on a reasoning model over chat completions (task
+  `layer-order`, against `KODACT_CARRY_REASONING=0`).
 
 ### 2. Failure recovery
 

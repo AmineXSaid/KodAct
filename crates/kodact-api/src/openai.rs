@@ -180,6 +180,9 @@ struct Writing<'a> {
     names: &'a ToolNames,
     /// Each tool call's name, by id, for the `tool` messages that answer it.
     call_names: HashMap<String, String>,
+    /// The engine carries the model's reasoning (`carryReasoning`): each assistant message's
+    /// Thinking blocks still in the request go back as `reasoning_content`.
+    carry: bool,
 }
 
 /// Translate a Messages request into a chat-completions body.
@@ -191,7 +194,13 @@ pub fn to_chat_request(req: &MessagesRequest) -> Value {
         .iter()
         .flat_map(|m| m.tool_uses().map(|(id, name, _)| (id.to_string(), name.to_string())))
         .collect();
-    let w = Writing { gemini, gemini3: gemini_rules::is_gemini3_or_later(&req.model), names: &names, call_names };
+    let w = Writing {
+        gemini,
+        gemini3: gemini_rules::is_gemini3_or_later(&req.model),
+        names: &names,
+        call_names,
+        carry: req.carry_reasoning,
+    };
     let mut messages = Vec::new();
     let system: Vec<&str> = req.system.iter().map(|b| b.text.as_str()).collect();
     if !system.is_empty() {
@@ -337,7 +346,9 @@ fn push_message(out: &mut Vec<Value>, m: &Message, w: &Writing) {
             let text: String = m.content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join("");
             let mut msg =
                 json!({"role": "assistant", "content": if text.is_empty() { Value::Null } else { json!(text) }});
-            // Gemini's thoughts go back as it sent them (OmniRoute turns them into thought parts).
+            // Gemini's thoughts go back as it sent them (OmniRoute turns them into thought parts),
+            // and any model's reasoning where the engine carries it (DeepSeek's thinking mode asks
+            // for it back when tools are used).
             let thinking: String = m
                 .content
                 .iter()
@@ -346,7 +357,7 @@ fn push_message(out: &mut Vec<Value>, m: &Message, w: &Writing) {
                     _ => None,
                 })
                 .collect();
-            if w.gemini && !thinking.is_empty() {
+            if (w.gemini || w.carry) && !thinking.is_empty() {
                 msg["reasoning_content"] = json!(thinking);
             }
             let mut calls = vec![];
@@ -378,6 +389,7 @@ fn push_message(out: &mut Vec<Value>, m: &Message, w: &Writing) {
             // A tool message carries text only: pictures a tool returned
             // (Read on a screenshot) follow in the user message after it.
             let mut tool_images = Vec::new();
+            let results = out.len();
             for b in &m.content {
                 match b {
                     ContentBlock::ToolResult { tool_use_id, content, is_error, .. } => {
@@ -404,6 +416,24 @@ fn push_message(out: &mut Vec<Value>, m: &Message, w: &Writing) {
             if !tool_images.is_empty() {
                 parts.push(json!({"type": "text", "text": "The tool results above returned these images:"}));
                 parts.extend(tool_images);
+            }
+            // Carried reasoning: a chat template that keeps reasoning only after the person's last
+            // message (DeepSeek-V3.2's, Qwen3's) would drop it at a user message here. KodAct's own
+            // reminders that come with tool results go in the last result instead; the person's
+            // words, pictures and documents stay a user message.
+            let reminders = || {
+                parts.iter().all(|p| {
+                    p["type"] == "text"
+                        && p["text"].as_str().is_some_and(|t| t.trim_start().starts_with("<system-reminder>"))
+                })
+            };
+            if w.carry && out.len() > results && !parts.is_empty() && reminders() {
+                let notes: Vec<&str> = parts.iter().filter_map(|p| p["text"].as_str()).collect();
+                if let Some(last) = out.last_mut() {
+                    let text = format!("{}\n\n{}", last["content"].as_str().unwrap_or_default(), notes.join("\n\n"));
+                    last["content"] = json!(text);
+                }
+                parts.clear();
             }
             if !parts.is_empty() {
                 out.push(json!({"role": "user", "content": parts}));
@@ -889,7 +919,8 @@ impl Provider for OpenAiProvider {
         "openai"
     }
 
-    /// `push_message` sends reasoning back only to Gemini models (as `reasoning_content`).
+    /// `push_message` sends reasoning back on its own only to Gemini models (as
+    /// `reasoning_content`); to any model when the request carries it (`carry_reasoning`).
     fn resends_reasoning(&self, model: &str) -> bool {
         gemini_rules::is_gemini(model)
     }
@@ -1098,6 +1129,7 @@ mod tests {
             gemini3: false,
             names: NAMES.get_or_init(ToolNames::default),
             call_names: HashMap::new(),
+            carry: false,
         }
     }
 
@@ -1252,6 +1284,7 @@ mod tests {
             speed: None,
             stream: true,
             betas: vec![],
+            carry_reasoning: false,
         };
         let b = to_chat_request(&req("cx/gpt-5-codex"));
         assert_eq!(b["max_completion_tokens"], 1000);
@@ -1492,6 +1525,7 @@ mod tests {
             speed: None,
             stream: true,
             betas: vec![],
+            carry_reasoning: false,
         };
         let body = to_chat_request(&req);
         let msgs = body["messages"].as_array().unwrap();
@@ -1653,6 +1687,7 @@ mod tests {
             speed: None,
             stream: true,
             betas: vec![],
+            carry_reasoning: false,
         };
         for effort in ["medium", "medium", "xhigh"] {
             let mut events = provider.stream(req(effort), CancellationToken::new()).await.unwrap();
@@ -1702,6 +1737,7 @@ mod tests {
             speed: None,
             stream: true,
             betas: vec![],
+            carry_reasoning: false,
         };
         for _ in 0..2 {
             let mut events = provider.stream(req(), CancellationToken::new()).await.unwrap();
@@ -1729,10 +1765,11 @@ mod tests {
         assert_eq!(b, json!({"stream": true}));
     }
 
-    /// The engine sizes the next request by `resends_reasoning`, so it must say what the
-    /// request writer does with an earlier reply's reasoning.
+    /// The engine sizes the next request by `resends_reasoning` (and its own `carryReasoning`), so
+    /// it must say what the request writer does on its own with an earlier reply's reasoning; a
+    /// request that carries it sends it to any model.
     #[test]
-    fn resends_reasoning_says_what_the_request_carries() {
+    fn resends_reasoning_says_what_a_request_sends_on_its_own() {
         let provider = OpenAiProvider::new(OpenAiConfig {
             base_url: "http://127.0.0.1:9/v1".into(),
             api_key: None,
@@ -1765,9 +1802,12 @@ mod tests {
                 speed: None,
                 stream: true,
                 betas: vec![],
+                carry_reasoning: false,
             };
             let carried = to_chat_request(&req).to_string().contains("the reasoning so far");
             assert_eq!(carried, provider.resends_reasoning(model), "{model}");
+            let carrying = MessagesRequest { carry_reasoning: true, ..req };
+            assert!(to_chat_request(&carrying).to_string().contains("the reasoning so far"), "{model}");
         }
         assert!(!provider.resends_reasoning("quick-thinking") && provider.resends_reasoning("gemini-2.5-pro"));
     }
@@ -1833,6 +1873,7 @@ mod gemini_tests {
             speed: None,
             stream: true,
             betas: vec![],
+            carry_reasoning: false,
         }
     }
 
@@ -1907,6 +1948,59 @@ mod gemini_tests {
         // Another provider's model: no reasoning sent back.
         let gpt = to_chat_request(&request("gpt-4o", after(&t), vec![], None));
         assert!(gpt["messages"][1].get("reasoning_content").is_none());
+        // Unless the engine carries it (`carryReasoning`): DeepSeek's thinking mode asks for the
+        // reasoning back during a tool loop, as `reasoning_content`.
+        let mut carried = request("deep-thinking", after(&t), vec![], None);
+        carried.carry_reasoning = true;
+        let body = to_chat_request(&carried);
+        assert_eq!(body["messages"][1]["reasoning_content"], "Look at the file first.");
+    }
+
+    /// Carried reasoning stays in the tool loop: KodAct's reminders that come with tool results go
+    /// in the last result, not in a user message, where a template that keeps reasoning only
+    /// after the person's last message would drop it. The person's own words stay theirs.
+    #[test]
+    fn with_carried_reasoning_reminders_stay_in_the_tool_loop() {
+        let call = |id: &str| ContentBlock::ToolUse {
+            id: id.into(),
+            name: "Bash".into(),
+            input: json!({"command": "ls"}),
+            cache_control: None,
+            provider: None,
+        };
+        let messages = |extra: &str| {
+            vec![
+                Message::user_text("fix it"),
+                Message::assistant(vec![
+                    ContentBlock::Thinking { thinking: "h0, h1, h10 sort first".into(), signature: String::new() },
+                    call("t1"),
+                    call("t2"),
+                ]),
+                Message::user(vec![
+                    ContentBlock::tool_result("t1", "a.c", false),
+                    ContentBlock::tool_result("t2", "/app", false),
+                    ContentBlock::text(extra),
+                ]),
+            ]
+        };
+        let reminder = "<system-reminder>\nThe clock: 10m used.\n</system-reminder>";
+        let carrying = |extra: &str| MessagesRequest {
+            carry_reasoning: true,
+            ..request("deep-thinking", messages(extra), vec![], None)
+        };
+        let body = to_chat_request(&carrying(reminder));
+        let sent = body["messages"].as_array().unwrap();
+        assert_eq!(sent.len(), 4, "{sent:?}");
+        assert_eq!(sent[1]["reasoning_content"], "h0, h1, h10 sort first");
+        assert_eq!((&sent[2]["role"], &sent[2]["content"]), (&json!("tool"), &json!("a.c")));
+        assert_eq!((&sent[3]["role"], &sent[3]["content"]), (&json!("tool"), &json!(format!("/app\n\n{reminder}"))));
+        // Not carried: a user message after the results, as before.
+        let plain = to_chat_request(&request("deep-thinking", messages(reminder), vec![], None));
+        assert_eq!(plain["messages"].as_array().unwrap().last().unwrap()["role"], "user");
+        // The person's words: a user message, carried or not.
+        let theirs = to_chat_request(&carrying("also rename it"));
+        let last = theirs["messages"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!((&last["role"], &last["content"][0]["text"]), (&json!("user"), &json!("also rename it")));
     }
 
     #[test]

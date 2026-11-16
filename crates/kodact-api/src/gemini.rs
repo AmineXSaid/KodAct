@@ -1095,6 +1095,7 @@ mod tests {
             speed: None,
             stream: true,
             betas: vec![],
+            carry_reasoning: false,
         }
     }
 

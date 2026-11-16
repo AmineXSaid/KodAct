@@ -2,6 +2,52 @@
 
 ## 0.1.0 (unreleased)
 
+### The model's reasoning can go back with each request (`carryReasoning`)
+- **What happened.** On chat completions KodAct sends a model's reasoning back
+  only to Gemini models. `deep-thinking` (served by vLLM; deepseek-v4-flash, as
+  the Harbor kit's model probe reports it) reasons for thousands of characters
+  per reply and writes almost nothing else, so each step began without what
+  the last one worked out. In gpt2-codegolf with three times its time
+  (2026-11-16), 23 of 38 replies, then 16 of 43 in the next run, worked out
+  the same tensor layout again; the layout verified at step 18 was doubted at
+  step 19.
+- **Now, with `carryReasoning`** (or `KODACT_CARRY_REASONING=1`, off until
+  measured), the reasoning of every reply still in the conversation goes back
+  with each request, as `reasoning_content`. That is what DeepSeek's thinking
+  mode asks when tools are used: "the `reasoning_content` of all previous
+  turns should be passed back to the API", or it answers 400. A chat template
+  that keeps reasoning only after the last user message (DeepSeek-V3.2's,
+  Qwen3's) drops the older part itself; for it, KodAct's own reminders that
+  come with tool results go in the last tool result, so they don't end the
+  tool loop. The person's own words stay a user message.
+- **In everyday use:** in a long request to a reasoning model behind a
+  chat-completions endpoint, each step starts from what the earlier ones
+  worked out instead of working it out again. On DeepSeek's own API with
+  tools, it is what the API requires.
+- **What it costs.** No model call and no wait. Each reply's reasoning is
+  added to every later request until compaction summarizes it away with the
+  rest: it counts toward the context as anything else does, so a small window
+  compacts sooner and a 1M window keeps it longer. With a prompt cache it is
+  read from the cache after its first request. Nothing changes where the
+  provider sends reasoning back on its own (the Messages API, Gemini), or
+  where the endpoint returns none.
+- **Safe on an endpoint that refuses it.** A 400 or 422 naming
+  `reasoning_content` (not one asking for it, as "must be passed back") sends
+  the request again without it, and requests to that model go without it for
+  the rest of the session, with a warning (`system/carry_reasoning` event).
+  Sub-agents follow the session.
+- **Check an endpoint first:** `scripts/probe-reasoning.py MODEL` runs a small
+  tool loop that ends with the tool's result, as KodAct's do, and sends the
+  result back twice: with reasoning that notes a random eight-digit number,
+  and without. Passed to the model, the reply gives the number; dropped, the
+  model can't know it. It tells an endpoint that refuses the field, requires
+  it, drops it or passes it apart.
+- **Measured:** not yet; the comparison is owed (no key here). Eval task
+  `layer-order` turns it on: `kodact-eval run` on a reasoning model over chat
+  completions, again with `KODACT_CARRY_REASONING=0`, then `kodact-eval
+  compare` on turns and wall time. Harbor: `KODACT_CARRY_REASONING=1
+  evals/harbor/run.sh …`; the job name gets `-carry`.
+
 ### A reply whose stream breaks hands its reasoning to the retry
 - **What happened.** In gpt2-codegolf with three times its time (2026-11-16)
   a reply reasoned for 9 minutes, then the connection dropped ("error
@@ -11,7 +57,7 @@
   with the request sent again, as it does when a reply reaches the output
   limit while still reasoning: "Your reply was cut off after 548 seconds by an
   error (...), while you were still reasoning; the request is sent again.
-  Your reasoning is not kept from one reply to the next. Here it is: ...". A
+  Your next reply would start without that reasoning. Here it is: ...". A
   request that fails before anything streamed is sent again as before.
   Recorded as an `act_reminder` event of kind `broken_stream`.
 - **The clock counts it.** With `nudges.clock`, time spent in replies that

@@ -125,6 +125,7 @@ pub(crate) fn assemble(model: &str, rt: &Runtime, p: RequestParts<'_>) -> Messag
         speed: fast.then(|| "fast".to_string()),
         stream: true,
         betas: if fast { vec![FAST_MODE_BETA.to_string()] } else { vec![] },
+        carry_reasoning: false,
     }
 }
 

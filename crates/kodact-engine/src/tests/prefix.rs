@@ -126,6 +126,7 @@ fn the_checker_finds_each_kind_of_change() {
         speed: None,
         stream: true,
         betas: vec![],
+        carry_reasoning: false,
     };
     let first = req("sys", vec![Message::user_text("a")]);
     let reply = Message::assistant(vec![thought(0), ContentBlock::text("b")]);

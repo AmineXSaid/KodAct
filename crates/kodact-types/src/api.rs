@@ -385,6 +385,11 @@ pub struct MessagesRequest {
     /// header, not the body.
     #[serde(skip)]
     pub betas: Vec<String>,
+    /// The chat-completions writer sends each assistant message's reasoning back
+    /// (`reasoning_content`) where its Thinking blocks are still in the request: the engine keeps
+    /// them only for the replies it carries (`carryReasoning`). Not part of any wire format.
+    #[serde(skip)]
+    pub carry_reasoning: bool,
 }
 
 /// Content-block delta inside `content_block_delta`.

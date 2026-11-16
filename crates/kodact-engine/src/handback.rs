@@ -123,7 +123,7 @@ pub(crate) fn notes(
         )
     };
     let text = format!(
-        "<system-reminder>\n{what} Your reasoning is not kept from one reply to the next.{shown}\n\n\
+        "<system-reminder>\n{what} Your next reply would start without that reasoning.{shown}\n\n\
          Go on from where it stopped instead of starting over, and act now: take the next concrete step \
          (run a command, make an edit, or give your answer), then continue from its result.\n</system-reminder>"
     );

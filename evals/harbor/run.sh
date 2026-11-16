@@ -39,6 +39,8 @@
 #                         and the tests, never the agent's own (default 3; 1: Harbor's)
 #   KODACT_STATIC_BIN      use this binary as is (job name gets -custombin); by default
 #                         target-static/release/kodact is rebuilt when the source changed
+#   KODACT_CARRY_REASONING 1: the model's reasoning goes back with each request, where the
+#                         endpoint drops it (carryReasoning; job name gets -carry)
 #   KODACT_NUDGES          the nudges on in every task (job name gets -n-<list>, so an A/B of
 #                         nudges off and on is two jobs told apart by name)
 #   KODACT_*               endpoint, key and limits, passed into the containers
@@ -90,6 +92,8 @@ ca=""
 [ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ] && ca="${ca}-hfmirror"
 [ -n "${KODACT_HARBOR_MAX_OUTPUT:-}" ] && ca="${ca}-maxout${KODACT_HARBOR_MAX_OUTPUT}"
 [ -n "${KODACT_HARBOR_TIME_LIMIT:-}" ] && ca="${ca}-time$(printf '%s' "$KODACT_HARBOR_TIME_LIMIT" | tr -c 'A-Za-z0-9' '.')"
+# As kodact reads it: set and not 0, false, no or off.
+case "${KODACT_CARRY_REASONING:-}" in ""|0|false|no|off) ;; *) ca="${ca}-carry" ;; esac
 [ -n "${KODACT_NUDGES:-}" ] && ca="${ca}-n-$(printf '%s' "$KODACT_NUDGES" | tr -c 'A-Za-z0-9' '.')"
 [ -n "${KODACT_HARBOR_ARGS:-}" ] && ca="${ca}-args-$(printf '%s' "$KODACT_HARBOR_ARGS" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-40)"
 case "${KODACT_HARBOR_AUTONOMOUS:-1}" in 0|false|no|off) ca="${ca}-noauto" ;; esac

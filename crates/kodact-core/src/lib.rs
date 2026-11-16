@@ -341,6 +341,16 @@ pub(crate) fn line_edits(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// Whether the model's reasoning goes back with each request where the endpoint drops it (chat
+/// completions), for the session and its sub-agents: `carryReasoning`, or `KODACT_CARRY_REASONING`
+/// (for A/B runs). Off by default until it is measured.
+pub(crate) fn carry_reasoning(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_CARRY_REASONING") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/carryReasoning").unwrap_or(false),
+    }
+}
+
 /// Whether Edit may change a file never read when the call holds its exact text:
 /// `edit.withoutRead`, or `KODACT_EDIT_UNREAD` (for A/B runs). Off by default until it is measured.
 pub(crate) fn unread_edits(settings: &LoadedSettings) -> bool {
@@ -1151,6 +1161,8 @@ pub fn build_session(
             autocompact_window,
             auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
             background_summary: background_summary(&settings),
+            // As in the session: a sub-agent on the same endpoint gets its reasoning back too.
+            carry_reasoning: carry_reasoning(&settings),
             ..Default::default()
         },
         memory_context: memory.clone(),
@@ -1179,6 +1191,7 @@ pub fn build_session(
         autonomous,
         api_retry_wait: EngineConfig::default().api_retry_wait,
         time_box_floor: EngineConfig::default().time_box_floor,
+        carry_reasoning: carry_reasoning(&settings),
         json_schema: opts.json_schema.clone(),
         pricing,
         initial_context: (!initial.is_empty()).then(|| initial.join("\n\n")),

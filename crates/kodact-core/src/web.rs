@@ -40,6 +40,7 @@ fn request(model: &str, system: &str, user: String, tools: Vec<ToolSpec>, max_to
         speed: None,
         stream: true,
         betas: vec![],
+        carry_reasoning: false,
     }
 }
 

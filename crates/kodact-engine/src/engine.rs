@@ -157,6 +157,15 @@ fn lost_line(secs: f64) -> Option<String> {
     })
 }
 
+/// The endpoint refused the reasoning sent back: a 400 or 422 that names the field
+/// (`reasoning_content`) without asking for it. "Must be passed back", "missing" and "required"
+/// say the opposite: DeepSeek's thinking mode refuses a tool loop that goes *without* it.
+fn refuses_reasoning(e: &ApiError) -> bool {
+    let ApiError::Http { status: 400 | 422, message, .. } = e else { return false };
+    let m = message.to_lowercase();
+    m.contains("reasoning_content") && !["must be", "missing", "required", "passed back"].iter().any(|w| m.contains(w))
+}
+
 /// A span as the clock says it: `45s`, `27m05s`.
 fn clock_time(d: Duration) -> String {
     let s = d.as_secs();
@@ -315,6 +324,10 @@ pub struct EngineConfig {
     /// The least a reply may think before the thinking time-box (`nudges.thinkingTimeBox`) can
     /// stop it (2 minutes; tests set it lower).
     pub time_box_floor: Duration,
+    /// `carryReasoning`: where the endpoint drops the model's reasoning between requests (chat
+    /// completions), every reply's reasoning still in the conversation goes back with each
+    /// request, as DeepSeek's thinking mode asks when tools are used.
+    pub carry_reasoning: bool,
     /// `--json-schema`: structured output for the final answer.
     pub json_schema: Option<Value>,
     pub pricing: HashMap<String, Pricing>,
@@ -437,6 +450,7 @@ impl Default for EngineConfig {
             autonomous: false,
             api_retry_wait: API_RETRY_FIRST_WAIT,
             time_box_floor: TIME_BOX_FLOOR,
+            carry_reasoning: false,
             json_schema: None,
             pricing: HashMap::new(),
             initial_context: None,
@@ -890,6 +904,11 @@ pub struct Engine {
     clock_turn_told: u32,
     /// Where this request started in `reply_secs` and `lost_reply_secs`, for the clock.
     clock_turn_marks: (usize, f64),
+    /// Models whose endpoint refused their reasoning sent back (`carryReasoning`): their requests
+    /// go without it for the rest of the session.
+    carry_refused: HashSet<String>,
+    /// The last request carried reasoning: a refusal of it is told from others.
+    last_carried: std::sync::atomic::AtomicBool,
     /// Seconds of model calls that failed after they had run a while (a stream that broke
     /// mid-reply), sent again: time the clock counts apart from the replies.
     lost_reply_secs: f64,
@@ -1059,6 +1078,8 @@ impl Engine {
             clock_told: 0,
             clock_turn_told: 0,
             clock_turn_marks: (0, 0.0),
+            carry_refused: HashSet::new(),
+            last_carried: std::sync::atomic::AtomicBool::new(false),
             lost_reply_secs: 0.0,
             broken_reasoning: Mutex::new(None),
             ran_commands: vec![],
@@ -1776,9 +1797,10 @@ impl Engine {
 
     /// Take the conversation's size from a reply in it, which is pushed right after: what its
     /// request held, plus what the next request carries of the reply. Its reasoning counts only
-    /// when the provider sends reasoning back. Over chat completions it is gone after the reply,
-    /// and counting it compacted conversations at a quarter of the window (9ef0955:
-    /// 24k tokens in the request plus a 32k reply that was all reasoning, counted as 56k).
+    /// when the next request sends reasoning back (the provider's own way, or `carryReasoning`).
+    /// Otherwise, over chat completions, it is gone after the reply, and counting it compacted
+    /// conversations at a quarter of the window (9ef0955: 24k tokens in the request plus a 32k
+    /// reply that was all reasoning, counted as 56k).
     fn measure_context(&mut self, model: &str, reply: &ApiMessage) {
         let u = &reply.usage;
         let input = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens;
@@ -1786,7 +1808,7 @@ impl Engine {
         // `projected_context_tokens` estimate the whole request instead.
         self.state.context_tokens = if input == 0 {
             0
-        } else if self.shared.provider.resends_reasoning(model) {
+        } else if self.keeps_reasoning(model) {
             input + u.output_tokens
         } else {
             // The reply's text and calls, as their share of its output (by characters). With no
@@ -1804,9 +1826,9 @@ impl Engine {
         self.state.counted = self.state.messages.len() + 1;
     }
 
-    /// Estimate `msgs` as a request carries them: without reasoning when the provider leaves it out.
+    /// Estimate `msgs` as a request carries them: without reasoning when it leaves it out.
     fn estimate_sent(&self, msgs: &[Message]) -> u64 {
-        kodact_compact::estimate_sent_tokens(msgs, self.shared.provider.resends_reasoning(&self.handle.model()))
+        kodact_compact::estimate_sent_tokens(msgs, self.keeps_reasoning(&self.handle.model()))
     }
 
     /// Count a request's tokens and cost toward the session. The conversation's size is
@@ -2985,7 +3007,8 @@ impl Engine {
             if turn.api_calls > 0 {
                 self.maybe_compact(&model, true, &cancel, &mut turn).await;
             }
-            let req = self.build_request(&model);
+            let mut req = self.build_request(&model);
+            self.carry_reasoning_into(&mut req, &model);
             let sent = req.max_tokens;
             tracing::debug!(
                 model = %req.model,
@@ -3103,6 +3126,23 @@ impl Engine {
                         None,
                     );
                 }
+                StreamOutcome::Failed(e)
+                    if self.last_carried.load(std::sync::atomic::Ordering::Relaxed) && refuses_reasoning(&e) =>
+                {
+                    self.carry_refused.insert(model.clone());
+                    self.system_event(
+                        "carry_reasoning",
+                        json!({"refused": true, "model": model, "error": e.to_string()}),
+                    );
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!(
+                            "The endpoint refused the model's reasoning sent back ({e}); requests to {model} go \
+                             without it for the rest of the session."
+                        ),
+                    );
+                    continue;
+                }
                 StreamOutcome::Failed(e) if !learned_output && self.learn_output_limit(&model, &e, sent) => {
                     learned_output = true;
                     continue;
@@ -3201,8 +3241,7 @@ impl Engine {
                             let secs = took.as_secs();
                             let what = format!(
                                 "Your reply was cut off after {secs} seconds by an error ({e}), while you were still \
-                                 reasoning; the request is sent again. Your reasoning is not kept from one reply to the \
-                                 next. Here it is:"
+                                 reasoning; the request is sent again."
                             );
                             let h = self.reasoning_notes(&what, &model, &reasoning);
                             let mut event = h.event("broken_stream");
@@ -3896,6 +3935,37 @@ impl Engine {
         ))
     }
 
+    /// `carryReasoning` is on for `model`: its endpoint drops reasoning between requests (chat
+    /// completions, but for Gemini's models), and hasn't refused it sent back.
+    fn carries_reasoning(&self, model: &str) -> bool {
+        self.cfg.carry_reasoning
+            && !self.shared.provider.resends_reasoning(model)
+            && !self.carry_refused.contains(model)
+    }
+
+    /// The next request sends `model` its reasoning back: the provider's own way, or carried.
+    fn keeps_reasoning(&self, model: &str) -> bool {
+        self.shared.provider.resends_reasoning(model) || self.carries_reasoning(model)
+    }
+
+    /// `carryReasoning`: mark `req` for the writer to send back the reasoning of every reply still
+    /// in the conversation (`reasoning_content`), as DeepSeek's thinking mode asks when tools are
+    /// used ("the `reasoning_content` of all previous turns should be passed back to the API"). A
+    /// reply that worked something out keeps it for the next step instead of working it out
+    /// again. The window bounds it as it bounds everything else: compaction counts it
+    /// ([`Self::keeps_reasoning`]) and summarizes it away with the rest.
+    fn carry_reasoning_into(&self, req: &mut MessagesRequest, model: &str) {
+        let carried = self.carries_reasoning(model)
+            && req.messages.iter().any(|m| {
+                m.role == kodact_types::Role::Assistant
+                    && m.content
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::Thinking { thinking, .. } if !thinking.is_empty()))
+            });
+        req.carry_reasoning = carried;
+        self.last_carried.store(carried, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// The clock (`nudges.clock`): the facts of where the work stands, no advice (what to do with
     /// them is the model's call).
     /// - With a time limit: once each time another tenth of it has gone, until the last fifth
@@ -4121,12 +4191,13 @@ impl Engine {
     }
 
     /// The reminder after a reply that was all reasoning, with what it hands back of that
-    /// reasoning. A provider that sends reasoning back keeps it in the next request, and `plain`
-    /// applies. One that doesn't (chat completions) drops it, and "do not restart the analysis"
-    /// asks for what the model no longer has: a run (9ef0955) began the same analysis again in
-    /// three cut-off replies in a row and wrote nothing. There, the reminder carries the reasoning.
+    /// reasoning. Where the next request sends reasoning back (the provider's own way, or
+    /// `carryReasoning`) the reply keeps it, and `plain` applies. Elsewhere (chat completions) it
+    /// is dropped, and "do not restart the analysis" asks for what the model no longer has: a run
+    /// (9ef0955) began the same analysis again in three cut-off replies in a row and wrote
+    /// nothing. There, the reminder carries the reasoning.
     fn act_reminder(&self, plain: &str, what: &str, model: &str, reasoning: &str) -> Handback {
-        if reasoning.trim().is_empty() || self.shared.provider.resends_reasoning(model) {
+        if reasoning.trim().is_empty() || self.keeps_reasoning(model) {
             return Handback::plain(plain);
         }
         self.reasoning_notes(what, model, reasoning)

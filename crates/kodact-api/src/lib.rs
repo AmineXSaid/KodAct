@@ -428,9 +428,10 @@ pub trait Provider: Send + Sync {
         None
     }
 
-    /// Does a request send the model's earlier reasoning back to it? Then a reply's reasoning
-    /// takes room in the next request. The Messages API and Gemini send it back; chat
-    /// completions don't (except to Gemini), so there the reasoning is gone after its reply.
+    /// Does a request send the model's earlier reasoning back to it on its own? Then a reply's
+    /// reasoning takes room in the next request. The Messages API and Gemini send it back; chat
+    /// completions don't (except to Gemini), so there the reasoning is gone after its reply,
+    /// unless the request carries it ([`MessagesRequest::carry_reasoning`], `carryReasoning`).
     fn resends_reasoning(&self, _model: &str) -> bool {
         true
     }

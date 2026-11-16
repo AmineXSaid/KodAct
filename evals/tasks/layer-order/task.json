@@ -1,0 +1,12 @@
+{
+  "instruction": "Write dump.py so that `python3 dump.py model.bin` prints one line per layer, from layer0 to layer11, like `layer3 weight=0.1250 bias=-1.0000 scale=2.0000` (4 decimals). NOTES.md describes the file. Then save its output for model.bin in layers.txt, and write in strongest.txt the name of the layer with the largest scale.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "context",
+  "tags": [
+    "reasoning",
+    "analysis",
+    "layout",
+    "carry"
+  ],
+  "timeout_secs": 600
+}

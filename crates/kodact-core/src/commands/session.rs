@@ -75,6 +75,7 @@ pub(crate) async fn side_request_on(
         speed: None,
         stream: true,
         betas: vec![],
+        carry_reasoning: false,
     };
     let provider = d.engine.provider();
     let msg = kodact_api::complete(provider.as_ref(), req, cancel).await.map_err(|e| e.to_string())?;

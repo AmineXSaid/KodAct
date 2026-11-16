@@ -477,6 +477,7 @@ mod provider_data_tests {
             speed: None,
             stream: true,
             betas: vec![],
+            carry_reasoning: false,
         };
         let mut body = serde_json::to_value(&req).unwrap();
         super::strip_provider_data(&mut body);
@@ -511,6 +512,7 @@ mod provider_data_tests {
             speed: None,
             stream: true,
             betas: vec![],
+            carry_reasoning: false,
         };
         let mut body = serde_json::to_value(&req).unwrap();
         super::strip_provider_data(&mut body);

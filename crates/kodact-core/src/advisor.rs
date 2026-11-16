@@ -88,6 +88,7 @@ impl Tool for Advisor {
             speed: None,
             stream: true,
             betas: vec![],
+            carry_reasoning: false,
         };
         let msg = match kodact_api::complete(self.provider.as_ref(), req, &ctx.cancel).await {
             Ok(m) => m,

@@ -85,6 +85,20 @@ def test_the_job_name_says_a_time_limit_set_by_hand():
     assert "-time" not in plain.stdout
 
 
+def test_the_job_name_says_reasoning_is_carried():
+    run = (HERE / "run.sh").read_text()
+    lines = [ln for ln in run.splitlines() if ln.startswith('case "${KODACT_CARRY_REASONING')]
+    assert len(lines) == 1, lines
+    script = 'ca=""\n' + lines[0] + '\nprintf "%s" "$ca"'
+    env = {k: v for k, v in os.environ.items() if not k.startswith("KODACT_")}
+    # The values kodact itself reads as off (kodact-core's carry_reasoning) name no carry.
+    for value, name in [("1", "-carry"), ("true", "-carry"), ("", ""), ("0", ""), ("false", ""), ("no", ""), ("off", "")]:
+        r = subprocess.run(["bash", "-c", script], env={**env, "KODACT_CARRY_REASONING": value}, capture_output=True, text=True)
+        assert r.stdout == name, (value, r.stdout)
+    r = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+    assert r.stdout == "", r.stdout
+
+
 def test_the_agent_gives_kodact_the_limit_for_the_runs_model():
     got = flags("deep-thinking", [], KODACT_HARBOR_MAX_OUTPUT="65536")
     assert got[0] == "--settings"

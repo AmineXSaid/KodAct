@@ -2532,6 +2532,7 @@ async fn a_reply_whose_stream_breaks_hands_its_reasoning_to_the_retry() {
     let resent = last_user_text(&reqs[1]);
     assert!(resent.contains("The tensors are in name order, h0 first."), "the reasoning goes back: {resent}");
     assert!(resent.contains("cut off after") && resent.contains("error decoding response body"), "{resent}");
+    assert_eq!(resent.matches("would start without that reasoning").count(), 1, "said once: {resent}");
     assert!(h.transcript_text().contains(r#""kind":"broken_stream""#));
 
     // Nothing streamed before the failure: the request goes again as it was.
@@ -2544,6 +2545,241 @@ async fn a_reply_whose_stream_breaks_hands_its_reasoning_to_the_retry() {
     let reqs = h.provider.requests();
     assert_eq!(last_user_text(&reqs[1]), last_user_text(&reqs[2]), "sent again unchanged");
     assert!(!h.transcript_text().contains("broken_stream"));
+}
+
+/// A reply that reasons, then runs one command per name in `cmds` (several: parallel calls, each
+/// result a user message of its own in the conversation).
+fn carry_step(think: &str, cmds: &[&str]) -> MockTurn {
+    let mut blocks = vec![ContentBlock::Thinking { thinking: think.into(), signature: String::new() }];
+    blocks.extend(cmds.iter().map(|c| ContentBlock::ToolUse {
+        id: format!("toolu_{c}"),
+        name: "Bash".into(),
+        input: json!({"command": format!("echo {c}")}),
+        cache_control: None,
+        provider: None,
+    }));
+    MockTurn::blocks(blocks, kodact_types::StopReason::ToolUse)
+}
+
+fn carry_answer(think: &str, text: &str) -> MockTurn {
+    MockTurn::blocks(
+        vec![ContentBlock::Thinking { thinking: think.into(), signature: String::new() }, ContentBlock::text(text)],
+        kodact_types::StopReason::EndTurn,
+    )
+}
+
+/// The reasoning a request holds, message by message (those with none left out).
+fn carried(r: &kodact_types::MessagesRequest) -> Vec<String> {
+    r.messages
+        .iter()
+        .map(|m| {
+            m.content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Thinking { thinking, .. } => Some(thinking.as_str()),
+                    _ => None,
+                })
+                .collect::<String>()
+        })
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// An engine with `carryReasoning` on, over a provider that drops reasoning (chat completions).
+fn carrying(h: &Harness) -> Engine {
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    h.provider.set_resends_reasoning(false);
+    let cfg = EngineConfig { carry_reasoning: true, ..Default::default() };
+    h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}))
+}
+
+/// gpt2-codegolf with three times its time (2026-11-16): on chat completions the model's reasoning
+/// is dropped between requests, and 23 of 38 replies worked out the same tensor layout again: the
+/// one verified at step 18 was doubted at step 19, which started without that reasoning. With
+/// `carryReasoning`, every reply's reasoning still in the conversation goes back with each
+/// request, as DeepSeek's thinking mode asks when tools are used. Parallel calls and reminders
+/// leave several user messages in a row, merged into one for the wire: the reasoning goes all
+/// the same.
+#[tokio::test]
+async fn carried_reasoning_goes_back_with_every_request() {
+    let h = Harness::new(vec![
+        carry_answer("plan for the first question", "first answer"),
+        carry_step("the layout is name-sorted, h0 first", &["a"]),
+        carry_step("check both files", &["b", "c"]),
+        carry_step("so write the program now", &["d"]),
+        carry_answer("done reasoning", "done"),
+    ]);
+    let mut e = carrying(&h);
+    e.submit(prompt("first question")).await;
+    let r = e.submit(prompt("write gpt2.c")).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 5);
+    assert!(!reqs[0].carry_reasoning, "nothing to carry yet");
+    assert!(reqs[1..].iter().all(|r| r.carry_reasoning));
+    assert_eq!(carried(&reqs[1]), ["plan for the first question"], "an earlier prompt's too");
+    // After two calls in one reply: two results, one message on the wire.
+    assert_eq!(
+        carried(&reqs[4]),
+        [
+            "plan for the first question",
+            "the layout is name-sorted, h0 first",
+            "check both files",
+            "so write the program now"
+        ]
+    );
+    // On the wire (chat completions), after the two calls: each reply's reasoning as
+    // `reasoning_content`, and the request ends with the tool results, not a user message.
+    let wire = kodact_api::openai::to_chat_request(&reqs[3]);
+    let sent = wire["messages"].as_array().unwrap();
+    assert_eq!(sent.iter().filter(|m| m.get("reasoning_content").is_some()).count(), 3, "{sent:?}");
+    assert_eq!(sent.last().unwrap()["role"], "tool", "{sent:?}");
+
+    // Off, or a provider that sends reasoning back its own way: the request isn't marked.
+    for (carry, resends) in [(false, false), (true, true)] {
+        let h = Harness::new(vec![carry_step("x", &["a"]), carry_answer("y", "done")]);
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        h.provider.set_resends_reasoning(resends);
+        let cfg = EngineConfig { carry_reasoning: carry, ..Default::default() };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("go")).await;
+        assert!(h.provider.requests().iter().all(|r| !r.carry_reasoning), "carry {carry}, resends {resends}");
+    }
+}
+
+/// An endpoint that refuses the reasoning sent back (a 400 or 422 naming the field) gets the
+/// request again without it, and requests to that model go without it from then on; another
+/// model's carry it. "Must be passed back" says the opposite (DeepSeek's thinking mode refuses a
+/// tool loop without it) and turns nothing off; nor does an error that names reasoning another
+/// way, or one that answers a request that carried nothing.
+#[tokio::test]
+async fn a_refusal_of_carried_reasoning_is_told_from_other_errors() {
+    let error = |status: u16, message: &str| MockTurn::HttpError {
+        status,
+        kind: "invalid_request_error".into(),
+        message: message.into(),
+    };
+    let refused = |h: &Harness| h.transcript_text().contains(r#""subtype":"carry_reasoning""#);
+    let flags = |h: &Harness| h.provider.requests().iter().map(|r| r.carry_reasoning).collect::<Vec<_>>();
+
+    for (status, message) in [
+        (400, "Unrecognized request argument supplied: reasoning_content"),
+        (422, "messages.1.reasoning_content: Extra inputs are not permitted"),
+    ] {
+        let h = Harness::new(vec![
+            carry_step("x", &["a"]),
+            error(status, message),
+            carry_step("y", &["b"]),
+            carry_answer("z", "done"),
+        ]);
+        let mut e = carrying(&h);
+        let r = e.submit(prompt("go")).await;
+        assert_eq!(r.result.as_deref(), Some("done"), "{message}");
+        assert_eq!(flags(&h), [false, true, false, false], "{message}");
+        assert!(refused(&h), "{message}");
+    }
+
+    // Not a refusal: the request fails as any other would, and the reasoning keeps going back.
+    for (first, message) in [
+        (carry_step("x", &["a"]), "The reasoning_content in the thinking mode must be passed back to the API."),
+        (carry_step("x", &["a"]), "Missing reasoning_content field in assistant message"),
+        (carry_step("x", &["a"]), "model kgpt-reasoning-text: invalid value for reasoning_effort"),
+        // Nothing was carried: the first request has no reasoning to send.
+        (MockTurn::text("hi"), "Unrecognized request argument supplied: reasoning_content"),
+    ] {
+        let h = Harness::new(vec![
+            first,
+            error(400, message),
+            carry_step("y", &["b"]),
+            carry_answer("z", "done"),
+            carry_answer("w", "again"),
+        ]);
+        let mut e = carrying(&h);
+        for p in ["go", "go on", "and the rest"] {
+            e.submit(prompt(p)).await;
+        }
+        assert!(!refused(&h), "{message}");
+        let reqs = h.provider.requests();
+        assert!(reqs.last().unwrap().carry_reasoning, "{message}: {:?}", flags(&h));
+    }
+
+    // Refused for one model: another still carries its own reasoning.
+    let h = Harness::new(vec![
+        carry_step("x", &["a"]),
+        error(400, "Unrecognized request argument supplied: reasoning_content"),
+        carry_answer("z", "done"),
+        carry_step("the other model's plan", &["b"]),
+        carry_answer("w", "done again"),
+    ]);
+    let mut e = carrying(&h);
+    e.submit(prompt("go")).await;
+    e.handle().set_model("other-model");
+    let r = e.submit(prompt("go on")).await;
+    assert_eq!(r.result.as_deref(), Some("done again"));
+    let reqs = h.provider.requests();
+    assert_eq!(flags(&h)[..3], [false, true, false]);
+    assert!(reqs[4].carry_reasoning && carried(&reqs[4]).contains(&"the other model's plan".to_string()));
+}
+
+/// Carried reasoning is in the next request: it counts toward the context as it does where the
+/// provider sends reasoning back, and a reply that was all reasoning keeps it, so the reminder
+/// after it doesn't hand it back a second time.
+#[tokio::test]
+async fn carried_reasoning_counts_as_context_and_is_not_handed_back_twice() {
+    use kodact_types::StopReason;
+    let long: String = (0..1_000).map(|i| format!("which squares can the knight reach from {i:04}? ")).collect();
+    let reply = || {
+        MockTurn::blocks(
+            vec![
+                ContentBlock::Thinking { thinking: long.clone(), signature: String::new() },
+                ContentBlock::text("noted"),
+            ],
+            StopReason::EndTurn,
+        )
+        .with_usage(kodact_types::Usage { input_tokens: 5_000, output_tokens: 12_000, ..Default::default() })
+    };
+    // Both ends of the window. 24k (compaction at 15k): the 17k counted compacts before the next
+    // prompt, and the reasoning goes with the summary. 1M: it stays and goes back.
+    for window in [24_000, 1_000_000] {
+        let small = window == 24_000;
+        let mut turns = vec![reply()];
+        if small {
+            turns.push(MockTurn::text("<summary>s</summary>"));
+        }
+        turns.push(MockTurn::text("second answer"));
+        let h = Harness::new(turns);
+        h.provider.set_resends_reasoning(false);
+        let cfg = EngineConfig { carry_reasoning: true, autocompact_window: Some(window), ..Default::default() };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("first")).await;
+        assert_eq!(e.projected_context_tokens(), 17_000, "{window}: the reasoning goes back, so it counts");
+        let r = e.submit(prompt("second")).await;
+        assert_eq!(r.result.as_deref(), Some("second answer"));
+        let reqs = h.provider.requests();
+        let next = reqs.last().unwrap();
+        assert_eq!(reqs.len(), if small { 3 } else { 2 }, "{window}: a summary only in the small window");
+        assert_eq!(next.carry_reasoning, !small, "{window}");
+        assert_eq!(carried(next).len(), usize::from(!small), "{window}");
+    }
+
+    let start = "This is a range coder with an adaptive model.";
+    for carry in [true, false] {
+        let h = Harness::new(vec![
+            MockTurn::blocks(
+                vec![ContentBlock::Thinking { thinking: start.into(), signature: String::new() }],
+                StopReason::MaxTokens,
+            ),
+            MockTurn::text("wrote data.comp"),
+        ]);
+        h.provider.set_resends_reasoning(false);
+        let cfg = EngineConfig { carry_reasoning: carry, ..Default::default() };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        let r = e.submit(prompt("write data.comp")).await;
+        assert_eq!(r.result.as_deref(), Some("wrote data.comp"));
+        let next = &h.provider.requests()[1];
+        assert_eq!(next.carry_reasoning, carry);
+        assert_eq!(last_user_text(next).contains(start), !carry, "carry {carry}: {}", last_user_text(next));
+    }
 }
 
 /// With a fallback model set, a model that stays limited hands the turn over: after a few
