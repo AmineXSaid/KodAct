@@ -2,6 +2,19 @@
 
 ## 0.1.0 (unreleased)
 
+### A file a shell command printed whole counts as read
+- **What happened.** Edit and Write refuse a file the model hasn't read, or
+  that changed since. Only the Read tool counted as reading. On 2026-11-16, in
+  15 long-horizon eval runs, a model that reads files with `cat` was refused
+  three times for a file it had just printed whole (`cat pack.py` at the first
+  step, then an Edit at the fourth): each time a model call spent reading
+  what it had already seen, and a Write's whole content sent again.
+- **Now** a file whose whole current content a shell command printed, in
+  output still in the conversation, counts as read, as a Read would make it.
+  The protection stays where it matters: a file printed in part (`head -1`),
+  changed since it was printed, never printed, or whose output compaction
+  has cleared from the conversation must still be read first.
+
 ### A file the person builds or runs, or one only described, isn't "missing"
 - **What happened.** The result's `verification.missing` named files the
   request never asked the model to make:

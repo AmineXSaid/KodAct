@@ -314,6 +314,8 @@ impl Tool for Bash {
         let max = ctx.max_output_chars;
         let stdout = fit_output(ctx, res.stdout.trim_end(), max, "stdout");
         let stderr = fit_output(ctx, res.stderr.trim_end(), max, "stderr");
+        // A file printed whole here counts as read: what the model was shown, after any cut.
+        ctx.files.record_shown(&ctx.tool_use_id, &stdout);
         let mut text = stdout.clone();
         if !stderr.is_empty() {
             if !text.is_empty() {
@@ -412,6 +414,7 @@ fn moved_to_background(sh: &Arc<BackgroundShell>, waited_ms: u64, ctx: &ToolCont
     let max = ctx.max_output_chars;
     let stdout = fit_output(ctx, out.trim_end(), max, "stdout");
     let stderr = fit_output(ctx, err.trim_end(), max, "stderr");
+    ctx.files.record_shown(&ctx.tool_use_id, &stdout);
     let mut text = format!(
         "The command is still running after {}. It was not stopped: it goes on in the background as {id}, and \
          you will be told when it exits. Meanwhile do other work, read its new output with BashOutput or stop \

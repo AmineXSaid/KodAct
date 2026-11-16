@@ -298,6 +298,12 @@ Each pillar lists what KodAct does about it and what shows that it works.
   file never read when the call holds its exact text, inside the working
   directories: a line a search already showed is edited without a Read
   first, one model call fewer per small fix (task `edit-from-search`).
+  A file a shell command printed whole (`cat pack.py`), in output still in
+  the conversation, counts as read: on 2026-11-16 a deep-thinking model that
+  read files with `cat` was refused an Edit or Write as "not read" or
+  "modified since read" three times in 15 long-horizon runs, each a model
+  call spent reading what it had just seen. A file printed in part, changed
+  since, or whose output compaction cleared must still be read.
   A missing path also names a file with a close name elsewhere below the
   nearest directory that exists (the request named another folder or case),
   found in that pass.

@@ -455,6 +455,31 @@ async fn read_numbers_lines_and_pages() {
     assert!(out.is_error && out.text_content().contains("directory"));
 }
 
+/// stop-at-target (2026-11-16): `cat pack.py` at the first step, an Edit at the fourth, refused as
+/// unread, and a Read spent on what the model had just seen. A file a command printed in full
+/// may be edited and written; one printed in part (`head -1`) still has to be read.
+#[tokio::test]
+async fn a_file_a_command_printed_whole_may_be_written() {
+    let d = tempfile::tempdir().unwrap();
+    let f = p(d.path(), "pack.py");
+    let g = p(d.path(), "items.txt");
+    std::fs::write(&f, "def pack(w):\n    return [w]\n").unwrap();
+    std::fs::write(&g, "1\n2\n3\n").unwrap();
+    let mut c = ctx(d.path());
+    c.tool_use_id = "toolu_1".into();
+    let edit = json!({"file_path": f, "old_string": "[w]", "new_string": "[]"});
+    assert!(Edit::default().validate(&edit, &c).unwrap_err().contains("not been read"));
+    let out =
+        Bash::default().call(json!({"command": "ls; echo ---; cat pack.py; echo ---; head -1 items.txt"}), &c).await;
+    assert!(!out.is_error, "{out:?}");
+    Edit::default().validate(&edit, &c).unwrap();
+    let out = Edit::default().call(edit, &c).await;
+    assert!(!out.is_error, "{out:?}");
+    // Only the first line of items.txt was shown.
+    let write = json!({"file_path": g, "content": "4\n"});
+    assert!(Write.validate(&write, &c).unwrap_err().contains("not been read"));
+}
+
 #[tokio::test]
 async fn edit_requires_read_and_unique_match() {
     let d = tempfile::tempdir().unwrap();
