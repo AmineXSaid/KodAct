@@ -31,6 +31,11 @@
   read from the cache after its first request. Nothing changes where the
   provider sends reasoning back on its own (the Messages API, Gemini), or
   where the endpoint returns none.
+- **Valid on DeepSeek's own API.** A reply that was all reasoning goes with
+  `content: ""` rather than null (DeepSeek refuses an assistant message with
+  neither content nor tool calls, carried or not), and with reasoning carried
+  a tool-call message whose step reasoned nothing gets a blank
+  `reasoning_content`, which DeepSeek asks for on every such message.
 - **Safe on an endpoint that refuses it.** A 400 or 422 naming
   `reasoning_content` (not one asking for it, as "must be passed back") sends
   the request again without it, and requests to that model go without it for

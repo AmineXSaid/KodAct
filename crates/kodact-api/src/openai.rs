@@ -379,6 +379,17 @@ fn push_message(out: &mut Vec<Value>, m: &Message, w: &Writing) {
                     calls.push(call);
                 }
             }
+            // DeepSeek's API (and other strict validators) refuse an assistant message with neither
+            // content nor tool calls ("content or tool_calls must be set"), which a reply that was
+            // all reasoning would be: its content goes as "" instead of null.
+            if calls.is_empty() && text.is_empty() {
+                msg["content"] = json!("");
+            }
+            // Carried reasoning: DeepSeek's thinking mode refuses a tool-call message without
+            // `reasoning_content` once any is sent back. A step that reasoned nothing gets a blank.
+            if w.carry && !calls.is_empty() && msg.get("reasoning_content").is_none() {
+                msg["reasoning_content"] = json!(" ");
+            }
             if !calls.is_empty() {
                 msg["tool_calls"] = Value::Array(calls);
             }
@@ -1954,6 +1965,38 @@ mod gemini_tests {
         carried.carry_reasoning = true;
         let body = to_chat_request(&carried);
         assert_eq!(body["messages"][1]["reasoning_content"], "Look at the file first.");
+    }
+
+    /// What DeepSeek's API validates: an assistant message carries content or tool calls (a reply
+    /// that was all reasoning goes with `content: ""`, not null), and with reasoning carried every
+    /// tool-call message carries `reasoning_content`, a blank where the step reasoned nothing.
+    #[test]
+    fn assistant_messages_pass_strict_validators() {
+        let call = ContentBlock::ToolUse {
+            id: "t1".into(),
+            name: "Bash".into(),
+            input: json!({"command": "ls"}),
+            cache_control: None,
+            provider: None,
+        };
+        let thought = ContentBlock::Thinking { thinking: "still working it out".into(), signature: String::new() };
+        let messages = vec![
+            Message::user_text("go"),
+            Message::assistant(vec![thought]),
+            Message::user_text("act now"),
+            Message::assistant(vec![call]),
+            Message::user(vec![ContentBlock::tool_result("t1", "a.c", false)]),
+        ];
+        for carry in [false, true] {
+            let req =
+                MessagesRequest { carry_reasoning: carry, ..request("deep-thinking", messages.clone(), vec![], None) };
+            let body = to_chat_request(&req);
+            let sent = body["messages"].as_array().unwrap();
+            assert_eq!(sent[1]["content"], "", "carry {carry}: {sent:?}");
+            assert_eq!(sent[1].get("reasoning_content").is_some(), carry);
+            assert_eq!(sent[3]["content"], Value::Null, "a call's message keeps null content");
+            assert_eq!(sent[3].get("reasoning_content"), carry.then(|| json!(" ")).as_ref(), "carry {carry}");
+        }
     }
 
     /// Carried reasoning stays in the tool loop: KodAct's reminders that come with tool results go
