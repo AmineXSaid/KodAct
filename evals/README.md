@@ -41,6 +41,24 @@ scripts/nudge-ab.sh --repeat 1 suite -- --model sonnet --dangerously-skip-permis
 
 `scripts/nudge-ab.sh --help` lists the groups and how to read the tables.
 
+Two A/Bs the breadth plan owes before building on either feature, with one
+build. Sub-agents: does the Task tool help on work that splits into
+independent parts (A with it, B without)?
+
+```bash
+target/release/kodact-eval run --label task-on --repeat 3 --only three-reports --only parallel-plugins --only trace-discount -- --model sonnet --dangerously-skip-permissions
+target/release/kodact-eval run --label task-off --repeat 3 --only three-reports --only parallel-plugins --only trace-discount -- --model sonnet --dangerously-skip-permissions --disallowedTools Task
+target/release/kodact-eval compare evals/results/task-on evals/results/task-off
+```
+
+The Notes tool, on the task whose project turns it on (A off, B on):
+
+```bash
+KODACT_NOTES=0 target/release/kodact-eval run --label notes-off --repeat 3 --only notes-across-compaction -- --model sonnet --dangerously-skip-permissions
+target/release/kodact-eval run --label notes-on --repeat 3 --only notes-across-compaction -- --model sonnet --dangerously-skip-permissions
+target/release/kodact-eval compare evals/results/notes-off evals/results/notes-on
+```
+
 What KodAct's reminders and nudges cost when the model needs no help
 (`docs/goal.md`, "How quiet is checked"): the everyday tasks (tag `quiet`) run
 with reminders off (A) and with the configuration under test (B), same build,
