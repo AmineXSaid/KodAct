@@ -74,6 +74,17 @@ def test_the_job_name_says_the_limit():
     assert "-maxout" not in plain.stdout
 
 
+def test_the_job_name_says_a_time_limit_set_by_hand():
+    run = (HERE / "run.sh").read_text()
+    lines = [ln for ln in run.splitlines() if ln.startswith('[ -n "${KODACT_HARBOR_')]
+    script = 'ca=""\n' + "\n".join(lines) + '\nprintf "%s" "$ca"'
+    env = {k: v for k, v in os.environ.items() if not k.startswith("KODACT_HARBOR_")}
+    named = subprocess.run(["bash", "-c", script], env={**env, "KODACT_HARBOR_TIME_LIMIT": "2700"}, capture_output=True, text=True)
+    assert named.stdout.endswith("-time2700"), named.stdout
+    plain = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+    assert "-time" not in plain.stdout
+
+
 def test_the_agent_gives_kodact_the_limit_for_the_runs_model():
     got = flags("deep-thinking", [], KODACT_HARBOR_MAX_OUTPUT="65536")
     assert got[0] == "--settings"

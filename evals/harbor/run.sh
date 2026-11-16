@@ -15,7 +15,10 @@
 #                         each waits in its setup until it does: endpoint_gate.py)
 #   KODACT_HARBOR_PROBE    0 skips asking the endpoint which model it serves and its window
 #   KODACT_HARBOR_AUTONOMOUS  0 runs kodact without --autonomous (job name gets -noauto)
-#   KODACT_HARBOR_TIME_LIMIT  seconds for --max-time (default: the task's own limit)
+#   KODACT_HARBOR_TIME_LIMIT  seconds for --max-time (default: the task's own limit; job name gets
+#                         -time<N>). Harbor's own agent limit stays the task's: to give the agent
+#                         more time, raise both (run.sh full -i x --agent-timeout-multiplier 3,
+#                         with KODACT_HARBOR_TIME_LIMIT three times the task's limit)
 #   KODACT_HARBOR_MAX_OUTPUT  the run's model's reply limit, given to kodact as modelLimits
 #                         (default 65536 for deep-thinking, none for other models; 0: none)
 #                         (job name gets -maxout<N>)
@@ -86,6 +89,7 @@ ca=""
 [ -n "${KODACT_HARBOR_APT_CACHE:-}" ] && ca="${ca}-aptcache"
 [ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ] && ca="${ca}-hfmirror"
 [ -n "${KODACT_HARBOR_MAX_OUTPUT:-}" ] && ca="${ca}-maxout${KODACT_HARBOR_MAX_OUTPUT}"
+[ -n "${KODACT_HARBOR_TIME_LIMIT:-}" ] && ca="${ca}-time$(printf '%s' "$KODACT_HARBOR_TIME_LIMIT" | tr -c 'A-Za-z0-9' '.')"
 [ -n "${KODACT_NUDGES:-}" ] && ca="${ca}-n-$(printf '%s' "$KODACT_NUDGES" | tr -c 'A-Za-z0-9' '.')"
 [ -n "${KODACT_HARBOR_ARGS:-}" ] && ca="${ca}-args-$(printf '%s' "$KODACT_HARBOR_ARGS" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-40)"
 case "${KODACT_HARBOR_AUTONOMOUS:-1}" in 0|false|no|off) ca="${ca}-noauto" ;; esac
