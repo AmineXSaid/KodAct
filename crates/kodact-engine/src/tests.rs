@@ -2316,6 +2316,61 @@ async fn a_run_inside_its_time_limit_ends_normally() {
     assert_eq!(r.result.as_deref(), Some("done"));
 }
 
+/// gpt2-codegolf with three times its time (2026-11-16): told "44 minutes" at the start, the model
+/// heard nothing more for 35 minutes, and spent 27 of them exploring with `/app/gpt2.c` not
+/// written. The clock (`nudges.clock`) tells the facts once per tenth of the limit: time used and
+/// left, tokens written, files the request asks for that don't exist yet. Not twice in a tenth,
+/// not in the last fifth (the wrap-up warning's), not with the nudge off.
+#[tokio::test]
+async fn the_clock_tells_where_the_run_stands_once_per_tenth() {
+    let script = |h: &Harness| {
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        for i in 0..3 {
+            h.provider.push(MockTurn::tool("Bash", json!({"command": format!("echo {i}")})));
+        }
+        h.provider.push(MockTurn::text("done"));
+    };
+    let limit = |used: u64| TimeLimit {
+        started: std::time::Instant::now() - Duration::from_secs(used),
+        total: Duration::from_secs(1000),
+    };
+    let notes = |e: &Engine| -> Vec<String> {
+        e.state.messages.iter().map(|m| m.text()).filter(|t| t.contains("Written so far")).collect()
+    };
+    let ask = "Write gpt2.c that prints the next tokens.";
+
+    let h = Harness::new(vec![]);
+    script(&h);
+    let cfg = EngineConfig { time_limit: Some(limit(350)), ..nudged_cfg("clock") };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt(ask)).await;
+    let told = notes(&e);
+    assert_eq!(told.len(), 1, "once in this tenth: {told:?}");
+    assert!(told[0].contains("Time: 5m50s of 16m40s used, 10m50s left."), "{}", told[0]);
+    assert!(told[0].contains("Files the request asks for that don't exist yet: `gpt2.c`."), "{}", told[0]);
+    assert!(told[0].contains("Replies so far: 1, 0s each on average"), "the model's own pace: {}", told[0]);
+    assert!(!told[0].to_lowercase().contains("should"), "facts, no advice: {}", told[0]);
+    let given: Vec<Value> = nudges(&h.transcript_text()).into_iter().filter(|n| n["kind"] == "clock").collect();
+    assert_eq!(given.len(), 1);
+    assert_eq!(given[0]["missing_files"], json!(["gpt2.c"]));
+
+    // In the last fifth the wrap-up warning speaks, not the clock.
+    let h = Harness::new(vec![]);
+    script(&h);
+    let cfg = EngineConfig { time_limit: Some(limit(850)), ..nudged_cfg("clock") };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt(ask)).await;
+    assert!(notes(&e).is_empty());
+
+    // Off by default.
+    let h = Harness::new(vec![]);
+    script(&h);
+    let cfg = EngineConfig { time_limit: Some(limit(350)), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt(ask)).await;
+    assert!(notes(&e).is_empty());
+}
+
 #[tokio::test]
 async fn the_model_is_told_the_time_limit_and_warned_near_the_end() {
     let first_text = |r: &kodact_types::MessagesRequest| r.messages[0].text();

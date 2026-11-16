@@ -130,6 +130,29 @@ pub(crate) fn request_budget(window: u64) -> usize {
 }
 
 /// "about 12 minutes", for time-limit notes.
+/// A span as the clock says it: `45s`, `27m05s`.
+fn clock_time(d: Duration) -> String {
+    let s = d.as_secs();
+    if s < 60 {
+        format!("{s}s")
+    } else {
+        format!("{}m{:02}s", s / 60, s % 60)
+    }
+}
+
+/// A count with thousands separated: `104,565`.
+fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn about(left: Duration) -> String {
     match left.as_secs() {
         s if s < 60 => "less than a minute".into(),
@@ -834,6 +857,8 @@ pub struct Engine {
     /// Replies since the last TodoWrite call, and since the last task-list reminder
     /// (`nudges.todoTracking`): every reply, counted across turns, as the reference CLI counts them.
     todo_steps: (u32, u32),
+    /// Tenths of the time limit the clock (`nudges.clock`) has told so far.
+    clock_told: u32,
     /// Shell commands run this turn, for the constraint report.
     ran_commands: Vec<String>,
     /// The constraint report was given this turn.
@@ -994,6 +1019,7 @@ impl Engine {
             last_sent: Mutex::new(None),
             shell_edit_told: false,
             todo_steps: (0, crate::nudges::TODO_STEPS),
+            clock_told: 0,
             ran_commands: vec![],
             constraints_told: false,
             passing: None,
@@ -3420,6 +3446,11 @@ impl Engine {
                         self.push_user(Message::user_text(text), true, None, true);
                     }
                 }
+                if !interrupted && !budget_warned {
+                    if let Some(text) = self.clock_note() {
+                        self.push_user(Message::user_text(text), true, None, true);
+                    }
+                }
                 if !interrupted {
                     if let Some(body) = self.todo_reminder_due() {
                         let text = format!("<system-reminder>\n{body}\n</system-reminder>");
@@ -3790,6 +3821,70 @@ impl Engine {
              you had before, put the better one back first. Then finish the most important change, check it, and \
              end with what is done, what was verified and what remains.\n</system-reminder>"
         ))
+    }
+
+    /// The clock (`nudges.clock`): in a run with a time limit, once each time another tenth of it
+    /// has gone, until the last fifth (the wrap-up warning's), the facts of where the run stands:
+    /// time used and left, tokens written, and the files the request asks for that don't exist
+    /// yet or are over the size it allows. No advice: what to do with them is the model's call.
+    fn clock_note(&mut self) -> Option<String> {
+        if !self.cfg.reminders || self.cfg.is_subagent || !self.cfg.nudges.clock {
+            return None;
+        }
+        let t = self.cfg.time_limit.as_ref()?;
+        let (used, left) = (t.started.elapsed(), t.remaining());
+        if left <= (t.total / 5).max(Duration::from_secs(60)) {
+            return None;
+        }
+        let tenth = (used.as_secs_f64() / t.total.as_secs_f64().max(1e-9) * 10.0) as u32;
+        if tenth == 0 || tenth <= self.clock_told {
+            return None;
+        }
+        self.clock_told = tenth;
+        let written = self.state.total_usage.output_tokens;
+        let mut lines = vec![format!(
+            "Time: {} of {} used, {} left. Written so far: {} tokens.",
+            clock_time(used),
+            clock_time(t.total),
+            // From the same whole seconds as "used", so the two add up to the limit.
+            clock_time(Duration::from_secs(t.total.as_secs().saturating_sub(used.as_secs()))),
+            thousands(written)
+        )];
+        // The model's own pace, measured: how many replies so far, and how long one takes.
+        if !self.reply_secs.is_empty() {
+            let n = self.reply_secs.len();
+            let mean = self.reply_secs.iter().sum::<f64>() / n as f64;
+            lines.push(format!(
+                "Replies so far: {n}, {} each on average (your thinking and writing, without the tools).",
+                clock_time(Duration::from_secs_f64(mean.round()))
+            ));
+        }
+        let missing = self.watched.still_missing();
+        if !missing.is_empty() {
+            let names: Vec<String> = missing.iter().map(|f| format!("`{f}`")).collect();
+            lines.push(format!("Files the request asks for that don't exist yet: {}.", names.join(", ")));
+        }
+        let over = self.named.over_limits(&self.shared.tool_ctx.project_dir);
+        for o in &over {
+            lines.push(format!(
+                "`{}` is {} bytes; the request allows {} at most.",
+                o.file,
+                thousands(o.size),
+                thousands(o.limit)
+            ));
+        }
+        self.system_event(
+            "nudge",
+            json!({
+                "kind": crate::nudges::Nudge::Clock.as_str(),
+                "used_s": used.as_secs(),
+                "left_s": left.as_secs(),
+                "output_tokens": written,
+                "missing_files": missing,
+                "over_limit": over,
+            }),
+        );
+        Some(format!("<system-reminder>\n{}\n</system-reminder>", lines.join("\n")))
     }
 
     /// Background commands that exited since the model last heard of them: a note for it, and

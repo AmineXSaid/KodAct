@@ -58,6 +58,11 @@ pub struct NudgeConfig {
     /// The description and the section follow this setting alone; the notes, like every
     /// reminder, also `reminders`.
     pub todo_tracking: bool,
+    /// In a run with a time limit, each time another tenth of it has gone (until the wrap-up
+    /// warning's last fifth): the time used and left, the tokens written, and the files the request
+    /// asks for that don't exist yet or are over the size it allows. Facts the model has no other
+    /// way to know, no advice: a model has no clock.
+    pub clock: bool,
 }
 
 /// Replies (every reply of the model, with tools or without) without a TodoWrite call before the
@@ -66,7 +71,7 @@ pub const TODO_STEPS: u32 = 10;
 
 impl NudgeConfig {
     /// The names used in settings and `KODACT_NUDGES`.
-    pub const NAMES: [&'static str; 9] = [
+    pub const NAMES: [&'static str; 10] = [
         "shellEdit",
         "constraints",
         "namedChecks",
@@ -76,6 +81,7 @@ impl NudgeConfig {
         "adaptiveEffort",
         "thinkingTimeBox",
         "todoTracking",
+        "clock",
     ];
 
     /// From a list of names (`KODACT_NUDGES=shellEdit,constraints`); `all` turns every one on,
@@ -107,6 +113,7 @@ impl NudgeConfig {
             "adaptiveEffort" => &mut self.adaptive_effort,
             "thinkingTimeBox" => &mut self.thinking_time_box,
             "todoTracking" => &mut self.todo_tracking,
+            "clock" => &mut self.clock,
             _ => return false,
         };
         *field = on;
@@ -130,6 +137,7 @@ pub(crate) enum Nudge {
     AdaptiveEffort,
     ThinkingTimeBox,
     TodoTracking,
+    Clock,
 }
 
 impl Nudge {
@@ -144,6 +152,7 @@ impl Nudge {
             Nudge::AdaptiveEffort => "adaptive_effort",
             Nudge::ThinkingTimeBox => "thinking_time_box",
             Nudge::TodoTracking => "todo_tracking",
+            Nudge::Clock => "clock",
         }
     }
 }

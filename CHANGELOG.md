@@ -2,6 +2,20 @@
 
 ## 0.1.0 (unreleased)
 
+### The clock: where a timed run stands, as facts (`nudges.clock`)
+- **What happened.** In a run with `--max-time` the model is told the limit
+  at the start and warned when a fifth is left, and nothing in between. A
+  model has no clock. gpt2-codegolf with three times its time (2026-11-16)
+  heard "44 minutes" at the start, then nothing for 35 minutes, and spent 27
+  of them exploring with `/app/gpt2.c` not written. The pacing nudges removed
+  on 2026-11-12 gave advice ("make the change now") and showed no gain.
+- **Now, with `nudges.clock`** (off until measured), each time another tenth
+  of the limit has gone, until the last fifth, the step's results carry the
+  facts: time used and left, tokens written, how many replies so far and
+  how long one takes (89% of that run was the model's own replies, about a
+  minute each), files the request asks for that don't exist yet, files over the size it allows. No advice: what to do with
+  them is the model's call. Recorded as `system/nudge` events of kind `clock`.
+
 ### A file a shell command printed whole counts as read
 - **What happened.** Edit and Write refuse a file the model hasn't read, or
   that changed since. Only the Read tool counted as reading. On 2026-11-16, in
