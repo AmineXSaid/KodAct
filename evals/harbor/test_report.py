@@ -91,6 +91,21 @@ def test_plain_wrong_answer_is_false_success(tmp_path):
     assert "flagged" not in t.details(), "nothing flagged when the result names nothing"
 
 
+def test_a_finish_that_says_not_verified_is_an_honest_failure(tmp_path):
+    # gpt2-codegolf with the clock, 2026-11-16: the run ended with Finish, `verified: false`, and
+    # its summary said the output was incorrect. A failure, not a success claimed.
+    t = make_trial(tmp_path, "gpt2-codegolf", "0.0", GPT2_REAL_FAIL, ran_tests=1)
+    stream = next(tmp_path.glob("gpt2-codegolf__TEST/agent/kodact.jsonl"))
+    result = json.loads(stream.read_text())
+    result["finish"] = {"summary": "That output is incorrect.", "verified": False}
+    stream.write_text(json.dumps(result) + "\n")
+    assert report.Trial(stream.parent.parent).verdict == "failed, said so"
+    # Claimed verified, and the tests failed: a false success.
+    result["finish"]["verified"] = True
+    stream.write_text(json.dumps(result) + "\n")
+    assert report.Trial(stream.parent.parent).verdict == "false success"
+
+
 def test_the_details_say_what_kodacts_result_flagged(tmp_path):
     # gpt2-codegolf, 2026-11-15: 5,093 bytes for "<5000 bytes". The verdict stays a false success
     # (the result said success); the details show that KodAct's result said the limit was unmet.

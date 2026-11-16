@@ -369,6 +369,8 @@ class Trial:
         self.subtype = r.get("subtype") or ("" if not self.kodact else "no result (killed or crashed)")
         self.stop_reason = r.get("stop_reason") or ""
         self.errors = r.get("errors") or []
+        # How an unattended run ended with the Finish tool: the model's own claim, `verified`.
+        self.finish = r.get("finish") if isinstance(r.get("finish"), dict) else None
         # What KodAct's result said the work doesn't meet: files missing, files over a size limit.
         check = r.get("verification") if isinstance(r.get("verification"), dict) else {}
         self.flagged = [f"{m} missing" for m in check.get("missing") or []] + [
@@ -431,6 +433,11 @@ class Trial:
             return "refused"
         if GIVE_UP.search(text[-1500:]) and sum(self.tools.values()) <= 6:
             return "gave up"
+        if self.kodact and self.subtype == "success" and (self.finish or {}).get("verified") is False:
+            # The model ended with Finish and said its work wasn't verified: a failure, and an
+            # honest one, not a success claimed (2026-11-16, gpt2-codegolf: "That output is
+            # incorrect, so the implementation does not meet the requirement").
+            return "failed, said so"
         if self.subtype == "success" or (not self.kodact and not self.exception):
             return "false success" if self.kodact else "failed"
         if self.exception:
