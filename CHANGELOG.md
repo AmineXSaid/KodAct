@@ -2,6 +2,16 @@
 
 ## 0.1.0 (unreleased)
 
+### The dangerous-command scanner, measured and tightened
+A labelled corpus (`kodact-permissions/tests/threat_corpus.rs`): 33 commands an
+injected instruction could use, 42 ordinary ones close to a pattern. Before:
+20 of 32 caught, and reading `/etc/sudoers.d/README` flagged. Now all caught,
+none of the ordinary flagged. Newly caught: `sh -c "$(curl …)"` (the form most
+install instructions use), PowerShell's `iex`/`irm`, `~/.ssh` without a slash,
+the environment piped to the network, `mkfs -t … /dev/…`, `find / -delete`, a
+Python reverse shell, `chown … /`, and one level below a system directory
+(`/var/lib`). Editing sudoers is flagged; reading it no longer is.
+
 ### Azure OpenAI and gateways that want their own headers
 - `KODACT_CUSTOM_HEADERS` reached only the Messages API: an OpenAI-compatible
   or Gemini endpoint behind a company gateway that wants a header of its own

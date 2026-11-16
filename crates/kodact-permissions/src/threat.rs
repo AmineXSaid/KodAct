@@ -33,32 +33,32 @@ struct Pattern {
 }
 
 /// Files whose contents are credentials.
-const SECRETS: &str = r"(\.ssh/|id_rsa|id_ed25519|id_ecdsa|\.aws/credentials|\.netrc|\.git-credentials|\.npmrc|\.pypirc|\.docker/config\.json|\.kube/config|/etc/shadow|\.gnupg/|\.config/gh/hosts)";
+const SECRETS: &str = r"(\.ssh(?:/|\b)|id_rsa|id_ed25519|id_ecdsa|\.aws/credentials|\.netrc|\.git-credentials|\.npmrc|\.pypirc|\.docker/config\.json|\.kube/config|/etc/shadow|\.gnupg/|\.config/gh/hosts)";
 
 const PATTERNS: &[Pattern] = &[
     Pattern {
         name: "recursive_delete_of_root_or_home",
         description: "recursively deletes the root, home or a top-level system directory",
         risk: Risk::Critical,
-        re: r#"\brm\s[^;&|]*?-(?:\w*[rR]\w*|-recursive)\b[^;&|]*?\s["']?(?:/\*?|~/?\*?|\$HOME/?\*?|\$\{HOME\}/?\*?|/home/?|/root/?|/(?:etc|usr|var|bin|boot|lib|opt)/?)["']?(?:\s|$|[;&|])"#,
+        re: r#"\brm\s[^;&|]*?-(?:\w*[rR]\w*|-recursive)\b[^;&|]*?\s["']?(?:/\*?|~/?\*?|\$HOME/?\*?|\$\{HOME\}/?\*?|/home/?|/root/?|/(?:etc|usr|var|bin|boot|lib)(?:/[\w.-]+)?/?|/opt/?)["']?(?:\s|$|[;&|])|\bfind\s+["']?(?:/|~/?|\$HOME/?|\$\{HOME\}/?)["']?\s[^;&|]*-delete\b"#,
     },
     Pattern {
         name: "disk_overwrite",
         description: "writes directly to a disk device or formats one",
         risk: Risk::Critical,
-        re: r"\bdd\b[^;&|]*\bof=/dev/(?:sd|hd|vd|xvd|nvme|disk|mmcblk)|\bmkfs(?:\.\w+)?\s+(?:-\S+\s+)*/dev/|>\s*/dev/(?:sd|nvme|disk)\w*",
+        re: r"\bdd\b[^;&|]*\bof=/dev/(?:sd|hd|vd|xvd|nvme|disk|mmcblk)|\bmkfs(?:\.\w+)?\b[^;&|]*\s/dev/|>\s*/dev/(?:sd|nvme|disk)\w*",
     },
     Pattern {
         name: "remote_script_to_shell",
         description: "downloads a script and runs it",
         risk: Risk::Critical,
-        re: r#"\b(?:curl|wget|fetch)\b[^;&]*\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:env\s+)?(?:ba|z|da|k|fi)?sh\b|\b(?:ba|z)?sh\s+(?:-\S+\s+)*<\s*\(\s*(?:curl|wget)|\b(?:python3?|perl|ruby|node)\s+(?:-\s+)?<\s*\(\s*(?:curl|wget)|\b(?:curl|wget)\b[^;&]*\|\s*(?:python3?|perl|ruby|node)\s*(?:-\s*)?(?:$|[;&|])"#,
+        re: r#"\b(?:curl|wget|fetch)\b[^;&]*\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:env\s+)?(?:ba|z|da|k|fi)?sh\b|\b(?:ba|z)?sh\s+(?:-\S+\s+)*<\s*\(\s*(?:curl|wget)|\b(?:python3?|perl|ruby|node)\s+(?:-\s+)?<\s*\(\s*(?:curl|wget)|\b(?:curl|wget)\b[^;&]*\|\s*(?:python3?|perl|ruby|node)\s*(?:-\s*)?(?:$|[;&|])|\b(?:(?:ba|z|da|k)?sh|python3?|perl|ruby|node)\s+(?:-\S+\s+)*-[ce]\s+["']?\$\(\s*(?:curl|wget)\b|(?i:\b(?:iex|invoke-expression)\b[^;&]*\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|downloadstring)\b|\b(?:iwr|irm|invoke-webrequest|invoke-restmethod)\b[^;&]*\|\s*(?:iex|invoke-expression)\b)"#,
     },
     Pattern {
         name: "reverse_shell",
         description: "opens a reverse shell",
         risk: Risk::Critical,
-        re: r"/dev/(?:tcp|udp)/[\w.-]+/\d+|\b(?:nc|ncat|netcat)\b[^;&|]*\s-(?:e|c)\s|\bsocat\b[^;&|]*\bexec:",
+        re: r"/dev/(?:tcp|udp)/[\w.-]+/\d+|\b(?:nc|ncat|netcat)\b[^;&|]*\s-(?:e|c)\s|\bsocat\b[^;&|]*\bexec:|socket\.socket\(.*\.connect\(.*(?:subprocess|pty\.spawn|dup2)",
     },
     Pattern {
         name: "fork_bomb",
@@ -68,15 +68,15 @@ const PATTERNS: &[Pattern] = &[
     },
     Pattern {
         name: "world_writable_root",
-        description: "makes the root or a system directory world-writable",
+        description: "makes the root or a system directory world-writable, or gives it away",
         risk: Risk::Critical,
-        re: r"\bchmod\s+(?:-\S+\s+)*(?:0?777|a\+rwx|o\+w)\s+(?:/|/etc|/usr|/bin)(?:\s|$)",
+        re: r"\bchmod\s+(?:-\S+\s+)*(?:0?777|a\+rwx|o\+w)\s+(?:/|/etc|/usr|/bin)(?:\s|$)|\bchown\s+(?:-\S+\s+)*\S+\s+(?:/|/etc|/usr|/bin)(?:\s|$)",
     },
     Pattern {
         name: "credential_exfiltration",
-        description: "sends credential files over the network",
+        description: "sends credential files or the environment over the network",
         risk: Risk::High,
-        re: r"\b(?:curl|wget|nc|ncat|scp|rsync|ftp|sftp)\b[^;]*SECRETS|SECRETS[^;]*\|\s*(?:curl|wget|nc|ncat)\b",
+        re: r"\b(?:curl|wget|nc|ncat|scp|rsync|ftp|sftp)\b[^;]*SECRETS|SECRETS[^;]*\|\s*(?:curl|wget|nc|ncat)\b|\b(?:env|printenv)\s*\|\s*(?:curl|wget|nc|ncat)\b",
     },
     Pattern {
         name: "encoded_execution",
@@ -94,7 +94,7 @@ const PATTERNS: &[Pattern] = &[
         name: "privilege_change",
         description: "edits sudoers or creates setuid binaries",
         risk: Risk::High,
-        re: r"/etc/sudoers|\bvisudo\b|\bchmod\s+(?:-\S+\s+)*(?:[ugoa]*\+s|[2467][0-7]{3})\b",
+        re: r"(?:>>?|\btee\s+(?:-a\s+)?|\bsed\s+-i\S*\s[^;&|]*|\b(?:cp|mv|install)\s[^;&|]*)\s*/etc/sudoers|\bvisudo\b|\bchmod\s+(?:-\S+\s+)*(?:[ugoa]*\+s|[2467][0-7]{3})\b",
     },
     Pattern {
         name: "history_tampering",
