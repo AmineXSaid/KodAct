@@ -15,6 +15,11 @@ and sends `text` for the turn's next step once the agent has made N tool calls
 `"env": {"NAME": "value"}` sets environment variables for that task's runs, after the
 run's own (a small window with `KODACT_CONTEXT_WINDOW`).
 
+`"requires": ["chromium"]` says the check needs a headless Chrome or Chromium:
+`KODACT_EVAL_CHROME`, else `chromium`, `chromium-browser`, `google-chrome` or
+`chrome` on `PATH`. Without one the task is skipped by `run` and `validate` (and
+by the test that validates every task), with the reason, instead of failing.
+
 `"crash": {"after_tool_calls": N, "resume": "Continue."}` kills kodact once
 the agent has made N tool calls, as a crash or a closed terminal does, then
 runs `kodact -p <resume> --continue` in the same workspace; both parts go to
@@ -127,6 +132,8 @@ and stderr.
 | parallel-plugins | long-horizon | Two plugins written by two sub-agents at once, each in its own worktree (`isolation: "worktree"`), both editing registry.py; both changes must end up in the working tree |
 | rewrite-block | tool-design | Replace a 55-line if/elif chain with a dict; the project turns `edit.lineRanges` on, so the chain can be named by its lines instead of retyped (compare cost and turns with `KODACT_EDIT_LINES=0`) |
 | edit-from-search | tool-design | Everyday (`quiet`): raise one service's timeout among ten client modules, where a search shows the line to change. The project turns `edit.withoutRead` on, so the line can be edited from the search result without a Read first (compare turns with `KODACT_EDIT_UNREAD=0`) |
+| page-total | verification | Everyday: an order page shows its total as NaN (a `reduce` without a start value). The check reads the total from the page a headless Chrome rendered, after its script ran (`requires: chromium`): a model that checks with a browser sees what the person sees; without one it reasons or runs the script another way. The baseline for a browser tool |
+| price-order | verification | Everyday: a price list sorts prices as text (`"100.00"` before `"5.25"`). Checked in the rendered page's list, as page-total |
 | layer-order | context | Write a dumper for a binary export whose layers are stored in their names' text order (layer0, layer1, layer10, …: the gpt2-codegolf trap of 2026-11-16), then two files from its output; the check also runs it on another export of the same layout. The layout, worked out in an early step, is needed in the later ones. The project turns `carryReasoning` on, so over chat completions the model's reasoning goes back with each request (compare turns and wall time with `KODACT_CARRY_REASONING=0`, on a reasoning model) |
 | notes-across-compaction | long-horizon | The verbose-stages build, where each failure shows an incident reference only while its stage fails; all four must be listed at the end, after the conversation was compacted (`--autocompact 100k`): the first has to be kept somewhere that outlasts it (the Notes tool). The project turns the Notes tool on (`tools.notes`), which is off by default: until 2026-11-16 the task never offered it, so it measured compaction alone (compare with `KODACT_NOTES=0`) |
 | abandon-approach | long-horizon | Try a three-file idea, measure it, find it wanting and take every part of it out again before solving the task another way; anything left of the idea fails the check (the Checkpoint tool restores in one call) |

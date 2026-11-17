@@ -8,6 +8,11 @@ async fn all_tasks_are_valid() {
     let scratch = tempfile::tempdir().unwrap();
     let mut bad = vec![];
     for t in &tasks {
+        // A task this machine can't check (no headless Chrome) is skipped, and says so.
+        if let Some(why) = kodact_eval::unmet(t) {
+            eprintln!("skipped {}: {why}", t.spec.id);
+            continue;
+        }
         if let Err(e) = kodact_eval::validate_task(t, scratch.path()).await {
             bad.push(format!("{}: {e}", t.spec.id));
         }

@@ -1,0 +1,14 @@
+{
+  "instruction": "The order page (index.html) shows the total as NaN. Fix it so it shows the order's total.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": [
+    "javascript",
+    "web",
+    "everyday"
+  ],
+  "requires": [
+    "chromium"
+  ],
+  "timeout_secs": 300
+}

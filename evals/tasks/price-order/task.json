@@ -1,0 +1,14 @@
+{
+  "instruction": "prices.html should list the products from cheapest to most expensive, but the order it shows is wrong. Fix it.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": [
+    "javascript",
+    "web",
+    "everyday"
+  ],
+  "requires": [
+    "chromium"
+  ],
+  "timeout_secs": 300
+}

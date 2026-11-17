@@ -67,8 +67,15 @@ fn read_report(p: &std::path::Path) -> anyhow::Result<Report> {
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().cmd {
         Cmd::Run { tasks, kodact, label, repeat, jobs, out, only, kodact_args } => {
-            let list = load_tasks(&tasks, &only)?;
+            let mut list = load_tasks(&tasks, &only)?;
             anyhow::ensure!(!list.is_empty(), "no tasks found in {}", tasks.display());
+            list.retain(|t| match kodact_eval::unmet(t) {
+                Some(why) => {
+                    eprintln!("kodact-eval: skipped {}: {why}", t.spec.id);
+                    false
+                }
+                None => true,
+            });
             let kodact = kodact_platform::path::canonicalize(&kodact)
                 .with_context(|| format!("kodact binary not found: {}", kodact.display()))?;
             let out_dir = out.unwrap_or_else(|| PathBuf::from("evals/results").join(&label));
@@ -94,6 +101,10 @@ async fn main() -> anyhow::Result<()> {
             let scratch = std::env::temp_dir().join(format!("kodact-eval-validate-{}", std::process::id()));
             let mut failed = 0;
             for t in load_tasks(&tasks, &only)? {
+                if let Some(why) = kodact_eval::unmet(&t) {
+                    println!("skip  {}: {why}", t.spec.id);
+                    continue;
+                }
                 match kodact_eval::validate_task(&t, &scratch).await {
                     Ok(()) => println!("ok    {}", t.spec.id),
                     Err(e) => {

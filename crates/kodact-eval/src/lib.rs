@@ -59,6 +59,34 @@ pub struct TaskSpec {
     /// Kill kodact mid-turn, then continue the session in a new process.
     #[serde(default)]
     pub crash: Option<CrashSpec>,
+    /// What the check needs on this machine: `chromium` (a headless Chrome or Chromium, for a
+    /// check that reads a page after its scripts ran). A task whose needs aren't met is skipped,
+    /// and says why, not failed.
+    #[serde(default)]
+    pub requires: Vec<String>,
+}
+
+/// The Chrome or Chromium a check can run headless: `KODACT_EVAL_CHROME`, else the first of the
+/// usual names on `PATH`. The checks look it up the same way.
+pub fn chrome() -> Option<std::path::PathBuf> {
+    if let Some(p) = std::env::var_os("KODACT_EVAL_CHROME").filter(|p| !p.is_empty()) {
+        return Some(p.into());
+    }
+    let path = std::env::var_os("PATH")?;
+    ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"]
+        .iter()
+        .find_map(|name| std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file()))
+}
+
+/// Why `task` can't be checked on this machine, if it can't.
+pub fn unmet(task: &Task) -> Option<String> {
+    task.spec.requires.iter().find_map(|r| match r.as_str() {
+        "chromium" if chrome().is_none() => {
+            Some("needs a headless Chrome or Chromium (set KODACT_EVAL_CHROME, or put chromium on PATH)".to_string())
+        }
+        "chromium" => None,
+        other => Some(format!("needs {other}, which kodact-eval doesn't know")),
+    })
 }
 
 /// Kill kodact (as a crash or a closed terminal does) once the agent has made

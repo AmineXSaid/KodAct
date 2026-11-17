@@ -2,6 +2,14 @@
 
 ## 0.1.0 (unreleased)
 
+### Eval tasks checked in a real browser
+- A task can say what its check needs: `"requires": ["chromium"]`. Without a
+  headless Chrome or Chromium (`KODACT_EVAL_CHROME`, or one on `PATH`),
+  `kodact-eval run` and `validate` skip it and say why.
+- Two everyday web tasks, `page-total` and `price-order`, checked in the page
+  a headless Chrome rendered: the baseline a browser tool for KodAct would
+  have to beat (breadth plan, 1.3).
+
 ### The dangerous-command scanner, measured and tightened
 A labelled corpus (`kodact-permissions/tests/threat_corpus.rs`): 33 commands an
 injected instruction could use, 42 ordinary ones close to a pattern. Before:
