@@ -2,6 +2,15 @@
 
 ## 0.1.0 (unreleased)
 
+### The terminal UI tested as a person uses it
+- `kodact_test_host::pty` runs the real binary in a pseudo-terminal: keys and
+  bracketed pastes in, the screen read back through a terminal emulator. Until
+  now nothing tested the TUI's own input or screen: `kodact-eval` runs `-p`, and
+  the render tests draw into memory (breadth plan, 1.4).
+- First tests (`kodact-cli/tests/tui_pty.rs`): a typed prompt reaches the model
+  and its answer is shown; a multi-line paste is one prompt, sent only on Enter;
+  `/exit` quits.
+
 ### Eval tasks checked in a real browser
 - A task can say what its check needs: `"requires": ["chromium"]`. Without a
   headless Chrome or Chromium (`KODACT_EVAL_CHROME`, or one on `PATH`),

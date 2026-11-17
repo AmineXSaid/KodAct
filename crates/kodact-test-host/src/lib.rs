@@ -8,6 +8,8 @@
 //! * [`Host`] spawns `kodact` with stream-json in and out and talks to it the
 //!   way an IDE extension does.
 
+pub mod pty;
+
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

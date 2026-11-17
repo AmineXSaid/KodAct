@@ -32,6 +32,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 shlex = "1"
+# Dev only: the TUI driven in a real pseudo-terminal (kodact-test-host `pty`).
+portable-pty = "0.9"
+vt100 = "0.15"
 similar = "2"
 tempfile = "3"
 thiserror = "2"

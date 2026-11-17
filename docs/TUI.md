@@ -672,6 +672,18 @@ The screens:
 - **Terminal (done, `tui::tests`):** keep `mod.rs` thin. Test `Screen::commit`'s chunking
   and wrapping through a `TestBackend` with `Viewport::Inline`; `insert_before`
   works on it. Check by hand in a real terminal (the checklist below).
+- **The real binary in a pseudo-terminal (done, `crates/kodact-cli/tests/tui_pty.rs`):**
+  `kodact_test_host::pty::Pty` starts `kodact` in a pty against the scripted API,
+  types keys and bracketed pastes, and reads the screen back through a terminal
+  emulator (`portable-pty` 0.9 and `vt100` 0.15, MIT, dev only). It covers what
+  only the TUI does:
+  - a typed prompt reaches the model and its answer is shown;
+  - a multi-line paste is one prompt, sent only on Enter;
+  - `/exit` quits.
+
+  New TUI behaviour (the paste guard, theme detection, find, copying a block) is
+  tested here. It runs on Linux and macOS ptys and Windows' ConPTY; the Windows
+  run is still to be checked on Windows.
 
 ## Phases
 
