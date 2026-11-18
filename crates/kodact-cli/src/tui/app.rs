@@ -2259,6 +2259,17 @@ impl App {
         }
     }
 
+    /// Number of leading command lines in `dialog_text().1` when prompting for `Bash`.
+    pub fn dialog_bash_cmd_lines(&self) -> usize {
+        let Some(d) = &self.dialog else { return 0 };
+        let DialogKind::Permission { .. } = d.kind else { return 0 };
+        let Some(p) = &d.prompt else { return 0 };
+        if p.tool_name != "Bash" {
+            return 0;
+        }
+        p.input["command"].as_str().unwrap_or("").lines().take(100).count()
+    }
+
     pub fn dialog_selected(&self) -> usize {
         self.dialog.as_ref().map(|d| d.selected).unwrap_or(0)
     }

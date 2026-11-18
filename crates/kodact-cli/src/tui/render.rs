@@ -220,16 +220,24 @@ fn boxed(title: Line<'static>, body: Vec<Line<'static>>, w: usize, border: Style
     out
 }
 
-/// `body` rows between lime corner marks, `w` columns wide: the frame
-/// style's way of setting a question apart.
-fn cornered(title: Line<'static>, body: Vec<Line<'static>>, w: usize, mark: Style) -> Vec<Line<'static>> {
-    let inner = w.saturating_sub(4).max(1);
+/// `body` rows between corner marks, bounded to a scannable width inside `w`:
+/// the frame style's way of setting a question apart.
+fn cornered(title: Line<'static>, body: Vec<Line<'static>>, w: usize, mark: Style, rule: Style) -> Vec<Line<'static>> {
+    let line_width =
+        |l: &Line<'static>| -> usize { l.spans.iter().map(|s| text_width(&s.content.replace('\t', "    "))).sum() };
+    let content_w = std::iter::once(&title).chain(&body).map(line_width).max().unwrap_or(0);
+    let bw = (content_w + 4).clamp(60.min(w), 96.min(w)).min(w);
+    let inner = bw.saturating_sub(4).max(1);
     let edge = |l: &str, r: &str| {
-        Line::from(vec![
-            Span::styled(l.to_string(), mark),
-            Span::raw(" ".repeat(w.saturating_sub(4))),
-            Span::styled(r.to_string(), mark),
-        ])
+        if bw < 4 {
+            Line::from(Span::styled("─".repeat(bw), mark))
+        } else {
+            Line::from(vec![
+                Span::styled(l.to_string(), mark),
+                Span::styled("─".repeat(bw - 4), rule),
+                Span::styled(r.to_string(), mark),
+            ])
+        }
     };
     let mut out = vec![edge("┌─", "─┐")];
     for l in std::iter::once(title).chain(body) {
@@ -367,14 +375,32 @@ fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
     }
     let t = app.theme;
     let (title, body) = app.dialog_text();
-    // A proposed edit's lines: removed in red, added in green.
+    let bash_cmd_lines = app.dialog_bash_cmd_lines();
+    let cmd_style = if t.color && t.depth != palette::Depth::Ansi16 {
+        Style::default()
+            .fg(palette::PROMPT_FG.color(t.depth, t.light))
+            .bg(palette::PROMPT_BG.color(t.depth, t.light))
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        t.bold()
+    };
+    // A proposed edit's lines: removed in red, added in green; Bash commands stand on a raised band.
     let rows: Vec<Line<'static>> = body
         .into_iter()
-        .map(|l| {
-            if l.starts_with("  - ") {
+        .enumerate()
+        .map(|(i, l)| {
+            if bash_cmd_lines > 0 && i < bash_cmd_lines {
+                if let Some(cmd) = l.strip_prefix("  ") {
+                    Line::from(vec![Span::raw("  "), Span::styled(cmd.to_string(), cmd_style)])
+                } else {
+                    Line::from(Span::styled(l, cmd_style))
+                }
+            } else if l.starts_with("  - ") {
                 Line::from(Span::styled(l, t.removed()))
             } else if l.starts_with("  + ") {
                 Line::from(Span::styled(l, t.added()))
+            } else if bash_cmd_lines > 0 {
+                Line::from(Span::styled(l, t.subtle()))
             } else {
                 Line::from(l)
             }
@@ -472,7 +498,12 @@ fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
     // window): the title, the filter and the keys stay, and the options scroll in what
     // is left, around the selected one. Before, the box ran off the top of the window
     // and took its title, its filter and its first rows with it.
-    let inner = if app.look == super::look::Look::Bare { w } else { w.saturating_sub(4) }.max(8);
+    let frame_w = match app.look {
+        super::look::Look::Frame => w.min(96),
+        super::look::Look::Status if w >= 60 => w.min(76),
+        _ => w,
+    };
+    let inner = if app.look == super::look::Look::Bare { frame_w } else { frame_w.saturating_sub(4) }.max(8);
     let mut head = preview;
     loop {
         let fixed = whole(&head, vec![], None).len();
@@ -493,8 +524,8 @@ fn framed(app: &App, title: Line<'static>, rows: Vec<Line<'static>>, w: usize) -
     let t = app.theme;
     use super::look::Look;
     match app.look {
-        // Lime corner marks around the question, no full frame.
-        Look::Frame => cornered(title, rows, w, t.accent()),
+        // Corner marks around the question connected by hairline rules, bounded cleanly.
+        Look::Frame => cornered(title, rows, w, t.accent(), t.hairline()),
         // A centred sheet, narrower than the terminal.
         Look::Status if w >= 60 => {
             let bw = w.min(76);
@@ -3608,5 +3639,40 @@ mod tests {
         assert!(a.scroll_dialog(-20));
         let rows_back = draw(&live_view(&a, 80, 20), 80).0.join("\n");
         assert!(rows_back.contains("old line 01"), "scrolling back up restores top:\n{rows_back}");
+    }
+
+    #[test]
+    fn frame_dialogs_stay_bounded_and_highlight_bash_commands() {
+        let mut a = app(true);
+        a.look = crate::tui::look::Look::Frame;
+        ask(&mut a, "Bash", json!({"command": "cargo test --workspace", "description": "run all checks"}));
+        let (rows, buf) = draw(&live_view(&a, 180, 30), 180);
+        let top = rows[0].trim_end();
+        let top_w = text_width(top);
+        assert!(top.starts_with("┌─") && top.ends_with("─┐"), "{top}");
+        assert!((60..=96).contains(&top_w), "wide terminal dialog must stay compact (got {top_w}): {top}");
+        let middle = top.strip_prefix("┌─").and_then(|s| s.strip_suffix("─┐")).expect("corners present");
+        assert!(middle.chars().all(|c| c == '─'), "corners must join via hairline rule: {top}");
+        assert_eq!(buf[(0, 0)].fg, a.theme.accent().fg.unwrap());
+        assert_eq!(buf[(3, 0)].fg, a.theme.hairline().fg.unwrap());
+
+        let cmd_y = rows.iter().position(|r| r.contains("cargo test --workspace")).expect("command row") as u16;
+        let cmd_x = rows[cmd_y as usize].find("cargo test").unwrap() as u16;
+        let prompt_bg = crate::tui::palette::PROMPT_BG.color(a.theme.depth, a.theme.light);
+        assert_eq!(buf[(cmd_x, cmd_y)].bg, prompt_bg, "Bash command gets elevated PROMPT_BG");
+        let in_y = rows.iter().position(|r| r.contains("in /p")).expect("folder row") as u16;
+        let in_x = rows[in_y as usize].find("in /p").unwrap() as u16;
+        assert_ne!(buf[(in_x, in_y)].bg, prompt_bg, "folder line stays subtle metadata");
+        assert_eq!(buf[(in_x, in_y)].fg, a.theme.subtle().fg.unwrap());
+
+        // Very long Bash commands wrap at <= 96 cols instead of stretching to col 180.
+        ask(&mut a, "Bash", json!({"command": format!("echo {}", "a".repeat(140))}));
+        let (rows, _) = draw(&live_view(&a, 180, 30), 180);
+        let max_w = rows.iter().map(|r| text_width(r.trim_end())).max().unwrap();
+        assert!(max_w <= 96, "wrapped frame dialog exceeded 96 cols: {max_w}");
+
+        // Degenerate narrow terminal never panics or exceeds w.
+        let tiny = cornered(Line::from("Title"), vec![Line::from("Body")], 3, a.theme.accent(), a.theme.hairline());
+        assert!(tiny.iter().all(|l| text_width(&text::plain(l)) <= 3));
     }
 }
