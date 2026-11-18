@@ -1,6 +1,8 @@
 //! The prompt's text editor: a multiline buffer with a cursor, word moves,
 //! kill commands and prompt history.
 
+const MAX_UNDO: usize = 200;
+
 /// Text being typed, as characters, with the cursor between two of them.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Editor {
@@ -11,6 +13,11 @@ pub struct Editor {
     history: Vec<String>,
     /// While browsing history: the entry shown, and what was typed before browsing.
     browsing: Option<(usize, String)>,
+    /// Undo/redo snapshots `(text, cursor)`.
+    undo_stack: Vec<(Vec<char>, usize)>,
+    redo_stack: Vec<(Vec<char>, usize)>,
+    /// Last killed text (`Ctrl+K`, `Ctrl+U`, `Ctrl+W`) for `Ctrl+Y` yank.
+    kill_ring: String,
 }
 
 fn is_word(c: char) -> bool {
@@ -20,6 +27,45 @@ fn is_word(c: char) -> bool {
 impl Editor {
     pub fn with_history(history: Vec<String>) -> Self {
         Editor { history, ..Default::default() }
+    }
+
+    fn save_undo(&mut self) {
+        if self.undo_stack.last().is_some_and(|(t, c)| t == &self.text && *c == self.cursor) {
+            return;
+        }
+        if self.undo_stack.len() >= MAX_UNDO {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push((self.text.clone(), self.cursor));
+        self.redo_stack.clear();
+    }
+
+    /// Undo the last edit (`Ctrl+Z`).
+    pub fn undo(&mut self) -> bool {
+        let Some((text, cursor)) = self.undo_stack.pop() else { return false };
+        self.redo_stack.push((std::mem::replace(&mut self.text, text), self.cursor));
+        self.cursor = cursor.min(self.text.len());
+        self.browsing = None;
+        true
+    }
+
+    /// Redo the last undone edit (`Ctrl+Y` when redo history exists, or `Ctrl+Shift+Z`).
+    pub fn redo(&mut self) -> bool {
+        let Some((text, cursor)) = self.redo_stack.pop() else { return false };
+        self.undo_stack.push((std::mem::replace(&mut self.text, text), self.cursor));
+        self.cursor = cursor.min(self.text.len());
+        self.browsing = None;
+        true
+    }
+
+    /// Paste the last killed text (`Ctrl+K` / `Ctrl+U` / `Ctrl+W`).
+    pub fn yank(&mut self) -> bool {
+        if self.kill_ring.is_empty() {
+            return false;
+        }
+        let killed = self.kill_ring.clone();
+        self.insert(&killed);
+        true
     }
 
     pub fn text(&self) -> String {
@@ -36,7 +82,11 @@ impl Editor {
     }
 
     pub fn set(&mut self, text: &str) {
-        self.text = text.chars().collect();
+        let next: Vec<char> = text.chars().collect();
+        if next != self.text {
+            self.save_undo();
+        }
+        self.text = next;
         self.cursor = self.text.len();
         self.browsing = None;
     }
@@ -51,7 +101,11 @@ impl Editor {
         if !t.trim().is_empty() && self.history.last() != Some(&t) {
             self.history.push(t.clone());
         }
-        self.clear();
+        self.text.clear();
+        self.cursor = 0;
+        self.browsing = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         t
     }
 
@@ -62,6 +116,10 @@ impl Editor {
     pub fn insert(&mut self, s: &str) {
         // Pasted text may carry carriage returns.
         let s = s.replace("\r\n", "\n").replace('\r', "\n");
+        if s.is_empty() {
+            return;
+        }
+        self.save_undo();
         for c in s.chars() {
             self.text.insert(self.cursor, c);
             self.cursor += 1;
@@ -71,10 +129,16 @@ impl Editor {
 
     /// Replace the `n` characters before the cursor with `with` (a completion).
     pub fn replace_back(&mut self, n: usize, with: &str) {
+        self.save_undo();
         let from = self.cursor.saturating_sub(n);
         self.text.drain(from..self.cursor);
         self.cursor = from;
-        self.insert(with);
+        let s = with.replace("\r\n", "\n").replace('\r', "\n");
+        for c in s.chars() {
+            self.text.insert(self.cursor, c);
+            self.cursor += 1;
+        }
+        self.browsing = None;
     }
 
     /// The word before the cursor: its start and its text (up to whitespace).
@@ -85,6 +149,7 @@ impl Editor {
 
     pub fn backspace(&mut self) {
         if self.cursor > 0 {
+            self.save_undo();
             self.cursor -= 1;
             self.text.remove(self.cursor);
         }
@@ -92,6 +157,7 @@ impl Editor {
 
     pub fn delete(&mut self) {
         if self.cursor < self.text.len() {
+            self.save_undo();
             self.text.remove(self.cursor);
         }
     }
@@ -150,21 +216,30 @@ impl Editor {
     /// Ctrl+W: delete the word before the cursor.
     pub fn delete_word(&mut self) {
         let from = self.word_left_index();
-        self.text.drain(from..self.cursor);
-        self.cursor = from;
+        if from < self.cursor {
+            self.save_undo();
+            self.kill_ring = self.text.drain(from..self.cursor).collect();
+            self.cursor = from;
+        }
     }
 
     /// Ctrl+U: delete to the start of the line.
     pub fn kill_to_start(&mut self) {
         let from = self.line_start();
-        self.text.drain(from..self.cursor);
-        self.cursor = from;
+        if from < self.cursor {
+            self.save_undo();
+            self.kill_ring = self.text.drain(from..self.cursor).collect();
+            self.cursor = from;
+        }
     }
 
     /// Ctrl+K: delete to the end of the line.
     pub fn kill_to_end(&mut self) {
         let to = self.line_end();
-        self.text.drain(self.cursor..to);
+        if self.cursor < to {
+            self.save_undo();
+            self.kill_ring = self.text.drain(self.cursor..to).collect();
+        }
     }
 
     /// The cursor's line and column (in characters).
@@ -293,5 +368,31 @@ mod tests {
         e.insert("draft");
         e.take();
         assert_eq!(e.history().len(), 3, "a repeat isn't stored twice");
+    }
+
+    #[test]
+    fn undo_redo_and_yank_restore_edits() {
+        let mut e = Editor::default();
+        e.insert("hello ");
+        e.insert("world");
+        assert_eq!(e.text(), "hello world");
+        assert!(e.undo());
+        assert_eq!(e.text(), "hello ");
+        assert!(e.redo());
+        assert_eq!(e.text(), "hello world");
+        assert!(!e.redo());
+
+        // Kill-ring yank restores killed text.
+        e.home();
+        e.kill_to_end();
+        assert!(e.is_empty());
+        assert!(e.undo());
+        assert_eq!(e.text(), "hello world");
+        e.end();
+        e.word_left();
+        e.kill_to_end();
+        assert_eq!(e.text(), "hello ");
+        assert!(e.yank());
+        assert_eq!(e.text(), "hello world");
     }
 }

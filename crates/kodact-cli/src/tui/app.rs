@@ -2961,6 +2961,20 @@ impl App {
             KeyCode::Char('w') if ctrl => self.editor.delete_word(),
             KeyCode::Char('u') if ctrl => self.editor.kill_to_start(),
             KeyCode::Char('k') if ctrl => self.editor.kill_to_end(),
+            KeyCode::Char('z') if ctrl && key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.editor.redo();
+            }
+            KeyCode::Char('Z') if ctrl => {
+                self.editor.redo();
+            }
+            KeyCode::Char('z') if ctrl => {
+                self.editor.undo();
+            }
+            KeyCode::Char('y') if ctrl => {
+                if !self.editor.redo() {
+                    self.editor.yank();
+                }
+            }
             KeyCode::Char('b') if alt => self.editor.word_left(),
             KeyCode::Char('f') if alt => self.editor.word_right(),
             KeyCode::Char(c) if !ctrl => self.editor.insert(&c.to_string()),
