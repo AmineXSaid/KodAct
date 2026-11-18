@@ -569,6 +569,9 @@ impl<B: Backend> Full<B> {
             if self.scroll > 0 {
                 self.scroll += rows.len();
             }
+            if self.scroll > 0 || self.max_scroll > 0 {
+                self.max_scroll += rows.len();
+            }
             self.wrapped.extend(rows);
         }
         self.transcript.extend(lines);
@@ -596,6 +599,40 @@ impl<B: Backend> Full<B> {
     /// Scroll by `rows` (up when positive), within the transcript.
     pub fn scroll_by(&mut self, rows: isize) {
         self.scroll = (self.scroll as isize + rows).clamp(0, self.max_scroll as isize) as usize;
+    }
+
+    /// Whether an unadorned `Up` or `Down` key can scroll the transcript instead of editing
+    /// the prompt: only when no dialog, menu, search, multi-line line move or queued-message
+    /// recall owns the key.
+    pub fn can_scroll_key(&self, app: &App, code: KeyCode) -> bool {
+        let in_lines = match code {
+            KeyCode::Up => app.editor.has_line_above(),
+            KeyCode::Down => app.editor.has_line_below(),
+            _ => return false,
+        };
+        !in_lines
+            && (self.max_scroll > 0 || !app.editor.is_browsing())
+            && app.dialog.is_none()
+            && !app.danger_armed
+            && app.search.is_none()
+            && app.menu().is_empty()
+            && app.file_menu().is_empty()
+            && !(code == KeyCode::Up && app.editor.is_empty() && !app.queued.is_empty())
+    }
+
+    /// Scroll the transcript on an `Up`/`Down` key (or a burst of them from the terminal's
+    /// alternate-scroll wheel mode `\x1b[?1007h`). Returns `true` when the key was used for
+    /// scrolling so the prompt's text is left untouched.
+    pub fn scroll_key(&mut self, app: &App, k: crossterm::event::KeyEvent, ticks: usize, delta: isize) -> bool {
+        if k.kind == KeyEventKind::Release || !k.modifiers.is_empty() || !self.can_scroll_key(app, k.code) {
+            return false;
+        }
+        if self.max_scroll == 0 && ticks <= 1 {
+            return false;
+        }
+        let step = if ticks == 1 { delta * 3 } else { delta };
+        self.scroll_by(step);
+        true
     }
 
     pub fn draw(&mut self, app: &App) -> std::io::Result<()> {
@@ -704,6 +741,7 @@ fn restore() {
         let _ = crossterm::execute!(out, PopKeyboardEnhancementFlags);
     }
     if FULL.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let _ = out.write_all(b"\x1b[?1007l");
         let _ = crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen);
     }
     let _ = crossterm::execute!(out, DisableBracketedPaste, crossterm::cursor::Show);
@@ -727,8 +765,11 @@ fn setup(full: bool) -> std::io::Result<Guard> {
     crossterm::execute!(out, EnableBracketedPaste)?;
     if full {
         // No EnableMouseCapture: the terminal keeps mouse selection so output can be
-        // copied straight from the screen.
+        // copied straight from the screen, while ?1007h turns mouse wheel ticks on the
+        // alternate screen into Up/Down events that scroll the transcript.
         crossterm::execute!(out, crossterm::terminal::EnterAlternateScreen)?;
+        out.write_all(b"\x1b[?1007h")?;
+        out.flush()?;
         FULL.store(true, std::sync::atomic::Ordering::SeqCst);
     }
     if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
@@ -1016,6 +1057,7 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
     let mut exiting = false;
     let mut stop = StopSignals::new();
     let mut stopped_by = None;
+    let mut pending_ev: Option<Event> = None;
     loop {
         // The conversation was replaced (/clear, /resume, /rewind): the screen starts
         // over before the conversation as it is now is written.
@@ -1062,7 +1104,7 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
             }
         }
         let now = Instant::now();
-        if app.dirty && now.duration_since(last_draw) >= FRAME {
+        if pending_ev.is_none() && app.dirty && now.duration_since(last_draw) >= FRAME {
             match &mut screen {
                 Display::Inline(screen) => {
                     let max = screen.rows().saturating_sub(1).max(1);
@@ -1083,7 +1125,13 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
         let hint = app.hint.as_ref().is_some_and(|(_, at)| at.elapsed() < render::HINT_FOR + render::SPINNER_STEP);
         let frame_wait = (last_draw + FRAME).saturating_duration_since(Instant::now());
         tokio::select! {
-            ev = events.next() => match ev {
+            ev = async {
+                if let Some(ev) = pending_ev.take() {
+                    Some(Ok(ev))
+                } else {
+                    events.next().await
+                }
+            } => match ev {
                 Some(Ok(Event::Key(k))) if k.kind != KeyEventKind::Release
                     && !app.danger_armed
                     && app.keymap.translate(k).is_some_and(|k| {
@@ -1092,7 +1140,8 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                     screen.clear().map_err(io_fail)?;
                     app.dirty = true;
                 }
-                // The full screen scrolls its transcript: the wheel, and PgUp / PgDn with no dialog open.
+                // The full screen scrolls its transcript: the wheel (SGR mouse or ?1007h
+                // alternate-scroll Up/Down), and PgUp / PgDn with no dialog open.
                 Some(Ok(Event::Mouse(m))) if matches!(screen, Display::Full(_)) => {
                     if let Display::Full(f) = &mut screen {
                         match m.kind {
@@ -1113,6 +1162,69 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                         f.scroll_by(if k.code == KeyCode::PageUp { page } else { -page });
                     }
                     app.dirty = true;
+                }
+                Some(Ok(Event::Key(k)))
+                    if k.kind != KeyEventKind::Release
+                        && k.modifiers.is_empty()
+                        && matches!(screen, Display::Full(ref f) if f.can_scroll_key(&app, k.code)) =>
+                {
+                    let mut delta: isize = if k.code == KeyCode::Up { 1 } else { -1 };
+                    let mut ticks: usize = 1;
+                    let needs_burst = matches!(screen, Display::Full(ref f) if f.max_scroll == 0);
+                    if needs_burst {
+                        while let Ok(Some(Ok(evn))) =
+                            tokio::time::timeout(Duration::from_millis(20), events.next()).await
+                        {
+                            match evn {
+                                Event::Key(kn)
+                                    if kn.kind != KeyEventKind::Release
+                                        && kn.modifiers.is_empty()
+                                        && matches!(kn.code, KeyCode::Up | KeyCode::Down) =>
+                                {
+                                    delta += if kn.code == KeyCode::Up { 1 } else { -1 };
+                                    ticks += 1;
+                                }
+                                other => {
+                                    pending_ev = Some(other);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    let scrolled = if let Display::Full(f) = &mut screen {
+                        f.scroll_key(&app, k, ticks, delta)
+                    } else {
+                        false
+                    };
+                    if scrolled {
+                        app.dirty = true;
+                    } else {
+                        for a in app.on_term_event(Event::Key(k)) {
+                            match a {
+                                Action::Send(t) => {
+                                    if let Display::Full(f) = &mut screen {
+                                        f.scroll = 0;
+                                    }
+                                    send(t, &to_session)
+                                }
+                                Action::Picker(t) => {
+                                    let _ = to_session.send(ToSession::Picker(t));
+                                }
+                                Action::Interrupt => {
+                                    live.handle().interrupt();
+                                    app.close_dialog_if_stale();
+                                }
+                                Action::SetMode(m) => live.handle().set_permission_mode(m),
+                                Action::Exit => {
+                                    let _ = to_session.send(ToSession::Exit);
+                                    exiting = true;
+                                }
+                            }
+                        }
+                        if exiting {
+                            break;
+                        }
+                    }
                 }
                 Some(Ok(Event::Resize(..))) => {
                     if let Display::Inline(s) = &mut screen {
@@ -1856,6 +1968,70 @@ mod tests {
     #[test]
     fn osc52_carries_base64() {
         assert_eq!(osc52("hi"), "\x1b]52;c;aGk=\x07");
+    }
+
+    #[test]
+    fn the_mouse_wheel_scrolls_the_discussion_without_changing_the_prompt() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
+        let mut a = app::App::new(theme, vec!["earlier prompt".into(), "latest prompt".into()]);
+        a.front = false;
+        let mut f = Full::new(TestBackend::new(80, 16), front::FrontInfo::default()).unwrap();
+
+        // On a short discussion (`max_scroll == 0`), a wheel burst (`ticks > 1`) is absorbed
+        // without replacing the prompt with history, while a single Up key (`ticks == 1`)
+        // still recalls history.
+        f.commit(vec![Line::from("• short answer")]);
+        f.draw(&a).unwrap();
+        assert_eq!(f.max_scroll, 0);
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        assert!(f.scroll_key(&a, up, 3, 3), "wheel burst on a short screen is absorbed");
+        assert!(a.editor.is_empty(), "chatbox stays empty after a wheel burst");
+        assert!(!f.scroll_key(&a, up, 1, 1), "a single Up key on a short screen recalls history");
+
+        // Once the LLM discussion overflows the viewport (`max_scroll > 0`), rolling the wheel
+        // (whether 1 event per notch or a 3-event ?1007h burst) scrolls up and down through
+        // the discussion and never overwrites the chatbox text.
+        f.commit((1..=40).map(|i| Line::from(format!("• discussion line {i:02}"))).collect());
+        f.draw(&a).unwrap();
+        assert!(f.max_scroll > 0);
+        a.editor.set("draft in chatbox");
+        assert!(f.scroll_key(&a, up, 1, 1));
+        assert_eq!(f.scroll, 3);
+        assert_eq!(a.editor.text(), "draft in chatbox");
+        assert!(f.scroll_key(&a, up, 3, 3));
+        assert_eq!(f.scroll, 6);
+        assert_eq!(a.editor.text(), "draft in chatbox");
+        assert!(f.scroll_key(&a, down, 1, -1));
+        assert_eq!(f.scroll, 3);
+        assert_eq!(a.editor.text(), "draft in chatbox");
+        assert!(f.scroll_key(&a, down, 3, -3));
+        assert_eq!(f.scroll, 0);
+        // Rolling further down at the bottom or up at the top clamps cleanly without touching the chatbox.
+        assert!(f.scroll_key(&a, down, 1, -1));
+        assert_eq!(f.scroll, 0);
+        assert_eq!(a.editor.text(), "draft in chatbox");
+
+        // Ctrl+P / Ctrl+N still recall prompt history even when the discussion is scrollable.
+        a.editor.clear();
+        a.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(a.editor.text(), "latest prompt");
+        a.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(a.editor.text(), "earlier prompt");
+        a.on_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(a.editor.text(), "latest prompt");
+
+        // A `/` menu or multi-line edit still owns Up/Down.
+        a.on_event(app::UiEvent::Commands(vec![app::CommandInfo {
+            name: "clear".into(),
+            description: "Clear".into(),
+            args: String::new(),
+        }]));
+        a.editor.set("/");
+        assert!(!f.can_scroll_key(&a, KeyCode::Down));
+        a.editor.set("line one\nline two");
+        assert!(!f.can_scroll_key(&a, KeyCode::Up), "Up from line 2 moves to line 1 first");
     }
 }
 

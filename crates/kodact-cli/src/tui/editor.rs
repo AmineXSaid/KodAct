@@ -178,6 +178,18 @@ impl Editor {
         self.text.iter().filter(|c| **c == '\n').count() + 1
     }
 
+    pub fn is_browsing(&self) -> bool {
+        self.browsing.is_some()
+    }
+
+    pub fn has_line_above(&self) -> bool {
+        self.position().0 > 0
+    }
+
+    pub fn has_line_below(&self) -> bool {
+        self.position().0 + 1 < self.lines()
+    }
+
     /// Up: the line above, or the previous prompt from the first line.
     /// Returns false when nothing changed.
     pub fn up(&mut self) -> bool {

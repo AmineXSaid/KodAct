@@ -2907,6 +2907,12 @@ impl App {
             KeyCode::Down => {
                 self.editor.down();
             }
+            KeyCode::Char('p') if ctrl => {
+                self.editor.up();
+            }
+            KeyCode::Char('n') if ctrl => {
+                self.editor.down();
+            }
             KeyCode::Left if ctrl => self.editor.word_left(),
             KeyCode::Right if ctrl => self.editor.word_right(),
             KeyCode::Left => self.editor.left(),

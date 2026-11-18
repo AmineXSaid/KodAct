@@ -76,3 +76,30 @@ async fn exit_quits() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mouse_wheel_scrolls_the_discussion_without_changing_the_chatbox() {
+    let d = dirs();
+    let long_reply =
+        (1..=60).map(|i| format!("discussion-line-{i:02}")).collect::<Vec<_>>().join("\n") + "\nBOTTOM-OF-DISCUSSION";
+    let api = MockApi::start(vec![MockTurn::text(&long_reply)]).await;
+    let mut tui = Pty::spawn(&kodact_bin(), &d.cwd, &d.home, &api.url, &[], 100, 24);
+    tui.wait_for("What shall we build?", WAIT).unwrap_or_else(|s| panic!("no front page:\n{s}"));
+    tui.keys("my-first-prompt\r");
+    tui.wait_for("BOTTOM-OF-DISCUSSION", WAIT).unwrap_or_else(|s| panic!("no bottom:\n{s}"));
+    // Type a draft in the chatbox, then roll the mouse wheel up (?1007h sends Up bursts).
+    tui.keys("keep-this-draft");
+    tui.wait_for("keep-this-draft", WAIT).unwrap_or_else(|s| panic!("no draft:\n{s}"));
+    for _ in 0..20 {
+        tui.keys("\x1b[A\x1b[A\x1b[A");
+    }
+    let top_screen = tui.wait_for("discussion-line-01", WAIT).unwrap_or_else(|s| panic!("did not scroll up:\n{s}"));
+    assert!(top_screen.contains("keep-this-draft"), "draft in chatbox must stay untouched:\n{top_screen}");
+    // Roll the mouse wheel back down to the newest lines of the discussion.
+    for _ in 0..20 {
+        tui.keys("\x1b[B\x1b[B\x1b[B");
+    }
+    let bottom_screen =
+        tui.wait_for("BOTTOM-OF-DISCUSSION", WAIT).unwrap_or_else(|s| panic!("did not scroll down:\n{s}"));
+    assert!(bottom_screen.contains("keep-this-draft"), "draft in chatbox must stay untouched:\n{bottom_screen}");
+}
