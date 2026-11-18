@@ -415,14 +415,19 @@ impl<B: Backend> Screen<B> {
     /// live region landed past the window's last row, every row on top of the next.
     /// So the window (not its scrollback) is cleared by `wipe`, the viewport starts
     /// again at the top, and the newest lines that fit above it are written again.
+    #[cfg(test)]
     pub fn resized(&mut self, wipe: impl FnOnce() -> std::io::Result<()>) -> std::io::Result<()> {
+        self.resized_mode(false, wipe)
+    }
+
+    pub fn resized_mode(&mut self, verbose: bool, wipe: impl FnOnce() -> std::io::Result<()>) -> std::io::Result<()> {
         self.start_at_top(wipe)?;
         let (width, rows) = (self.width(), self.rows());
         // A viewport taller than the new window would hide its own last rows.
         self.height = self.height.min(rows.saturating_sub(1)).max(1);
         let room = rows.saturating_sub(self.height) as usize;
         let lines: Vec<Line<'static>> = self.tail.iter().cloned().collect();
-        let wrapped = text::wrap(app::lay_out(lines, width), width);
+        let wrapped = text::wrap(app::lay_out_mode(lines, width, verbose), width);
         let newest = wrapped[wrapped.len().saturating_sub(room)..].to_vec();
         self.write_above(newest)
     }
@@ -436,12 +441,18 @@ impl<B: Backend> Screen<B> {
     }
 
     /// Write finished lines into scrollback, above the viewport.
+    #[cfg(test)]
     pub fn commit(&mut self, lines: Vec<Line<'static>>) -> std::io::Result<()> {
+        self.commit_mode(lines, false)
+    }
+
+    /// Write finished lines into scrollback using `verbose` detail expansion.
+    pub fn commit_mode(&mut self, lines: Vec<Line<'static>>, verbose: bool) -> std::io::Result<()> {
         self.tail.extend(lines.iter().cloned());
         while self.tail.len() > TAIL_LINES {
             self.tail.pop_front();
         }
-        let rows = text::wrap(app::lay_out(lines, self.width()), self.width());
+        let rows = text::wrap(app::lay_out_mode(lines, self.width(), verbose), self.width());
         self.write_above(rows)
     }
 
@@ -496,10 +507,11 @@ fn gutter(width: u16) -> u16 {
 /// line up with the box's `❯` and its text with the text typed in the box.
 const TRANSCRIPT_INDENT: u16 = 2;
 
-/// `lines` wrapped to `width` less the transcript's indent, each row indented.
-fn indented(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+/// `lines` wrapped to `width` less the transcript's indent, each row indented, optionally
+/// expanding collapsible thoughts, diffs, and shell outputs.
+fn indented_mode(lines: Vec<Line<'static>>, width: u16, verbose: bool) -> Vec<Line<'static>> {
     let indent = TRANSCRIPT_INDENT.min(width.saturating_sub(4));
-    text::wrap(app::lay_out(lines, width - indent), width - indent)
+    text::wrap(app::lay_out_mode(lines, width - indent, verbose), width - indent)
         .into_iter()
         .map(|l| {
             if indent == 0 || l.spans.is_empty() {
@@ -518,9 +530,11 @@ pub struct Full<B: Backend> {
     terminal: Terminal<Safe<B>>,
     /// Finished lines, as committed.
     transcript: Vec<Line<'static>>,
-    /// The transcript wrapped to `wrapped_w`.
+    /// The transcript wrapped to `wrapped_w` at `wrapped_layout`.
     wrapped: Vec<Line<'static>>,
     wrapped_w: u16,
+    wrapped_layout: u64,
+    wrapped_verbose: bool,
     /// Rows up from the transcript's end.
     pub scroll: usize,
     max_scroll: usize,
@@ -539,6 +553,8 @@ impl<B: Backend> Full<B> {
             transcript: vec![],
             wrapped: vec![],
             wrapped_w: 0,
+            wrapped_layout: 0,
+            wrapped_verbose: false,
             scroll: 0,
             max_scroll: 0,
             in_view: 0,
@@ -557,15 +573,21 @@ impl<B: Backend> Full<B> {
     }
 
     /// Finished lines join the transcript. A view scrolled up stays where it is.
+    #[cfg(test)]
+    pub fn commit(&mut self, lines: Vec<Line<'static>>) {
+        self.commit_mode(lines, self.wrapped_verbose);
+    }
+
+    /// Finished lines join the transcript using `verbose` detail expansion.
     ///
     /// The new lines are wrapped to the width the transcript is drawn at (`wrapped_w`,
     /// set by the last draw), not the window's: with the sidebar open the two differ,
     /// and lines wrapped for the window were never added to what is drawn, so a prompt
     /// and its answer did not appear until the window was resized.
-    pub fn commit(&mut self, lines: Vec<Line<'static>>) {
+    pub fn commit_mode(&mut self, lines: Vec<Line<'static>>, verbose: bool) {
         // Before the first draw there is no width yet: that draw wraps everything.
         if self.wrapped_w > 0 {
-            let rows = indented(lines.clone(), self.wrapped_w);
+            let rows = indented_mode(lines.clone(), self.wrapped_w, verbose);
             if self.scroll > 0 {
                 self.scroll += rows.len();
             }
@@ -603,6 +625,26 @@ impl<B: Backend> Full<B> {
 
     /// Update `app.find` match count and scroll the transcript to keep the active match in view.
     pub fn sync_find(&mut self, app: &mut App) {
+        if self.wrapped_w > 0 && (app.layout_version != self.wrapped_layout || app.verbose != self.wrapped_verbose) {
+            self.wrapped = indented_mode(self.transcript.clone(), self.wrapped_w, app.verbose);
+            self.wrapped_layout = app.layout_version;
+            self.wrapped_verbose = app.verbose;
+            let in_view = if self.in_view > 0 {
+                self.in_view
+            } else {
+                let h = self.rows() as usize;
+                let live = render::live_view(app, self.wrapped_w, self.rows()).lines.len();
+                let bar = usize::from(app.look == look::Look::Status);
+                let gap = usize::from(
+                    !self.wrapped.is_empty()
+                        && !self.wrapped.last().is_some_and(|l| l.spans.iter().all(|s| s.content.trim().is_empty())),
+                );
+                h.saturating_sub(live + bar + gap)
+            };
+            self.max_scroll = self.wrapped.len().saturating_sub(in_view);
+            self.in_view = if self.max_scroll > 0 { in_view } else { 0 };
+            self.scroll = self.scroll.min(self.max_scroll);
+        }
         let Some(f) = app.find.as_mut() else { return };
         if f.query.is_empty() {
             f.total = 0;
@@ -623,6 +665,7 @@ impl<B: Backend> Full<B> {
         f.total = matches.len();
         if matches.is_empty() {
             f.current = 0;
+            self.scroll = self.scroll.min(self.max_scroll);
             return;
         }
         f.current = f.current.min(matches.len() - 1);
@@ -676,16 +719,18 @@ impl<B: Backend> Full<B> {
         let side = app.sidebar && !app.front && size.width >= app::SIDEBAR_MIN_COLS;
         let side_w = if side { render::sidebar_width(size.width) } else { 0 };
         let width = full_w - side_w - if side { 2 } else { 0 };
-        if width != self.wrapped_w {
-            self.wrapped = indented(self.transcript.clone(), width);
+        if width != self.wrapped_w || app.layout_version != self.wrapped_layout || app.verbose != self.wrapped_verbose {
+            self.wrapped = indented_mode(self.transcript.clone(), width, app.verbose);
             self.wrapped_w = width;
+            self.wrapped_layout = app.layout_version;
+            self.wrapped_verbose = app.verbose;
         }
         let page = front::front_page(&app.theme, app.look, &self.info, width as usize);
         let open = matches!(app.look, look::Look::Bare | look::Look::Ledger);
         let front_w = (page.box_w as u16).saturating_sub(if open { 0 } else { 2 }).max(12).min(width);
         let front_rows;
         let rows = if app.front && app.dialog.is_none() && !app.busy && self.transcript.len() <= 6 && front_w < width {
-            front_rows = indented(self.transcript.clone(), front_w);
+            front_rows = indented_mode(self.transcript.clone(), front_w, app.verbose);
             if front_rows.len() <= 6 {
                 &front_rows
             } else {
@@ -721,10 +766,10 @@ impl<B: Backend> Full<B> {
         self.terminal.clear()
     }
 
-    /// The transcript as text with ANSI styles, wrapped to `cols`, for the
-    /// terminal's scrollback once the full screen has closed.
-    pub fn transcript_text(&self, cols: u16) -> Vec<String> {
-        text::wrap(app::lay_out(self.transcript.clone(), cols), cols).iter().map(brand::ansi).collect()
+    /// The transcript as text with ANSI styles, wrapped to `cols` for the terminal's
+    /// scrollback once the full screen has closed, respecting `verbose` expansion.
+    pub fn transcript_text_mode(&self, cols: u16, verbose: bool) -> Vec<String> {
+        text::wrap(app::lay_out_mode(self.transcript.clone(), cols, verbose), cols).iter().map(brand::ansi).collect()
     }
 }
 
@@ -1117,8 +1162,8 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
         }
         if !app.pending.is_empty() {
             match &mut screen {
-                Display::Inline(s) => s.commit(app.take_pending()).map_err(io_fail)?,
-                Display::Full(f) => f.commit(app.take_pending()),
+                Display::Inline(s) => s.commit_mode(app.take_pending(), app.verbose).map_err(io_fail)?,
+                Display::Full(f) => f.commit_mode(app.take_pending(), app.verbose),
             }
             app.dirty = true;
         }
@@ -1287,7 +1332,7 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                 }
                 Some(Ok(Event::Resize(..))) => {
                     if let Display::Inline(s) = &mut screen {
-                        s.resized(|| {
+                        s.resized_mode(app.verbose, || {
                             crossterm::execute!(
                                 std::io::stdout(),
                                 crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
@@ -1322,6 +1367,11 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                             }
                         }
                     }
+                    if app.find.is_some() {
+                        if let Display::Full(f) = &mut screen {
+                            f.sync_find(&mut app);
+                        }
+                    }
                     if exiting {
                         break;
                     }
@@ -1353,15 +1403,15 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
     // screen closes, and its transcript goes into the terminal's scrollback.
     let transcript = match &mut screen {
         Display::Inline(s) => {
-            let _ = s.commit(app.take_pending());
+            let _ = s.commit_mode(app.take_pending(), app.verbose);
             let _ = s.set_height(1);
             let _ = s.clear();
             vec![]
         }
         Display::Full(f) => {
-            f.commit(app.take_pending());
+            f.commit_mode(app.take_pending(), app.verbose);
             let cols = f.width();
-            f.transcript_text(cols)
+            f.transcript_text_mode(cols, app.verbose)
         }
     };
     drop(screen);
@@ -2138,6 +2188,55 @@ mod tests {
         f.draw(&a).unwrap();
         let buf: String = f.terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
         assert!(buf.contains("history: bug") && buf.contains("1/1") && buf.contains("Fix Bug One"), "{buf}");
+    }
+
+    #[test]
+    fn ctrl_o_rewraps_full_transcript_and_updates_find() {
+        use crossterm::event::KeyEvent;
+        use kodact_types::{Delta, StreamEvent};
+        let mut a = app::App::new(text::Theme::named("dark", false, palette::Depth::default()), vec![]);
+        a.front = false;
+        let mut f = Full::new(TestBackend::new(80, 14), front::FrontInfo::default()).unwrap();
+
+        let thought: String = (1..=20)
+            .map(|i| if i == 1 { "needle in thought row 1".to_string() } else { format!("reasoning step {i}") })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let ev = |event| UiEvent::Engine(kodact_engine::EngineEvent::Stream { event, parent_tool_use_id: None });
+        a.on_event(ev(StreamEvent::ContentBlockDelta { index: 0, delta: Delta::ThinkingDelta { thinking: thought } }));
+        a.on_event(ev(StreamEvent::ContentBlockStop { index: 0 }));
+
+        f.commit_mode(a.take_pending(), a.verbose);
+        f.draw(&a).unwrap();
+        let buf: String = f.terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(buf.contains("ctrl+o to show"), "{buf}");
+        assert!(!buf.contains("needle in thought"), "{buf}");
+
+        // Search while collapsed finds 0 matches inside the hidden thought.
+        a.on_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        for c in "needle".chars() {
+            a.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        f.sync_find(&mut a);
+        assert_eq!(a.find.as_ref().unwrap().total, 0);
+
+        // Pressing Ctrl+O while Ctrl+F is open keeps find open, expands the thought in place,
+        // updates max_scroll & match count, and brings the hidden match into view!
+        a.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(a.find.is_some() && a.verbose);
+        f.sync_find(&mut a);
+        assert_eq!(a.find.as_ref().unwrap().total, 1);
+        assert!(f.max_scroll > 0);
+        f.draw(&a).unwrap();
+        let expanded_buf: String = f.terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(expanded_buf.contains("needle in thought"), "{expanded_buf}");
+
+        // Collapsing via Ctrl+O again re-wraps and clamps scroll back cleanly.
+        a.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(!a.verbose);
+        f.sync_find(&mut a);
+        assert_eq!(a.find.as_ref().unwrap().total, 0);
+        assert_eq!(f.scroll, 0);
     }
 }
 

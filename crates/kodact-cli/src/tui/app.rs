@@ -431,6 +431,7 @@ pub const KEYS: &[(&str, &str, &[&str])] = &[
     ("Alt+B / Alt+F, Ctrl+Left / Ctrl+Right", "Word left / right", &["wordLeft", "wordRight"]),
     ("Ctrl+L", "Redraw the screen", &["redraw"]),
     ("Ctrl+B", "Show or hide the sidebar (full screen, 140+ columns)", &["toggleSidebar"]),
+    ("Ctrl+O", "Show or hide thoughts and full tool output", &["toggleDetails"]),
     ("Alt+C", "Copy the latest fenced code block (/copy code)", &[]),
 ];
 
@@ -596,6 +597,12 @@ pub struct App {
     pub branch: String,
     /// `/focus`: tool calls and their results stay out of the scrollback.
     pub focus: bool,
+    /// Show expanded thoughts, uncropped diffs, and longer shell outputs (`Ctrl+O`).
+    pub verbose: bool,
+    /// Incremented whenever detail expansion toggles so full-screen views re-wrap in place.
+    pub layout_version: u64,
+    /// Whether any collapsible block (thought, truncated diff, long shell tail) was emitted.
+    pub has_collapsible: bool,
     /// A screen or picker waiting for an open question to be answered.
     held: Option<Dialog>,
     /// The conversation on screen was replaced: the loop starts the screen over before it
@@ -827,6 +834,8 @@ pub fn tool_header(t: &Theme, name: &str, input: &Value, done: bool) -> Vec<Span
 
 /// The start of a placeholder line that stands for a diff until it is laid out.
 const DIFF_MARK: &str = "\u{e000}kodact-diff";
+/// The start of a placeholder line that stands for a completed reasoning block until laid out.
+pub const THOUGHT_MARK: &str = "\u{e000}kodact-thought";
 /// Width from which a diff is drawn side by side.
 pub const SPLIT_DIFF_COLS: u16 = 140;
 
@@ -842,17 +851,32 @@ fn diff_placeholder(t: &Theme, hunks: &[Value]) -> Line<'static> {
     ])
 }
 
-/// Lines ready to wrap at `width`: each diff placeholder becomes its rows (side by
-/// side from [`SPLIT_DIFF_COLS`], else one column), every other line stays as it is.
+/// Expand collapsible placeholders (shell boxes, diffs, thoughts) with default collapsed view.
+#[cfg(test)]
 pub fn lay_out(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
+    lay_out_mode(lines, width, false)
+}
+
+/// Lines ready to wrap at `width`, optionally expanding thoughts, truncated diffs, and shell output.
+pub fn lay_out_mode(lines: Vec<Line<'static>>, width: u16, verbose: bool) -> Vec<Line<'static>> {
     let mut out = Vec::with_capacity(lines.len());
     for l in lines {
         match l.spans.first() {
-            Some(_) if super::shellbox::is_placeholder(&l) => out.extend(super::shellbox::lay_out(&l, width)),
+            Some(_) if super::shellbox::is_placeholder(&l) => {
+                out.extend(super::shellbox::lay_out_mode(&l, width, verbose))
+            }
             Some(s) if s.content == DIFF_MARK && l.spans.len() == 5 => {
                 let styles = [l.spans[0].style, l.spans[1].style, l.spans[2].style, l.spans[3].style];
                 let hunks: Vec<Value> = serde_json::from_str(&l.spans[4].content).unwrap_or_default();
-                out.extend(diff_rows(&hunks, styles, width));
+                out.extend(diff_rows(&hunks, styles, width, verbose));
+            }
+            Some(s) if s.content == THOUGHT_MARK && l.spans.len() == 3 => {
+                let (subtle, italic) = (l.spans[0].style, l.spans[1].style);
+                let v: Value = serde_json::from_str(&l.spans[2].content).unwrap_or_default();
+                let secs = v["secs"].as_u64().unwrap_or(1).max(1);
+                let count = v["lines"].as_u64().unwrap_or(1).max(1);
+                let body = v["body"].as_str().unwrap_or("");
+                out.extend(thought_rows(secs, count, body, subtle, italic, verbose));
             }
             // A table, anywhere on the line: what comes before it (the answer's mark) leads it.
             _ => match l.spans.iter().position(|s| s.content == super::text::TABLE_MARK) {
@@ -867,6 +891,26 @@ pub fn lay_out(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
     out
 }
 
+fn thought_rows(secs: u64, lines: u64, body: &str, subtle: Style, italic: Style, verbose: bool) -> Vec<Line<'static>> {
+    if !verbose {
+        let unit = if lines == 1 { "line" } else { "lines" };
+        return vec![Line::from(vec![
+            Span::styled("∴ ", subtle),
+            Span::styled(format!("Thought for {secs}s"), italic),
+            Span::styled(format!(" · {lines} {unit} · ctrl+o to show"), subtle),
+        ])];
+    }
+    let mut out = vec![Line::from(vec![
+        Span::styled("∴ ", subtle),
+        Span::styled(format!("Thought for {secs}s"), italic),
+        Span::styled(" · ctrl+o to hide", subtle),
+    ])];
+    for para in body.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        out.push(Line::from(vec![Span::raw("  "), Span::styled(para.to_string(), italic)]));
+    }
+    out
+}
+
 /// One changed line of a diff: its number in the old or new file, and its text.
 struct Changed {
     num: u64,
@@ -874,8 +918,13 @@ struct Changed {
 }
 
 /// An edit's changed lines, as rows: removed and added runs paired side by side when
-/// `width` allows, else one column with `-` and `+`. At most [`DIFF_LINES`] rows.
-fn diff_rows(hunks: &[Value], [removed, added, quiet, rule]: [Style; 4], width: u16) -> Vec<Line<'static>> {
+/// `width` allows, else one column with `-` and `+`. Capped at [`DIFF_LINES`] unless `verbose`.
+fn diff_rows(
+    hunks: &[Value],
+    [removed, added, quiet, rule]: [Style; 4],
+    width: u16,
+    verbose: bool,
+) -> Vec<Line<'static>> {
     // Runs of removals followed by additions, in order.
     let mut runs: Vec<(Vec<Changed>, Vec<Changed>)> = vec![];
     let mut cur: (Vec<Changed>, Vec<Changed>) = (vec![], vec![]);
@@ -909,6 +958,7 @@ fn diff_rows(hunks: &[Value], [removed, added, quiet, rule]: [Style; 4], width: 
         }
     }
     let changed: usize = runs.iter().map(|(r, a)| r.len() + a.len()).sum();
+    let max_rows = if verbose { usize::MAX } else { DIFF_LINES };
     let mut out = vec![];
     let mut shown = 0;
     if width >= SPLIT_DIFF_COLS {
@@ -925,7 +975,7 @@ fn diff_rows(hunks: &[Value], [removed, added, quiet, rule]: [Style; 4], width: 
         };
         'runs: for (rem, add) in &runs {
             for i in 0..rem.len().max(add.len()) {
-                if out.len() == DIFF_LINES {
+                if out.len() == max_rows {
                     break 'runs;
                 }
                 shown += usize::from(rem.get(i).is_some()) + usize::from(add.get(i).is_some());
@@ -940,7 +990,7 @@ fn diff_rows(hunks: &[Value], [removed, added, quiet, rule]: [Style; 4], width: 
     } else {
         'one: for (rem, add) in &runs {
             for (sign, c, st) in rem.iter().map(|c| ("-", c, removed)).chain(add.iter().map(|c| ("+", c, added))) {
-                if out.len() == DIFF_LINES {
+                if out.len() == max_rows {
                     break 'one;
                 }
                 shown += 1;
@@ -959,9 +1009,6 @@ fn diff_rows(hunks: &[Value], [removed, added, quiet, rule]: [Style; 4], width: 
 
 /// The width from which the full screen can show the sidebar.
 pub const SIDEBAR_MIN_COLS: u16 = 140;
-
-/// How much of a finished thought the transcript keeps, in characters.
-pub const THOUGHT_CHARS: usize = 600;
 
 /// A TodoWrite call's items: (status, content).
 pub fn todo_items(input: &Value) -> Vec<(String, String)> {
@@ -1209,6 +1256,9 @@ impl App {
             endpoint: String::new(),
             branch: String::new(),
             focus: false,
+            verbose: false,
+            layout_version: 0,
+            has_collapsible: false,
             held: None,
             reset: None,
         }
@@ -1309,8 +1359,8 @@ impl App {
         self.commit_answer_lines(held);
     }
 
-    /// The reasoning that just ended goes into the transcript, folded: how long it took,
-    /// then its words, quiet and in italics, at most [`THOUGHT_CHARS`] of them.
+    /// The reasoning that just ended goes into the transcript as a collapsible
+    /// placeholder line, collapsed to a 1-line summary until toggled via `Ctrl+O`.
     fn flush_thought(&mut self) {
         let since = self.thought_since.take();
         let text = std::mem::take(&mut self.thought);
@@ -1323,26 +1373,14 @@ impl App {
         }
         let t = self.theme;
         let secs = since.map(|s| s.elapsed().as_secs()).unwrap_or(0).max(1);
+        let lines = text.lines().map(str::trim).filter(|l| !l.is_empty()).count().max(1);
+        self.has_collapsible = true;
         self.gap();
         self.pending.push(Line::from(vec![
-            Span::styled("∴ ", t.subtle()),
-            Span::styled(format!("Thought for {secs}s"), t.subtle().add_modifier(Modifier::ITALIC)),
+            Span::styled(THOUGHT_MARK, t.subtle()),
+            Span::styled("", t.subtle().add_modifier(Modifier::ITALIC)),
+            Span::raw(serde_json::json!({ "secs": secs, "lines": lines, "body": text }).to_string()),
         ]));
-        let words = t.subtle().add_modifier(Modifier::ITALIC);
-        let mut left = THOUGHT_CHARS;
-        for para in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-            if left == 0 {
-                break;
-            }
-            let n = para.chars().count();
-            let shown: String = if n > left {
-                format!("{}…", para.chars().take(left).collect::<String>().trim_end())
-            } else {
-                para.to_string()
-            };
-            left = left.saturating_sub(n);
-            self.pending.push(Line::from(vec![Span::raw("  "), Span::styled(shown, words)]));
-        }
         self.first_line = true;
     }
 
@@ -1631,6 +1669,7 @@ impl App {
         self.talked = !replay.is_empty();
         self.front = replay.is_empty();
         self.first_run = false;
+        self.has_collapsible = false;
         self.reset = Some(recent);
         // Tool calls show in a replay even in focus mode, which is for the work under way.
         let focus = std::mem::take(&mut self.focus);
@@ -1882,9 +1921,29 @@ impl App {
                         let shell = shell_box(self.look, &tool, &input);
                         let lines = if let Some(cmd) = shell {
                             let (code, output) = super::shellbox::split_exit(&content.to_text());
+                            if super::shellbox::is_collapsible(&output) {
+                                self.has_collapsible = true;
+                            }
                             let state = super::shellbox::State::Ended { code, failed };
                             vec![super::shellbox::placeholder(&self.theme, &cmd, &output, state)]
                         } else {
+                            let is_collapsible_diff = matches!(tool.as_str(), "Edit" | "MultiEdit" | "Write")
+                                && tool_use_result
+                                    .as_ref()
+                                    .and_then(|v| v.get("structuredPatch"))
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|hunks| {
+                                        hunks
+                                            .iter()
+                                            .flat_map(|h| h["lines"].as_array().into_iter().flatten())
+                                            .filter_map(Value::as_str)
+                                            .filter(|l| l.starts_with('+') || l.starts_with('-'))
+                                            .count()
+                                            > DIFF_LINES
+                                    });
+                            if is_collapsible_diff {
+                                self.has_collapsible = true;
+                            }
                             result_lines(
                                 &self.theme,
                                 &tool,
@@ -2959,6 +3018,16 @@ impl App {
         }
         if ctrl && key.code == KeyCode::Char('b') {
             self.sidebar = !self.sidebar;
+            return vec![];
+        }
+        if ctrl && key.code == KeyCode::Char('o') {
+            self.verbose = !self.verbose;
+            self.layout_version = self.layout_version.wrapping_add(1);
+            self.set_hint(if self.verbose {
+                "Expanded thoughts and outputs (ctrl+o to collapse)"
+            } else {
+                "Collapsed thoughts and outputs"
+            });
             return vec![];
         }
         if ctrl && key.code == KeyCode::Char('f') {
@@ -4350,5 +4419,91 @@ mod tests {
         assert_eq!(App::preparing("Edit", Some("a/b/cart.py")), "Preparing an edit to cart.py");
         assert_eq!(App::preparing("Bash", None), "Preparing a command");
         assert_eq!(App::json_string_value(r#"{"path": "a\"b"}"#, "path").as_deref(), Some("a\"b"));
+    }
+
+    #[test]
+    fn ctrl_o_toggles_verbose_and_expands_thoughts_and_diffs() {
+        use kodact_types::{Delta, StreamEvent};
+        let mut a = app();
+        assert!(!a.verbose && !a.has_collapsible);
+
+        // Thoughts > 600 chars collapse to 1 summary line by default and expand completely via Ctrl+O.
+        let long_thought = format!("Step one: {}\nStep two: final conclusion", "a".repeat(650));
+        let ev = |event| UiEvent::Engine(EngineEvent::Stream { event, parent_tool_use_id: None });
+        a.on_event(ev(StreamEvent::ContentBlockDelta {
+            index: 0,
+            delta: Delta::ThinkingDelta { thinking: long_thought },
+        }));
+        a.on_event(ev(StreamEvent::ContentBlockStop { index: 0 }));
+        assert!(a.has_collapsible);
+        let pending = a.take_pending();
+        let collapsed = texts(&lay_out(pending.clone(), 100));
+        assert!(
+            collapsed
+                .iter()
+                .any(|l| l.contains("∴ Thought for") && l.contains("2 lines") && l.contains("ctrl+o to show")),
+            "{collapsed:?}"
+        );
+        assert!(!collapsed.iter().any(|l| l.contains("final conclusion")), "{collapsed:?}");
+
+        a.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(a.verbose && a.layout_version == 1);
+        assert!(a.hint.as_ref().is_some_and(|(h, _)| h.contains("ctrl+o to collapse")));
+        let expanded = texts(&lay_out_mode(pending, 100, a.verbose));
+        assert!(expanded.iter().any(|l| l.contains("∴ Thought for") && l.contains("ctrl+o to hide")));
+        assert!(expanded.iter().any(|l| l.contains("final conclusion")), "untruncated tail must show: {expanded:?}");
+
+        // Long diffs collapse cleanly past DIFF_LINES and expand cleanly in verbose mode.
+        let many: Vec<String> = (1..=30).map(|i| format!("+line {i}")).collect();
+        let big = json!({"structuredPatch": [{"oldStart": 1, "newStart": 1, "lines": many}]});
+        let diff_placeholder =
+            result_lines(&Theme::named("dark", false, Default::default()), "Edit", "", false, Some(&big));
+        let collapsed_diff = texts(&lay_out_mode(diff_placeholder.clone(), 100, false));
+        assert!(collapsed_diff.last().unwrap().contains("more changed lines"), "{collapsed_diff:?}");
+        let expanded_diff = texts(&lay_out_mode(diff_placeholder, 100, true));
+        assert!(expanded_diff.iter().any(|l| l.contains("+ line 30")), "{expanded_diff:?}");
+        assert!(!expanded_diff.iter().any(|l| l.contains("more changed lines")), "{expanded_diff:?}");
+
+        // Toggle back off & reset clears has_collapsible.
+        a.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(!a.verbose && a.layout_version == 2);
+        a.on_event(UiEvent::Reset { replay: vec![], recent: vec![], echo: None });
+        assert!(!a.has_collapsible);
+
+        // Collapsible shell output (> shellbox::TAIL) sets has_collapsible on EngineEvent::User.
+        a.on_event(UiEvent::Engine(EngineEvent::Assistant {
+            message: kodact_types::ApiMessage {
+                id: "m1".into(),
+                kind: "message".into(),
+                role: kodact_types::Role::Assistant,
+                model: "m".into(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "b1".into(),
+                    name: "Bash".into(),
+                    input: json!({"command": "seq 1 25"}),
+                    cache_control: None,
+                    provider: None,
+                }],
+                stop_reason: None,
+                stop_sequence: None,
+                usage: Default::default(),
+            },
+            uuid: "u1".into(),
+            parent_tool_use_id: None,
+        }));
+        let out: String = (1..=25).map(|i| format!("row {i}\n")).collect();
+        a.on_event(UiEvent::Engine(EngineEvent::User {
+            message: kodact_types::Message::user(vec![ContentBlock::ToolResult {
+                tool_use_id: "b1".into(),
+                content: kodact_types::ToolResultContent::Text(out),
+                is_error: Some(false),
+                cache_control: None,
+            }]),
+            uuid: "u2".into(),
+            tool_use_result: None,
+            is_meta: false,
+            parent_tool_use_id: None,
+        }));
+        assert!(a.has_collapsible);
     }
 }

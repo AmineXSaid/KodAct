@@ -2226,10 +2226,27 @@ mod tests {
         let text = rows.join("\n");
         assert!(text.contains("∴ Rounding per line drifts.") && text.contains("Thinking…"), "{text}");
         a.on_event(ev(StreamEvent::ContentBlockStop { index: 0 }));
-        let done: Vec<String> =
-            a.take_pending().iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
-        assert!(done.iter().any(|l| l.starts_with("∴ Thought for")), "{done:?}");
-        assert!(done.iter().any(|l| l.contains("Rounding per line drifts.")), "{done:?}");
+        let pending = a.take_pending();
+        let collapsed: Vec<String> = crate::tui::app::lay_out(pending.clone(), 80)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(
+            collapsed
+                .iter()
+                .any(|l| l.contains("∴ Thought for") && l.contains("1 line") && l.contains("ctrl+o to show")),
+            "{collapsed:?}"
+        );
+        assert!(!collapsed.iter().any(|l| l.contains("Rounding per line drifts.")), "{collapsed:?}");
+
+        a.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        assert!(a.verbose && a.layout_version > 0);
+        let expanded: Vec<String> = crate::tui::app::lay_out_mode(pending, 80, a.verbose)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(expanded.iter().any(|l| l.contains("∴ Thought for") && l.contains("ctrl+o to hide")), "{expanded:?}");
+        assert!(expanded.iter().any(|l| l.contains("Rounding per line drifts.")), "{expanded:?}");
         let (rows, _) = draw(&live_view(&a, 80, 20), 80);
         let text = rows.join("\n");
         assert!(!text.contains("Rounding") && text.contains("Working…"), "a wait after the thought is work: {text}");

@@ -30,6 +30,9 @@ pub const SHELL_MARK: &str = "\u{e000}kodact-shell";
 /// Output lines a box shows, from the end, where a command's result is.
 pub const TAIL: usize = 8;
 
+/// Maximum output lines shown inside a box when details are expanded via `Ctrl+O`.
+pub const EXPANDED_TAIL: usize = 200;
+
 /// Narrower than this, the box drops its walls and keeps the rule and the lines.
 const MIN_BOX: usize = 24;
 
@@ -157,8 +160,19 @@ pub fn is_placeholder(l: &Line<'_>) -> bool {
     l.spans.first().is_some_and(|s| s.content == SHELL_MARK) && l.spans.len() == 15
 }
 
-/// A box's rows at `width` columns, from its placeholder line.
+/// Whether `output` contains more filtered lines than fit in the default collapsed [`TAIL`].
+pub fn is_collapsible(output: &str) -> bool {
+    output_lines(output).0.len() > TAIL
+}
+
+/// A box's rows at `width` columns, from its placeholder line (collapsed tail).
+#[cfg(test)]
 pub fn lay_out(l: &Line<'static>, width: u16) -> Vec<Line<'static>> {
+    lay_out_mode(l, width, false)
+}
+
+/// A box's rows at `width` columns, optionally expanding up to [`EXPANDED_TAIL`] lines.
+pub fn lay_out_mode(l: &Line<'static>, width: u16, verbose: bool) -> Vec<Line<'static>> {
     let st = Styles::from(&l.spans);
     let v: Value = serde_json::from_str(&l.spans[14].content).unwrap_or_default();
     let command = v["command"].as_str().unwrap_or("");
@@ -168,17 +182,17 @@ pub fn lay_out(l: &Line<'static>, width: u16) -> Vec<Line<'static>> {
     } else {
         State::Ended { code: v["code"].as_i64(), failed: v["failed"].as_bool() == Some(true) }
     };
-    rows(&st, command, output, state, width as usize)
+    rows(&st, command, output, state, width as usize, verbose)
 }
 
 /// A box for a command still running, at `width`: its command and a cursor.
 pub fn running(t: &Theme, command: &str, width: usize) -> Vec<Line<'static>> {
-    rows(&Styles::of(t), command, "", State::Running, width)
+    rows(&Styles::of(t), command, "", State::Running, width, false)
 }
 
 type Cells = Vec<(char, Style)>;
 
-fn rows(st: &Styles, command: &str, output: &str, state: State, width: usize) -> Vec<Line<'static>> {
+fn rows(st: &Styles, command: &str, output: &str, state: State, width: usize, verbose: bool) -> Vec<Line<'static>> {
     // Two columns in, under the step's words; the box fills the rest.
     let lead = 2;
     let bw = width.saturating_sub(lead);
@@ -257,7 +271,8 @@ fn rows(st: &Styles, command: &str, output: &str, state: State, width: usize) ->
             out.push(row(&"No output".chars().map(|c| (c, s)).collect::<Vec<_>>(), Style::default()));
         }
         _ => {
-            let skip = body.len().saturating_sub(TAIL);
+            let limit = if verbose { EXPANDED_TAIL } else { TAIL };
+            let skip = body.len().saturating_sub(limit);
             if skip > 0 {
                 let note = format!("… {skip} earlier {}", if skip == 1 { "line" } else { "lines" });
                 out.push(row(&note.chars().map(|c| (c, st.quiet)).collect::<Vec<_>>(), Style::default()));
@@ -277,6 +292,7 @@ fn rows(st: &Styles, command: &str, output: &str, state: State, width: usize) ->
     // The foot: how it ended, and how much it printed.
     let mut foot: Cells = vec![];
     let push = |foot: &mut Cells, s: &str, style: Style| foot.extend(s.chars().map(|c| (c, style)));
+    let has_more = body.len() > TAIL;
     let right = match state {
         State::Running => {
             push(&mut foot, "running", st.running);
@@ -292,7 +308,13 @@ fn rows(st: &Styles, command: &str, output: &str, state: State, width: usize) ->
             if total > 0 {
                 push(&mut foot, &format!("  {total} {}", if total == 1 { "line" } else { "lines" }), st.quiet);
             }
-            ""
+            if !has_more {
+                ""
+            } else if verbose {
+                "ctrl+o less"
+            } else {
+                "ctrl+o full"
+            }
         }
     };
     let used = foot.len();
@@ -534,5 +556,18 @@ mod tests {
     fn the_exit_code_comes_off_the_output() {
         assert_eq!(split_exit("Exit code 5\nno tests ran"), (Some(5), "no tests ran".into()));
         assert_eq!(split_exit("all fine"), (None, "all fine".into()));
+    }
+
+    #[test]
+    fn verbose_mode_expands_capped_shell_output() {
+        let t = theme();
+        let out: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        let l = placeholder(&t, "seq 1 30", &out, State::Ended { code: Some(0), failed: false });
+        let collapsed = text(&lay_out_mode(&l, 70, false)).join("\n");
+        assert!(collapsed.contains("… 22 earlier lines") && collapsed.contains("ctrl+o full"), "{collapsed}");
+        assert!(!collapsed.contains("│ line 1 "));
+        let expanded = text(&lay_out_mode(&l, 70, true)).join("\n");
+        assert!(expanded.contains("line 1") && expanded.contains("line 30"), "{expanded}");
+        assert!(expanded.contains("ctrl+o less") && !expanded.contains("earlier lines"), "{expanded}");
     }
 }
