@@ -210,8 +210,8 @@ def mode_stress(c):
             except AssertionError:
                 break
         panel = lambda: next((l for l in reversed(t.lines()) if "127.0.0.1" in l), "")
-        for _ in range(4):
-            if "Default" in panel():
+        for _ in range(6):
+            if "Manual" in panel():
                 break
             t.send(kterm.BACKTAB)
     c.ok(not hung, "25 rounds of /plan, Shift+Tab and a prompt: every prompt is answered", hung[:2])

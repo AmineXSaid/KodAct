@@ -327,6 +327,27 @@ pub fn first_run(t: &Theme, version: &str, problem: &str, cols: usize) -> Vec<Li
 
 /// A line as text with ANSI styles, for printing before (or without) the UI.
 pub fn ansi(line: &Line) -> String {
+    // Locate each ` (http(s)://…)` on the line so any preceding underlined span(s)
+    // (`[**bold** docs](url)`) link to that URL, even when the `(url)` span was merged
+    // with trailing text of the same style.
+    let mut span_link: Vec<Option<String>> = vec![None; line.spans.len()];
+    for (i, sp) in line.spans.iter().enumerate() {
+        if let Some(after) = sp.content.strip_prefix(" (") {
+            if after.starts_with("https://") || after.starts_with("http://") {
+                if let Some(end) = after.find(')') {
+                    let url = &after[..end];
+                    if !url.contains(char::is_whitespace) {
+                        let clean: String = url.chars().filter(|c| !c.is_control()).collect();
+                        let mut j = i;
+                        while j > 0 && line.spans[j - 1].style.add_modifier.contains(Modifier::UNDERLINED) {
+                            j -= 1;
+                            span_link[j] = Some(clean.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
     let mut s = String::new();
     for (idx, span) in line.spans.iter().enumerate() {
         let st = line.style.patch(span.style);
@@ -349,34 +370,46 @@ pub fn ansi(line: &Line) -> String {
         if let Some(c) = st.bg.and_then(|c| sgr(c, true)) {
             codes.push(c);
         }
-        // An underlined span (or one immediately followed by ` (https://…)`) becomes an OSC 8 hyperlink.
-        let url = if st.add_modifier.contains(Modifier::UNDERLINED) {
-            let trimmed = span.content.trim();
-            if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
-                Some(trimmed.to_string())
-            } else {
-                line.spans
-                    .get(idx + 1)
-                    .and_then(|next| next.content.strip_prefix(" (")?.strip_suffix(')'))
-                    .filter(|u| u.starts_with("https://") || u.starts_with("http://"))
-                    .map(str::to_string)
-            }
-        } else {
-            None
-        };
-        let body = if let Some(u) = url {
-            let u: String = u.chars().filter(|c| !c.is_control()).collect();
+        let body = if let Some(u) = &span_link[idx] {
             format!("\x1b]8;;{u}\x07{}\x1b]8;;\x07", span.content)
         } else {
-            span.content.to_string()
+            link_urls(&span.content)
         };
         if codes.is_empty() {
             s.push_str(&body);
         } else {
-            s.push_str(&format!("\x1b[{}m{}\x1b[0m", codes.join(";"), body));
+            s.push_str(&format!("\x1b[{}m{body}\x1b[0m", codes.join(";")));
         }
     }
     s
+}
+
+/// Wrap any `http://` or `https://` URLs inside `text` in OSC 8 hyperlink sequences.
+fn link_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < text.len() {
+        let rest = &text[at..];
+        let Some(rel) = rest.find("https://").into_iter().chain(rest.find("http://")).min() else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..rel]);
+        let u_byte = at + rel;
+        let after = &text[u_byte..];
+        let end_rel =
+            after.find(|c: char| c.is_whitespace() || matches!(c, ')' | '>' | '"' | '\'' | ']')).unwrap_or(after.len());
+        let raw = after[..end_rel].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        if raw.len() > "https://".len() {
+            let clean: String = raw.chars().filter(|c| !c.is_control()).collect();
+            out.push_str(&format!("\x1b]8;;{clean}\x07{raw}\x1b]8;;\x07"));
+            out.push_str(&after[raw.len()..end_rel]);
+        } else {
+            out.push_str(&after[..end_rel]);
+        }
+        at = u_byte + end_rel.max(1);
+    }
+    out
 }
 
 fn sgr(c: Color, bg: bool) -> Option<String> {

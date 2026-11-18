@@ -336,8 +336,8 @@ with `{"text", "cwd"}`:
   centred input with the mode, model and endpoint under it, the resume line
   and any notices, centred down the screen, with the status line on the
   last row. After it, the transcript sits above the live region (a short one
-  just above it), scrolled with PgUp / PgDn and the mouse wheel (Shift+drag
-  selects text while the mouse is captured); sending goes back to the
+  just above it), scrolled with PgUp / PgDn and the mouse wheel (text is
+  selected with the mouse as in any terminal); sending goes back to the
   newest lines. When the conversation is replaced (`/clear` and its other
   names, `/resume`, `/rewind`, or one loaded at start with `--resume` or
   `--continue`) the session sends `UiEvent::Reset` and the screen starts
@@ -526,7 +526,7 @@ with `{"text", "cwd"}`:
 | Esc | Interrupt the turn; close the menu; cancel a dialog (its last option); twice on an empty prompt: `/rewind` |
 | Ctrl+C | Clear the input; interrupt the turn (and deny an open dialog); twice on an empty prompt: exit |
 | Ctrl+D | Exit (empty prompt) |
-| Shift+Tab | Next permission mode: default, acceptEdits, plan |
+| Shift+Tab | Next permission mode: manual (`default`), acceptEdits, auto, plan, dangerous (`bypassPermissions`) |
 | Up / Down | Line up/down; history on the first/last line; menu or dialog selection |
 | Tab | Complete the highlighted `/` command or `@` path |
 | Ctrl+R | Search prompt history |

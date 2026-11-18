@@ -21,7 +21,7 @@ def clear(t):
 
 def mode(t):
     panel = next((l for l in reversed(t.lines()) if "127.0.0.1" in l), "")
-    for name in ("Accept edits", "Plan", "Default", "Bypass", "Auto", "Don't ask"):
+    for name in ("Dangerous (y/n)", "Accept edits", "Plan", "Manual", "Dangerous", "Auto", "Don't ask"):
         if name in panel:
             return name
     return panel
@@ -110,15 +110,16 @@ def keys(c):
 
     # Shift+Tab cycles the permission mode, and the session follows.
     seen = [mode(t)]
-    for _ in range(3):
+    for _ in range(5):
         t.send(BACKTAB)
         seen.append(mode(t))
-    c.ok(seen == ["Default", "Accept edits", "Plan", "Default"], "Shift+Tab cycles default, accept edits, plan", seen)
+    c.ok(seen == ["Manual", "Accept edits", "Auto", "Plan", "Dangerous (y/n)", "Manual"],
+         "Shift+Tab cycles manual, accept edits, auto, plan, dangerous", seen)
     t.send(BACKTAB)
     screen = c.say(t, "/status", expect="Session:")
     c.ok("acceptEdits" in screen, "the session's mode follows Shift+Tab (/status)", screen)
-    t.send(BACKTAB)
-    t.send(BACKTAB)
+    for _ in range(4):
+        t.send(BACKTAB)
 
     # Ctrl+L redraws: the screen is the same after it.
     before = t.settle()
@@ -616,9 +617,9 @@ def states(c):
             for _ in range(2):
                 if c.dialog(t.text()):
                     t.send(ESC)
-            if mode_now(t) != "Default":
-                for _ in range(3):
-                    if mode_now(t) == "Default":
+            if mode_now(t) != "Manual":
+                for _ in range(6):
+                    if mode_now(t) == "Manual":
                         break
                     t.send(BACKTAB)
             c.ok(c.alive(t, "turn"), f"{name} during a turn: the next prompt works", t.text())
@@ -638,8 +639,8 @@ def states(c):
                 c.ok(False, f"{name}: the permission dialog opens", e)
             if os.path.exists(os.path.join(sb.project, "state-approved.txt")):
                 os.remove(os.path.join(sb.project, "state-approved.txt"))
-            for _ in range(3):
-                if mode_now(t) == "Default":
+            for _ in range(6):
+                if mode_now(t) == "Manual":
                     break
                 t.send(BACKTAB)
             c.ok(t.status is None and c.alive(t, "dialog"), f"{name} with a dialog open: the next prompt works", t.text())

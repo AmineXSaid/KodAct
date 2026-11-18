@@ -63,7 +63,7 @@ model, context used, cost). Design and key table: `docs/TUI.md`.
 | Esc | Interrupt the turn; close the menu; cancel a dialog. Twice on an empty prompt: `/rewind` |
 | Ctrl+C | Clear the input; interrupt the turn; twice on an empty prompt: exit |
 | Ctrl+D | Exit (empty prompt) |
-| Shift+Tab | Cycle the permission mode: default, accept edits, plan |
+| Shift+Tab | Cycle the permission mode: manual (`default`), accept edits, auto, plan, dangerous (`bypassPermissions`) |
 | Up / Down | Move between lines; earlier prompts from the first or last line; move in menus and dialogs |
 | Tab | Complete the highlighted command or `@` path |
 | Ctrl+R | Search earlier prompts; Ctrl+R again for older ones, Esc to cancel |

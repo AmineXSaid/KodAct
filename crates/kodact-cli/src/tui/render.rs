@@ -11,6 +11,7 @@ use unicode_width::UnicodeWidthChar;
 
 use super::app::{App, StatusView};
 use super::front::FrontPage;
+use super::look::Look;
 use super::palette;
 use super::text::{self, width as text_width};
 
@@ -1257,15 +1258,36 @@ pub fn full_view_at(
         let mut input = live.lines;
         let status = input.pop().unwrap_or_default();
         let room = h.saturating_sub(1);
-        // Each row in `rows` already carries `TRANSCRIPT_INDENT`, which lines its `❯` up
-        // with the box's when the box starts at column 0; on the front page the box starts
-        // at `page.box_left`, so the notes shift with it.
-        let notes: Vec<Line<'static>> = rows
+        // Each row in `rows` starts with `TRANSCRIPT_INDENT` (2 spaces), which lines its
+        // `❯` up with a boxed input's `│ ❯` when the box starts at column 0. On the front
+        // page the box sits at `page.box_left` and is `page.box_w` columns wide; in open
+        // styles (`Bare`, `Ledger`) the input has no `│ ` border, so its `›`/`❯` sits at
+        // `page.box_left` directly. Strip `TRANSCRIPT_INDENT`, wrap to the text room inside
+        // the box, and indent to the box's prompt column so notes neither misalign nor
+        // overflow the box's right edge.
+        let open = matches!(app.look, Look::Bare | Look::Ledger);
+        let note_col = page.box_left + if open { 0 } else { 2 };
+        let note_w = page.box_w.saturating_sub(if open { 0 } else { 4 }).max(10) as u16;
+        let stripped: Vec<Line<'static>> = rows
             .iter()
             .cloned()
             .map(|mut l| {
-                if page.box_left > 0 && !l.spans.is_empty() {
-                    l.spans.insert(0, Span::raw(" ".repeat(page.box_left)));
+                if let Some(first) = l.spans.first_mut() {
+                    if let Some(rest) = first.content.strip_prefix("  ") {
+                        first.content = rest.to_string().into();
+                        if first.content.is_empty() {
+                            l.spans.remove(0);
+                        }
+                    }
+                }
+                l
+            })
+            .collect();
+        let notes: Vec<Line<'static>> = text::wrap(stripped, note_w)
+            .into_iter()
+            .map(|mut l| {
+                if note_col > 0 && !l.spans.is_empty() {
+                    l.spans.insert(0, Span::raw(" ".repeat(note_col)));
                 }
                 l
             })
@@ -1773,7 +1795,12 @@ fn session_row(app: &App, room: usize) -> Vec<Span<'static>> {
     let s = &app.status;
     let w_of = |v: &[Span<'static>]| v.iter().map(|s| text_width(&s.content)).sum::<usize>();
     let sep = || Span::styled("  ·  ", t.subtle());
-    let mode = vec![Span::styled(mode_name(&s.mode), t.mode(&s.mode).add_modifier(ratatui::style::Modifier::BOLD))];
+    let (label, mstyle) = if app.danger_armed {
+        ("Dangerous (y/n)".to_string(), t.error())
+    } else {
+        (mode_name(&s.mode), t.mode(&s.mode))
+    };
+    let mode = vec![Span::styled(label, mstyle.add_modifier(ratatui::style::Modifier::BOLD))];
     let mut right = vec![];
     if s.context_pct.is_some_and(|p| p > 0 || s.context_used) {
         right.extend(gauge(&t, s));
@@ -2799,14 +2826,31 @@ mod tests {
         assert!(rows[29].ends_with(&format!("v{}", kodact_core::VERSION)), "the status line on the last row");
         let (_, cy) = v.cursor.unwrap();
         assert!(rows[cy as usize].contains('❯'), "the cursor in the input");
-        // A note on the front page (`/clear` and its answer) lines up with the box's `❯`.
-        let note_rows = vec![Line::from("  ❯ /clear"), Line::from("    Conversation cleared.")];
+        // A note on the front page (`/clear` and its answer) lines up with the box's `❯`
+        // and wraps within the box's width, in both boxed and open styles.
+        let note_rows =
+            vec![Line::from("  ❯ /clear"), Line::from(format!("    Conversation cleared. {}", "word ".repeat(16)))];
         let (vn, _) = full_view(&a, 100, 30, &note_rows, &page, 0);
         let (nrows, _) = draw(&vn, 100);
         let box_prompt = nrows.iter().find(|r| r.contains("What shall we build")).unwrap();
         let clear_row = nrows.iter().find(|r| r.contains("❯ /clear")).unwrap();
-        let col = |r: &str| text::width(&r[..r.find('❯').unwrap()]);
-        assert_eq!(col(clear_row), col(box_prompt), "aligned with the box: {nrows:#?}");
+        let col = |r: &str, ch: char| text::width(&r[..r.find(ch).unwrap()]);
+        assert_eq!(col(clear_row, '❯'), col(box_prompt, '❯'), "aligned with the box: {nrows:#?}");
+        assert!(
+            nrows
+                .iter()
+                .filter(|r| r.contains("word"))
+                .all(|r| text::width(r) <= (page.box_left + page.box_w) as usize),
+            "long notes wrap within the box: {nrows:#?}"
+        );
+        a.look = Look::Bare;
+        let bare_notes = vec![Line::from("  › /clear"), Line::from("    Conversation cleared.")];
+        let (vb, _) = full_view(&a, 100, 30, &bare_notes, &page, 0);
+        let (brows, _) = draw(&vb, 100);
+        let bare_prompt = brows.iter().find(|r| r.contains("What shall we build")).unwrap();
+        let bare_clear = brows.iter().find(|r| r.contains("› /clear")).unwrap();
+        assert_eq!(col(bare_clear, '›'), col(bare_prompt, '›'), "aligned in open style too: {brows:#?}");
+        a.look = Look::Frame;
         // After the first message: the transcript from the top, the input at the bottom.
         a.submit("hello".into());
         let transcript: Vec<Line<'static>> = (1..=40).map(|i| Line::from(format!("line {i}"))).collect();

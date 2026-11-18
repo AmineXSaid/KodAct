@@ -36,7 +36,7 @@ def restore(c, t):
     t.send(ctrl("u"))
     panel = lambda: next((l for l in reversed(t.lines()) if "127.0.0.1" in l), "")
     for _ in range(6):
-        if re.search(r"\bDefault\b", panel()):
+        if re.search(r"\bManual\b", panel()):
             break
         t.send(kterm.BACKTAB)
     if "stub-model" not in panel() or "✗" in panel():

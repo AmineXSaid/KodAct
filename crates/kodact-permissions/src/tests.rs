@@ -178,6 +178,24 @@ fn mode_names_round_trip() {
         assert_eq!(PermissionMode::parse(m).unwrap().as_str(), m);
     }
     assert_eq!(PermissionMode::parse("manual"), Some(PermissionMode::Default));
+    assert_eq!(
+        [
+            PermissionMode::Default.next(true),
+            PermissionMode::AcceptEdits.next(true),
+            PermissionMode::Auto.next(true),
+            PermissionMode::Plan.next(true),
+            PermissionMode::BypassPermissions.next(true),
+            PermissionMode::Plan.next(false),
+        ],
+        [
+            PermissionMode::AcceptEdits,
+            PermissionMode::Auto,
+            PermissionMode::Plan,
+            PermissionMode::BypassPermissions,
+            PermissionMode::Default,
+            PermissionMode::Default,
+        ]
+    );
 }
 
 #[test]

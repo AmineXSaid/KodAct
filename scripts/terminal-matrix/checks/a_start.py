@@ -195,8 +195,8 @@ def model_and_mode(c):
     c.say(t, "hi", expect="echo: hi")
     c.ok(st.requests[-1]["model"] == "other-model", "--model: the request uses it", st.requests[-1]["model"])
     c.quit(t)
-    names = {"default": "Default", "acceptEdits": "Accept edits", "plan": "Plan", "dontAsk": "Don't ask",
-             "bypassPermissions": "Bypass", "auto": "Auto"}
+    names = {"default": "Manual", "acceptEdits": "Accept edits", "plan": "Plan", "dontAsk": "Don't ask",
+             "bypassPermissions": "Dangerous", "auto": "Auto"}
     for mode, label in names.items():
         t = c.term(sb, st, args=["--permission-mode", mode])
         screen = t.text()

@@ -62,92 +62,159 @@ const HISTORY_ENTRIES: usize = 500;
 /// built from) is drawn as its picture, and an `http://` or `https://` address on a row
 /// is wrapped in an OSC 8 hyperlink so clicking it in the discussion opens it. Every
 /// draw of both displays goes through here.
-fn safe_cells<'a>(
-    content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
-) -> Vec<(u16, u16, std::borrow::Cow<'a, ratatui::buffer::Cell>)> {
-    let mut cells: Vec<(u16, u16, std::borrow::Cow<'a, ratatui::buffer::Cell>)> = content
-        .map(|(x, y, cell)| {
-            if cell.symbol().chars().any(char::is_control) {
-                let mut safe = cell.clone();
-                safe.set_symbol(&text::printable(cell.symbol()));
-                (x, y, std::borrow::Cow::Owned(safe))
-            } else {
-                (x, y, std::borrow::Cow::Borrowed(cell))
-            }
-        })
-        .collect();
-    link_cells(&mut cells);
-    cells
+///
+/// `ratatui::Buffer::diff` only sends the cells that changed since the last frame. A URL
+/// or `[text](url)` label updated in part (streaming tokens, scrolling over a row that
+/// shares a space or letter at the same column) would be cut in two if only the diff
+/// cells were inspected. `Grid` keeps the full screen as last drawn so every row that
+/// changed has its complete hyperlinks recomputed and any cell whose wrapped symbol
+/// changed is emitted in full.
+#[derive(Default)]
+struct Grid {
+    /// Each row's cells paired with `(wide_continuation, had_osc8)`.
+    rows: std::collections::BTreeMap<u16, Vec<(ratatui::buffer::Cell, bool, bool)>>,
 }
 
-/// Wrap contiguous runs of cells that form an `http://` or `https://` URL on the same
-/// row in an OSC 8 hyperlink (`\x1b]8;;url\x07…\x1b]8;;\x07`). Also links a `[text]`
-/// label (underlined) directly followed by ` (https://…)`.
-fn link_cells(cells: &mut [(u16, u16, std::borrow::Cow<'_, ratatui::buffer::Cell>)]) {
-    let mut row_start = 0;
-    while row_start < cells.len() {
-        let y = cells[row_start].1;
-        let mut row_end = row_start + 1;
-        while row_end < cells.len() && cells[row_end].1 == y && cells[row_end].0 == cells[row_end - 1].0 + 1 {
-            row_end += 1;
-        }
-        let row = &mut cells[row_start..row_end];
-        let syms: Vec<char> = row.iter().map(|(_, _, c)| c.symbol().chars().next().unwrap_or(' ')).collect();
-        let text: String = syms.iter().collect();
-        // Byte index -> cell index when every cell is one char.
-        if text.chars().count() == row.len() {
-            let char_idx: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
-            let cell_of = |byte: usize| char_idx.partition_point(|&b| b < byte);
-            let mut at = 0;
-            while at < text.len() {
-                let rest = &text[at..];
-                let Some(rel) = rest.find("https://").into_iter().chain(rest.find("http://")).min() else { break };
-                let u_byte = at + rel;
-                let after = &text[u_byte..];
-                let end_rel = after
-                    .find(|c: char| c.is_whitespace() || matches!(c, ')' | '>' | '"' | '\'' | ']'))
-                    .unwrap_or(after.len());
-                let raw = after[..end_rel].trim_end_matches(['.', ',', ';', ':', '!', '?']);
-                let u_start = cell_of(u_byte);
-                let u_end = cell_of(u_byte + raw.len());
-                if raw.len() > "https://".len() && u_end > u_start && u_end <= row.len() {
-                    let url: String = raw.chars().filter(|c| !c.is_control()).collect();
-                    // Wrap the URL cells themselves.
-                    wrap_osc8(row, u_start, u_end - 1, &url);
-                    // If ` (url)` directly follows underlined link text (`[text](url)`), link the text too.
-                    if u_start >= 2 && syms[u_start - 2] == ' ' && syms[u_start - 1] == '(' {
-                        let t_end = u_start - 2;
-                        let mut t_start = t_end;
-                        while t_start > 0 && row[t_start - 1].2.modifier.contains(ratatui::style::Modifier::UNDERLINED)
-                        {
-                            t_start -= 1;
-                        }
-                        if t_start < t_end {
-                            wrap_osc8(row, t_start, t_end - 1, &url);
-                        }
-                    }
+impl Grid {
+    fn clear(&mut self) {
+        self.rows.clear();
+    }
+
+    fn apply<'a>(
+        &mut self,
+        content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    ) -> Vec<(u16, u16, ratatui::buffer::Cell)> {
+        let mut dirty_rows: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
+        let mut touched: std::collections::BTreeSet<(u16, u16)> = std::collections::BTreeSet::new();
+        for (x, y, cell) in content {
+            let mut safe = cell.clone();
+            if cell.symbol().chars().any(char::is_control) {
+                safe.set_symbol(&text::printable(cell.symbol()));
+            }
+            let row = self.rows.entry(y).or_default();
+            let xi = x as usize;
+            if xi > 0
+                && touched.contains(&(y, x - 1))
+                && row.get(xi - 1).is_some_and(|(c, _, _)| unicode_width::UnicodeWidthStr::width(c.symbol()) > 1)
+            {
+                continue;
+            }
+            if row.len() <= xi {
+                row.resize(xi + 1, (ratatui::buffer::Cell::EMPTY, false, false));
+            }
+            // A 2-column glyph in ratatui skips `x + 1` in the diff; mark the trailing
+            // column as a continuation so the row's columns stay 1-to-1 with `x`.
+            let w = unicode_width::UnicodeWidthStr::width(safe.symbol());
+            let prev_osc = row[xi].2;
+            row[xi] = (safe, false, prev_osc);
+            if w > 1 {
+                if row.len() <= xi + 1 {
+                    row.resize(xi + 2, (ratatui::buffer::Cell::EMPTY, false, false));
                 }
-                at = u_byte + end_rel.max(1);
+                let next_osc = row[xi + 1].2;
+                row[xi + 1] = (ratatui::buffer::Cell::EMPTY, true, next_osc);
+            }
+            dirty_rows.insert(y);
+            touched.insert((y, x));
+        }
+        let mut out: Vec<(u16, u16, ratatui::buffer::Cell)> = vec![];
+        for y in dirty_rows {
+            let Some(raw_row) = self.rows.get_mut(&y) else { continue };
+            let linked = link_full_row(raw_row);
+            for (x, cell) in linked.into_iter().enumerate() {
+                let x16 = x as u16;
+                let has_osc = cell.symbol().contains("\x1b]8;");
+                let had_osc = raw_row[x].2;
+                raw_row[x].2 = has_osc;
+                if raw_row[x].1 && !touched.contains(&(y, x16)) {
+                    continue;
+                }
+                // Emit every cell that ratatui's diff sent, plus any cell on this row
+                // that gained, changed, or lost an OSC 8 boundary.
+                if touched.contains(&(y, x16)) || has_osc || had_osc {
+                    out.push((x16, y, cell));
+                }
             }
         }
-        row_start = row_end;
+        out
     }
 }
 
-fn wrap_osc8(
-    row: &mut [(u16, u16, std::borrow::Cow<'_, ratatui::buffer::Cell>)],
-    first: usize,
-    last: usize,
-    url: &str,
-) {
-    let open = format!("\x1b]8;;{url}\x07{}", row[first].2.symbol());
-    row[first].2.to_mut().set_symbol(&open);
-    let close = format!("{}\x1b]8;;\x07", row[last].2.symbol());
-    row[last].2.to_mut().set_symbol(&close);
+/// Return a copy of `raw_row` with OSC 8 hyperlink sequences (`\x1b]8;;url\x07…\x1b]8;;\x07`)
+/// wrapped around every `http://` / `https://` URL and any underlined `[text]` label
+/// immediately preceding ` (https://…)`.
+fn link_full_row(raw_row: &[(ratatui::buffer::Cell, bool, bool)]) -> Vec<ratatui::buffer::Cell> {
+    let mut row: Vec<ratatui::buffer::Cell> = raw_row.iter().map(|(c, _, _)| c.clone()).collect();
+    let row_len = row.len();
+    // Map each character of the concatenated row text back to its cell index `x`.
+    let mut text = String::new();
+    let mut byte_to_cell: Vec<(usize, usize)> = vec![];
+    for (x, (c, cont, _)) in raw_row.iter().enumerate() {
+        if *cont {
+            continue;
+        }
+        for ch in c.symbol().chars() {
+            byte_to_cell.push((text.len(), x));
+            text.push(ch);
+        }
+    }
+    let cell_of = |byte: usize| -> usize {
+        let idx = byte_to_cell.partition_point(|&(b, _)| b < byte);
+        byte_to_cell.get(idx).map(|&(_, x)| x).unwrap_or(row_len)
+    };
+    let mut at = 0;
+    while at < text.len() {
+        let rest = &text[at..];
+        let Some(rel) = rest.find("https://").into_iter().chain(rest.find("http://")).min() else { break };
+        let u_byte = at + rel;
+        let after = &text[u_byte..];
+        let end_rel =
+            after.find(|c: char| c.is_whitespace() || matches!(c, ')' | '>' | '"' | '\'' | ']')).unwrap_or(after.len());
+        let raw = after[..end_rel].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        if raw.len() > "https://".len() {
+            let u_start = cell_of(u_byte);
+            let last_char_byte = u_byte + raw.char_indices().next_back().map(|(b, _)| b).unwrap_or(0);
+            let u_last = cell_of(last_char_byte);
+            if u_start <= u_last && u_last < row.len() {
+                let url: String = raw.chars().filter(|c| !c.is_control()).collect();
+                wrap_cell_range(&mut row, u_start, u_last, &url);
+                // If ` (url)` directly follows underlined link text (`[text](url)`), link the text too.
+                if u_byte >= 2 && text.as_bytes()[u_byte - 2] == b' ' && text.as_bytes()[u_byte - 1] == b'(' {
+                    let t_end = cell_of(u_byte - 2);
+                    let mut t_start = t_end;
+                    while t_start > 0
+                        && (raw_row[t_start - 1].1
+                            || row[t_start - 1].modifier.contains(ratatui::style::Modifier::UNDERLINED))
+                    {
+                        t_start -= 1;
+                    }
+                    while t_start < t_end && raw_row[t_start].1 {
+                        t_start += 1;
+                    }
+                    let mut t_last = t_end.saturating_sub(1);
+                    while t_last > t_start && raw_row[t_last].1 {
+                        t_last -= 1;
+                    }
+                    if t_start < t_end && row[t_start].modifier.contains(ratatui::style::Modifier::UNDERLINED) {
+                        wrap_cell_range(&mut row, t_start, t_last, &url);
+                    }
+                }
+            }
+        }
+        at = u_byte + end_rel.max(1);
+    }
+    row
 }
 
-/// A backend that writes only [`safe_cells`].
-pub struct Safe<B: Backend>(pub B);
+fn wrap_cell_range(row: &mut [ratatui::buffer::Cell], first: usize, last: usize, url: &str) {
+    let open = format!("\x1b]8;;{url}\x07{}", row[first].symbol());
+    row[first].set_symbol(&open);
+    let close = format!("{}\x1b]8;;\x07", row[last].symbol());
+    row[last].set_symbol(&close);
+}
+
+/// A backend that writes only sanitized cells with full-row OSC 8 hyperlinks.
+pub struct Safe<B: Backend>(pub B, Grid);
 
 impl<B: Backend> std::ops::Deref for Safe<B> {
     type Target = B;
@@ -161,8 +228,8 @@ impl<B: Backend> Backend for Safe<B> {
     where
         I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
     {
-        let cells = safe_cells(content);
-        self.0.draw(cells.iter().map(|(x, y, c)| (*x, *y, c.as_ref())))
+        let cells = self.1.apply(content);
+        self.0.draw(cells.iter().map(|(x, y, c)| (*x, *y, c)))
     }
     fn append_lines(&mut self, n: u16) -> std::io::Result<()> {
         self.0.append_lines(n)
@@ -180,9 +247,11 @@ impl<B: Backend> Backend for Safe<B> {
         self.0.set_cursor_position(position)
     }
     fn clear(&mut self) -> std::io::Result<()> {
+        self.1.clear();
         self.0.clear()
     }
     fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> std::io::Result<()> {
+        self.1.clear();
         self.0.clear_region(clear_type)
     }
     fn size(&self) -> std::io::Result<ratatui::layout::Size> {
@@ -208,6 +277,7 @@ impl<B: Backend> Backend for Safe<B> {
 pub struct Tracked<B: Backend> {
     inner: B,
     pos: std::rc::Rc<std::cell::Cell<Option<Position>>>,
+    grid: Grid,
 }
 
 impl<B: Backend> Backend for Tracked<B> {
@@ -216,8 +286,8 @@ impl<B: Backend> Backend for Tracked<B> {
         I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
     {
         let mut last = None;
-        let cells = safe_cells(content.inspect(|(x, y, _)| last = Some(Position { x: *x, y: *y })));
-        self.inner.draw(cells.iter().map(|(x, y, c)| (*x, *y, c.as_ref())))?;
+        let cells = self.grid.apply(content.inspect(|(x, y, _)| last = Some(Position { x: *x, y: *y })));
+        self.inner.draw(cells.iter().map(|(x, y, c)| (*x, *y, c)))?;
         if let Some(p) = last {
             self.pos.set(Some(Position { x: p.x.saturating_add(1), y: p.y }));
         }
@@ -260,10 +330,12 @@ impl<B: Backend> Backend for Tracked<B> {
     }
 
     fn clear(&mut self) -> std::io::Result<()> {
+        self.grid.clear();
         self.inner.clear()
     }
 
     fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> std::io::Result<()> {
+        self.grid.clear();
         self.inner.clear_region(clear_type)
     }
 
@@ -298,7 +370,7 @@ const TAIL_LINES: usize = 400;
 impl<B: Backend> Screen<B> {
     pub fn new(mut make: Box<dyn FnMut() -> B>, height: u16) -> std::io::Result<Self> {
         let pos = std::rc::Rc::new(std::cell::Cell::new(None));
-        let backend = Tracked { inner: make(), pos: pos.clone() };
+        let backend = Tracked { inner: make(), pos: pos.clone(), grid: Grid::default() };
         let terminal = Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Inline(height) })?;
         Ok(Screen { terminal, make, height, pos, tail: Default::default() })
     }
@@ -323,7 +395,7 @@ impl<B: Backend> Screen<B> {
             return Ok(());
         }
         self.terminal.clear()?;
-        let backend = Tracked { inner: (self.make)(), pos: self.pos.clone() };
+        let backend = Tracked { inner: (self.make)(), pos: self.pos.clone(), grid: Grid::default() };
         self.terminal = Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Inline(h) })?;
         self.height = h;
         Ok(())
@@ -358,7 +430,7 @@ impl<B: Backend> Screen<B> {
     fn start_at_top(&mut self, wipe: impl FnOnce() -> std::io::Result<()>) -> std::io::Result<()> {
         wipe()?;
         self.pos.set(Some(Position { x: 0, y: 0 }));
-        let backend = Tracked { inner: (self.make)(), pos: self.pos.clone() };
+        let backend = Tracked { inner: (self.make)(), pos: self.pos.clone(), grid: Grid::default() };
         self.terminal = Terminal::with_options(backend, TerminalOptions { viewport: Viewport::Inline(self.height) })?;
         Ok(())
     }
@@ -460,7 +532,8 @@ pub struct Full<B: Backend> {
 
 impl<B: Backend> Full<B> {
     pub fn new(backend: B, info: front::FrontInfo) -> std::io::Result<Self> {
-        let terminal = Terminal::with_options(Safe(backend), TerminalOptions { viewport: Viewport::Fullscreen })?;
+        let terminal =
+            Terminal::with_options(Safe(backend, Grid::default()), TerminalOptions { viewport: Viewport::Fullscreen })?;
         Ok(Full {
             terminal,
             transcript: vec![],
@@ -576,7 +649,7 @@ impl<B: Backend> Full<B> {
 /// Where the UI draws: the whole window, or an inline viewport.
 enum Display {
     Full(Box<Full<CrosstermBackend<std::io::Stdout>>>),
-    Inline(Screen<CrosstermBackend<std::io::Stdout>>),
+    Inline(Box<Screen<CrosstermBackend<std::io::Stdout>>>),
 }
 
 impl Display {
@@ -641,10 +714,8 @@ fn setup(full: bool) -> std::io::Result<Guard> {
     crossterm::execute!(out, EnableBracketedPaste)?;
     if full {
         // No EnableMouseCapture: the terminal keeps mouse selection so output can be
-        // copied straight from the screen. ?1007h asks the terminal to send Up/Down on
-        // the wheel while the alternate screen is up.
+        // copied straight from the screen.
         crossterm::execute!(out, crossterm::terminal::EnterAlternateScreen)?;
-        out.write_all(b"\x1b[?1007h")?;
         FULL.store(true, std::sync::atomic::Ordering::SeqCst);
     }
     if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
@@ -907,7 +978,9 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
     let mut screen = if full {
         Display::Full(Box::new(Full::new(CrosstermBackend::new(std::io::stdout()), info).map_err(draw_fail)?))
     } else {
-        Display::Inline(Screen::new(Box::new(|| CrosstermBackend::new(std::io::stdout())), 1).map_err(draw_fail)?)
+        Display::Inline(Box::new(
+            Screen::new(Box::new(|| CrosstermBackend::new(std::io::stdout())), 1).map_err(draw_fail)?,
+        ))
     };
 
     let send = |text: String, to: &mpsc::UnboundedSender<ToSession>| {
@@ -999,6 +1072,7 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
         tokio::select! {
             ev = events.next() => match ev {
                 Some(Ok(Event::Key(k))) if k.kind != KeyEventKind::Release
+                    && !app.danger_armed
                     && app.keymap.translate(k).is_some_and(|k| {
                         k.code == KeyCode::Char('l') && k.modifiers.contains(KeyModifiers::CONTROL)
                     }) => {
@@ -1018,6 +1092,7 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                 }
                 Some(Ok(Event::Key(k))) if k.kind != KeyEventKind::Release
                     && app.dialog.is_none()
+                    && !app.danger_armed
                     && matches!(k.code, KeyCode::PageUp | KeyCode::PageDown)
                     && matches!(screen, Display::Full(_)) => {
                     if let Display::Full(f) = &mut screen {
@@ -1281,16 +1356,23 @@ mod tests {
             );
         };
 
-        // Links in the discussion become OSC 8 hyperlinks on the screen and in ANSI output.
-        let linked = text::inline("See [docs](https://kodact.dev/a) or https://kodact.dev/b.", &theme);
+        // Links in the discussion become OSC 8 hyperlinks on the screen and in ANSI output,
+        // including multi-span labels, wide characters, and partial frame diffs.
+        let linked = text::inline("See [**bold** docs](https://kodact.dev/a) or (https://kodact.dev/b).", &theme);
         let ansi = brand::ansi(&Line::from(linked));
-        assert!(ansi.contains("\x1b]8;;https://kodact.dev/a\x07docs\x1b]8;;\x07"), "{ansi:?}");
+        assert!(ansi.contains("\x1b]8;;https://kodact.dev/a\x07bold\x1b]8;;\x07"), "{ansi:?}");
+        assert!(ansi.contains("\x1b]8;;https://kodact.dev/a\x07 docs\x1b]8;;\x07"), "{ansi:?}");
         assert!(ansi.contains("\x1b]8;;https://kodact.dev/b\x07https://kodact.dev/b\x1b]8;;\x07"), "{ansi:?}");
         let mut s = Screen::new(Box::new(|| TestBackend::new(80, 4)), 1).unwrap();
-        s.commit(vec![Line::from(text::inline("Visit [site](https://kodact.dev/x).", &theme))]).unwrap();
+        s.commit(vec![Line::from(text::inline("Visit [中文](https://kodact.dev/x).", &theme))]).unwrap();
         let drawn = cells(s.backend());
-        assert!(drawn.contains("\x1b]8;;https://kodact.dev/x\x07site\x1b]8;;\x07"), "{drawn:?}");
+        assert!(drawn.contains("\x1b]8;;https://kodact.dev/x\x07中") && drawn.contains("文\x1b]8;;\x07"), "{drawn:?}");
         assert!(drawn.contains("\x1b]8;;https://kodact.dev/x\x07https://kodact.dev/x\x1b]8;;\x07"), "{drawn:?}");
+        // Streaming a URL across two draws updates the whole URL's OSC 8 target on the row.
+        s.draw(&LiveView { lines: vec![Line::from("https://kodact.dev/a")], cursor: None }).unwrap();
+        assert!(cells(s.backend()).contains("\x1b]8;;https://kodact.dev/a\x07https://kodact.dev/a\x1b]8;;\x07"));
+        s.draw(&LiveView { lines: vec![Line::from("https://kodact.dev/ab")], cursor: None }).unwrap();
+        assert!(cells(s.backend()).contains("\x1b]8;;https://kodact.dev/ab\x07https://kodact.dev/ab\x1b]8;;\x07"));
 
         // Full screen: pasted into the prompt, and in a line a source failed to clean.
         let mut a = app::App::new(theme, vec![]);

@@ -486,7 +486,8 @@ def plan(c):
     t = c.term(sb, st, KODACT_VERIFY="0")
     t.send(BACKTAB)
     t.send(BACKTAB)
-    c.ok("Plan" in next((l for l in reversed(t.lines()) if "127.0.0.1" in l), ""), "Shift+Tab twice enters plan mode", t.text())
+    t.send(BACKTAB)
+    c.ok("Plan" in next((l for l in reversed(t.lines()) if "127.0.0.1" in l), ""), "Shift+Tab three times enters plan mode", t.text())
     t.type("plan-this", settle=False)
     try:
         screen = t.wait(re.compile(r"Yes.*\n.*(Yes|ask)|keep planning", re.I), timeout=15)
