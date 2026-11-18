@@ -642,26 +642,56 @@ fn highlight_match(text: &str, query: &str, hi: Style) -> Vec<Span<'static>> {
 }
 
 /// The keys that help now, for the frame style's status line: while the model
-/// works, how to stop it; in a menu, how to choose; with nothing typed, the
-/// commands, files and modes; while typing, how to send.
+/// works, how to stop it; in find or a menu, how to step; with nothing typed, the
+/// relevant commands, search, fold toggle, code copy, and modes; while typing, how to send.
 fn hints(app: &App, room: usize) -> Vec<Span<'static>> {
     let t = app.theme;
-    let keys: &[(&str, &str)] = if app.dialog.is_some() {
+    let mut keys: Vec<(&'static str, &'static str)> = Vec::new();
+    if app.dialog.is_some() {
         // The dialog says its own keys.
-        &[]
+    } else if app.find.is_some() {
+        keys.extend([("enter", "next"), ("↑↓", "match"), ("esc", "close")]);
     } else if app.busy && !app.queued.is_empty() && app.editor.is_empty() {
-        &[("esc", "stop"), ("↑", "take the queued message back")]
+        keys.extend([("esc", "stop"), ("↑", "take the queued message back")]);
+        if app.has_collapsible {
+            keys.push(("ctrl+o", if app.verbose { "less" } else { "thoughts" }));
+        }
+        keys.push(("shift+tab", "mode"));
     } else if app.busy {
-        &[("esc", "stop"), ("enter", "queue a message")]
+        keys.extend([("esc", "stop"), ("enter", "queue a message")]);
+        if app.has_collapsible {
+            keys.push(("ctrl+o", if app.verbose { "less" } else { "thoughts" }));
+        }
+        keys.push(("shift+tab", "mode"));
     } else if !app.menu().is_empty() || !app.file_menu().is_empty() {
-        &[("↑↓", "choose"), ("tab", "complete"), ("esc", "close")]
+        keys.extend([("↑↓", "choose"), ("tab", "complete"), ("esc", "close")]);
     } else if app.editor.is_empty() && app.status.mode == "plan" {
-        // Plan mode: how to leave it and act on the plan.
-        &[("shift+tab", "leave plan mode"), ("/", "commands"), ("?", "keys")]
+        // Plan mode: how to leave it and act on the plan, plus active transcript shortcuts.
+        keys.extend([("shift+tab", "leave plan mode"), ("/", "commands")]);
+        if app.talked {
+            keys.push(("ctrl+f", "find"));
+        }
+        if app.has_collapsible {
+            keys.push(("ctrl+o", if app.verbose { "less" } else { "thoughts" }));
+        }
+        if app.has_code {
+            keys.push(("alt+c", "copy code"));
+        }
+        keys.push(("?", "keys"));
     } else if app.editor.is_empty() {
-        &[("/", "commands"), ("@", "files"), ("shift+tab", "mode"), ("?", "keys")]
+        keys.extend([("/", "commands"), ("@", "files"), ("shift+tab", "mode")]);
+        if app.talked {
+            keys.push(("ctrl+f", "find"));
+        }
+        if app.has_collapsible {
+            keys.push(("ctrl+o", if app.verbose { "less" } else { "thoughts" }));
+        }
+        if app.has_code {
+            keys.push(("alt+c", "copy code"));
+        }
+        keys.push(("?", "keys"));
     } else {
-        &[("enter", "send"), ("shift+enter", "new line")]
+        keys.extend([("enter", "send"), ("shift+enter", "new line")]);
     };
     let mut out: Vec<Span<'static>> = vec![];
     let mut used = 0;
@@ -1509,10 +1539,28 @@ pub fn full_view_at(
     }
     if scroll > 0 && !out.is_empty() {
         let t = app.theme;
-        let note = format!("↓ {scroll} more {} · wheel / PgDn", if scroll == 1 { "line" } else { "lines" });
-        let pad = (width as usize).saturating_sub(text_width(&note)) / 2;
+        let pct = (end * 100) / rows.len().max(1);
+        let word = if scroll == 1 { "line" } else { "lines" };
+        let full = format!("↑ {pct}% · ↓ {scroll} more {word} · wheel / PgDn / End bottom");
+        let w = width as usize;
+        let spans = if text_width(&full) <= w {
+            vec![
+                Span::styled(format!("↑ {pct}%"), t.dim()),
+                Span::styled(format!(" · ↓ {scroll} more {word} · wheel / PgDn / End bottom"), t.subtle()),
+            ]
+        } else {
+            let compact = fit(&format!("↑ {pct}% · ↓ {scroll} · End bottom"), w);
+            vec![Span::styled(compact, t.subtle())]
+        };
+        let note_w: usize = spans.iter().map(|s| text_width(&s.content)).sum();
+        let pad = w.saturating_sub(note_w) / 2;
         let last = out.len() - 1;
-        out[last] = Line::from(vec![Span::raw(" ".repeat(pad)), Span::styled(note, t.subtle())]);
+        let mut line_spans = Vec::with_capacity(spans.len() + 1);
+        if pad > 0 {
+            line_spans.push(Span::raw(" ".repeat(pad)));
+        }
+        line_spans.extend(spans);
+        out[last] = Line::from(line_spans);
     }
     // A short transcript sits just above the live region, as one flow with the input.
     if out.len() < avail {
@@ -3140,7 +3188,7 @@ mod tests {
         let (rows, _) = draw(&v, 100);
         // The last row turns into the note of what is below.
         assert!(rows.iter().any(|r| r == "line 29") && !rows.iter().any(|r| r == "line 31"), "{rows:#?}");
-        assert!(rows.iter().any(|r| r.trim() == "↓ 10 more lines · wheel / PgDn"), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.trim() == "↑ 75% · ↓ 10 more lines · wheel / PgDn / End bottom"), "{rows:#?}");
         // A short transcript sits just above the live region, not at the top with a gap.
         let (v, _) = full_view(&a, 100, 30, &transcript[..2], &page, 0);
         let (rows, _) = draw(&v, 100);
@@ -3691,5 +3739,73 @@ mod tests {
         // Degenerate narrow terminal never panics or exceeds w.
         let tiny = cornered(Line::from("Title"), vec![Line::from("Body")], 3, a.theme.accent(), a.theme.hairline());
         assert!(tiny.iter().all(|l| text_width(&text::plain(l)) <= 3));
+    }
+
+    #[test]
+    fn contextual_hints_adapt_to_session_state() {
+        let mut a = app(false);
+        a.look = crate::tui::look::Look::Frame;
+        let status_row = |app: &App, w: u16| draw(&live_view(app, w, 12), w).0.pop().unwrap();
+
+        // Fresh idle session: base navigation without find/fold/copy clutter.
+        let fresh = status_row(&a, 140);
+        assert!(fresh.contains("/ commands") && fresh.contains("@ files") && fresh.contains("shift+tab mode"));
+        assert!(!fresh.contains("ctrl+f find") && !fresh.contains("ctrl+o") && !fresh.contains("alt+c copy code"));
+
+        // Active transcript with collapsible thoughts and code fences surfaces contextual keys.
+        a.talked = true;
+        a.has_collapsible = true;
+        a.has_code = true;
+        let rich = status_row(&a, 140);
+        assert!(rich.contains("ctrl+f find"), "{rich}");
+        assert!(rich.contains("ctrl+o thoughts"), "{rich}");
+        assert!(rich.contains("alt+c copy code"), "{rich}");
+
+        // Verbose toggle flips the ctrl+o hint label from `thoughts` to `less`.
+        a.verbose = true;
+        let expanded = status_row(&a, 140);
+        assert!(expanded.contains("ctrl+o less"), "{expanded}");
+
+        // Find mode surfaces match navigation hints.
+        a.find = Some(crate::tui::app::Find { query: "foo".into(), ..Default::default() });
+        let find_row = status_row(&a, 140);
+        assert!(find_row.contains("enter next") && find_row.contains("↑↓ match") && find_row.contains("esc close"));
+        a.find = None;
+
+        // Busy state keeps `esc` once while surfacing `ctrl+o` and `shift+tab` when space allows.
+        a.busy = true;
+        a.busy_since = Some(Instant::now());
+        a.verbose = false;
+        let busy_row = status_row(&a, 140);
+        assert_eq!(busy_row.matches("esc").count(), 1, "{busy_row}");
+        assert!(busy_row.contains("ctrl+o thoughts") && busy_row.contains("shift+tab mode"), "{busy_row}");
+
+        a.queued.push_back("next prompt".into());
+        let queued_row = status_row(&a, 140);
+        assert!(queued_row.contains("take the queued message back") && queued_row.contains("ctrl+o thoughts"));
+    }
+
+    #[test]
+    fn scroll_footer_shows_percentage_and_fits_narrow_widths() {
+        let mut a = app(false);
+        a.front = false;
+        let page = FrontPage { box_left: 0, box_w: 100, ..Default::default() };
+        let transcript: Vec<Line<'static>> = (1..=80).map(|i| Line::from(format!("line {i}"))).collect();
+
+        // Scroll halfway up (end = 40 of 80 -> 50%).
+        let (v, _) = full_view(&a, 100, 30, &transcript, &page, 40);
+        let footer = draw(&v, 100).0.into_iter().find(|r| r.contains("more lines")).unwrap();
+        assert_eq!(footer.trim(), "↑ 50% · ↓ 40 more lines · wheel / PgDn / End bottom");
+
+        // Single line scroll uses singular "line".
+        let (v1, _) = full_view(&a, 100, 30, &transcript, &page, 1);
+        let footer1 = draw(&v1, 100).0.into_iter().find(|r| r.contains("more line")).unwrap();
+        assert_eq!(footer1.trim(), "↑ 98% · ↓ 1 more line · wheel / PgDn / End bottom");
+
+        // Narrow 40-col screen falls back cleanly while keeping the End shortcut visible.
+        let (vn, _) = full_view(&a, 40, 20, &transcript, &page, 40);
+        let footern = draw(&vn, 40).0.into_iter().find(|r| r.contains("End bottom")).unwrap();
+        assert!(text_width(footern.trim_end()) <= 40, "{footern}");
+        assert!(footern.contains("↑ 50%") && footern.contains("↓ 40"));
     }
 }

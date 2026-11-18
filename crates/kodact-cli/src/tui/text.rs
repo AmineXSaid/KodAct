@@ -556,8 +556,12 @@ impl Markdown {
                 self.fence = Some((ch.to_string().repeat(run), lang.clone()));
                 self.fence_index += 1;
                 let n = self.fence_index;
-                let label = if lang.is_empty() { format!(" #{n}") } else { format!(" {lang} #{n}") };
-                return Some(Line::from(vec![gutter("╭─"), Span::styled(label, t.subtle())]));
+                let mut spans = vec![gutter("╭─")];
+                if !lang.is_empty() {
+                    spans.push(Span::styled(format!(" {lang}"), t.teal().add_modifier(Modifier::BOLD)));
+                }
+                spans.push(Span::styled(format!(" #{n}"), t.dim()));
+                return Some(Line::from(spans));
             }
         }
         // Headings: `#` to `######` and a space.
@@ -1485,5 +1489,21 @@ mod tests {
         assert_eq!(w[1].style, band);
         assert_eq!(w[1].spans[0].style.bg, band.bg, "continuation indent carries base bg");
         assert_eq!(w[1].spans[1].style.bg, band.bg);
+    }
+
+    #[test]
+    fn fence_opener_styles_language_and_index_distinctly() {
+        let mut md = Markdown::default();
+        let named = md.line("```rust", &T).unwrap();
+        assert_eq!(plain(&named), "╭─ rust #1");
+        assert_eq!(named.spans.len(), 3);
+        assert_eq!(named.spans[1].style, T.teal().add_modifier(Modifier::BOLD));
+        assert_eq!(named.spans[2].style, T.dim());
+        assert!(md.line("```", &T).is_some());
+
+        let unnamed = md.line("```", &T).unwrap();
+        assert_eq!(plain(&unnamed), "╭─ #2");
+        assert_eq!(unnamed.spans.len(), 2);
+        assert_eq!(unnamed.spans[1].style, T.dim());
     }
 }

@@ -432,7 +432,7 @@ pub const KEYS: &[(&str, &str, &[&str])] = &[
     ("Ctrl+L", "Redraw the screen", &["redraw"]),
     ("Ctrl+B", "Show or hide the sidebar (full screen, 140+ columns)", &["toggleSidebar"]),
     ("Ctrl+O", "Show or hide thoughts and full tool output", &["toggleDetails"]),
-    ("Alt+C", "Copy the latest fenced code block (/copy code)", &[]),
+    ("Alt+C", "Copy the latest fenced code block (/copy code picks when multiple)", &[]),
 ];
 
 /// The shortcuts in effect, one per line: the defaults, or with `keybindings.json`
@@ -603,6 +603,8 @@ pub struct App {
     pub layout_version: u64,
     /// Whether any collapsible block (thought, truncated diff, long shell tail) was emitted.
     pub has_collapsible: bool,
+    /// Whether any fenced code block was emitted in the current transcript.
+    pub has_code: bool,
     /// A screen or picker waiting for an open question to be answered.
     held: Option<Dialog>,
     /// The conversation on screen was replaced: the loop starts the screen over before it
@@ -862,8 +864,9 @@ pub fn lay_out(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
 /// Lines ready to wrap at `width`, optionally expanding thoughts, truncated diffs, and shell output.
 #[cfg(test)]
 pub fn lay_out_mode(lines: Vec<Line<'static>>, width: u16, verbose: bool) -> Vec<Line<'static>> {
+    let last_fence = lines.iter().rposition(is_fence_opener);
     let mut out = Vec::with_capacity(lines.len());
-    for l in lines {
+    for (idx, mut l) in lines.into_iter().enumerate() {
         match l.spans.first() {
             Some(_) if super::shellbox::is_placeholder(&l) => {
                 out.extend(super::shellbox::lay_out_mode(&l, width, verbose))
@@ -887,11 +890,30 @@ pub fn lay_out_mode(lines: Vec<Line<'static>>, width: u16, verbose: bool) -> Vec
                     let lead = l.spans[..at].to_vec();
                     out.extend(super::text::lay_out_table(lead, &l.spans[at..], width));
                 }
-                None => out.push(l),
+                None => {
+                    if Some(idx) == last_fence {
+                        hint_fence(&mut l, width);
+                    }
+                    out.push(l);
+                }
             },
         }
     }
     out
+}
+
+fn is_fence_opener(l: &Line<'_>) -> bool {
+    let has_gutter = l.spans.iter().any(|s| s.content == "╭─");
+    let has_num = l.spans.last().is_some_and(|s| s.content.trim_start().starts_with('#'));
+    has_gutter && has_num && !l.spans.iter().any(|s| s.content.contains("alt+c"))
+}
+
+fn hint_fence(l: &mut Line<'static>, max_w: u16) {
+    let used: usize = l.spans.iter().map(|s| super::text::width(&s.content)).sum();
+    if (max_w as usize) >= used + 9 {
+        let style = l.spans.last().map_or_else(Style::default, |s| s.style);
+        l.spans.push(Span::styled(" · alt+c", style));
+    }
 }
 
 fn is_mode_banner(l: &Line<'_>) -> bool {
@@ -905,8 +927,9 @@ fn is_mode_banner(l: &Line<'_>) -> bool {
 pub fn wrap_lines(lines: Vec<Line<'static>>, width: u16, verbose: bool) -> Vec<Line<'static>> {
     let full_w = width.max(1);
     let prose_w = full_w.min(PROSE_MAX_COLS);
+    let last_fence = lines.iter().rposition(is_fence_opener);
     let mut out = Vec::with_capacity(lines.len());
-    for l in lines {
+    for (idx, mut l) in lines.into_iter().enumerate() {
         if super::shellbox::is_placeholder(&l) {
             out.extend(super::text::wrap(super::shellbox::lay_out_mode(&l, full_w, verbose), full_w));
         } else if l.spans.first().is_some_and(|s| s.content == DIFF_MARK) && l.spans.len() == 5 {
@@ -926,6 +949,9 @@ pub fn wrap_lines(lines: Vec<Line<'static>>, width: u16, verbose: bool) -> Vec<L
         } else if is_mode_banner(&l) {
             out.extend(super::text::wrap(vec![l], full_w));
         } else {
+            if Some(idx) == last_fence {
+                hint_fence(&mut l, prose_w);
+            }
             let band = l.style;
             for mut row in super::text::wrap(vec![l], prose_w) {
                 if band.bg.is_some() {
@@ -1311,6 +1337,7 @@ impl App {
             verbose: false,
             layout_version: 0,
             has_collapsible: false,
+            has_code: false,
             held: None,
             reset: None,
         }
@@ -1362,6 +1389,9 @@ impl App {
         use super::look::Look;
         let t = self.theme;
         for line in lines {
+            if line.spans.first().is_some_and(|s| s.content == "╭─") {
+                self.has_code = true;
+            }
             // Blank lines before the answer's first words (models often open with "\n\n")
             // would get the answer mark alone on its row.
             if self.first_line && blank(&line) {
@@ -1728,6 +1758,7 @@ impl App {
         self.front = replay.is_empty();
         self.first_run = false;
         self.has_collapsible = false;
+        self.has_code = false;
         self.reset = Some(recent);
         // Tool calls show in a replay even in focus mode, which is for the work under way.
         let focus = std::mem::take(&mut self.focus);
@@ -3160,7 +3191,7 @@ impl App {
                 self.editor.insert("\n")
             }
             KeyCode::Char('j') if ctrl => self.editor.insert("\n"),
-            KeyCode::Char('c') if alt && !ctrl => return vec![Action::Send("/copy code".into())],
+            KeyCode::Char('c') if alt && !ctrl => return vec![Action::Send("/copy code last".into())],
             KeyCode::Enter => {
                 if menu_len > 0 {
                     let c = self.menu()[self.menu_selected.min(menu_len - 1)].clone();
@@ -4663,5 +4694,51 @@ mod tests {
                 .any(|r| r.contains("◆ Accept edits mode") && super::super::text::width(r) > PROSE_MAX_COLS as usize),
             "mode banner uses full width: {row_texts:?}"
         );
+    }
+
+    #[test]
+    fn alt_c_and_has_code_tracking_annotate_last_fence() {
+        let mut a = app();
+        assert!(!a.has_code);
+        assert_eq!(
+            a.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT)),
+            vec![Action::Send("/copy code last".into())]
+        );
+
+        let reply = kodact_types::Message::assistant(vec![ContentBlock::text(
+            "One:\n```rust\nfn a() {}\n```\nTwo:\n```python\nprint(2)\n```",
+        )]);
+        a.on_event(UiEvent::Reset { replay: vec![reply.clone()], recent: vec![], echo: None });
+        assert!(a.has_code, "replayed fenced code sets has_code");
+
+        let pending = a.take_pending();
+        let wide = texts(&wrap_lines(pending.clone(), 80, false));
+        assert!(wide.iter().any(|l| l == "  ╭─ rust #1"), "earlier fence keeps clean header: {wide:?}");
+        assert!(wide.iter().any(|l| l == "  ╭─ python #2 · alt+c"), "last fence gets alt+c hint: {wide:?}");
+
+        let narrow = texts(&wrap_lines(pending, 14, false));
+        assert!(
+            narrow.iter().all(|l| !l.contains("alt+c")),
+            "narrow width omits alt+c instead of wrapping fence header: {narrow:?}"
+        );
+
+        a.on_event(UiEvent::Reset { replay: vec![], recent: vec![], echo: None });
+        assert!(!a.has_code, "clearing replay clears has_code");
+
+        a.on_event(UiEvent::Engine(EngineEvent::Assistant {
+            message: kodact_types::ApiMessage {
+                id: "m".into(),
+                kind: "message".into(),
+                role: Role::Assistant,
+                model: "m".into(),
+                content: reply.content,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: Usage::default(),
+            },
+            uuid: "u".into(),
+            parent_tool_use_id: None,
+        }));
+        assert!(a.has_code, "non-streamed assistant fence sets has_code");
     }
 }

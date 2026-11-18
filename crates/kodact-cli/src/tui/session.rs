@@ -153,28 +153,54 @@ fn extract_fenced_blocks(text: &str) -> Vec<(String, String)> {
     blocks
 }
 
-/// Find a fenced code block from the latest assistant message that has code blocks.
-/// `n = None` selects the last block; `Some(k)` selects 1-based block `#k`.
-pub fn code_block_text(d: &Driver, n: Option<usize>) -> Option<(String, String, usize)> {
+/// All fenced code blocks `(language, body)` from the latest assistant message that has any.
+pub fn code_blocks(d: &Driver) -> Vec<(String, String)> {
     for m in d.engine.state.messages.iter().rev() {
         if m.role != kodact_types::Role::Assistant {
             continue;
         }
         let text = m.content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join("\n");
         let blocks = extract_fenced_blocks(&text);
-        if blocks.is_empty() {
-            continue;
+        if !blocks.is_empty() {
+            return blocks;
         }
-        let total = blocks.len();
-        let idx = match n {
-            None => total - 1,
-            Some(k) if k >= 1 && k <= total => k - 1,
-            Some(_) => return None,
-        };
-        let (lang, code) = blocks.into_iter().nth(idx)?;
-        return Some((lang, code, idx + 1));
     }
-    None
+    Vec::new()
+}
+
+/// Find a fenced code block from the latest assistant message that has code blocks.
+/// `n = None` selects the last block; `Some(k)` selects 1-based block `#k`.
+pub fn code_block_text(d: &Driver, n: Option<usize>) -> Option<(String, String, usize)> {
+    let blocks = code_blocks(d);
+    let total = blocks.len();
+    if total == 0 {
+        return None;
+    }
+    let idx = match n {
+        None => total - 1,
+        Some(k) if k >= 1 && k <= total => k - 1,
+        Some(_) => return None,
+    };
+    let (lang, code) = blocks.into_iter().nth(idx)?;
+    Some((lang, code, idx + 1))
+}
+
+fn code_picker(blocks: &[(String, String)]) -> kodact_core::commands::picker::Picker {
+    use kodact_core::commands::picker::{Choice, Pick, Picker};
+    let total = blocks.len();
+    let choices = blocks
+        .iter()
+        .enumerate()
+        .map(|(idx, (lang, code))| {
+            let n = idx + 1;
+            let label = if lang.is_empty() { format!("#{n}") } else { format!("#{n} {lang}") };
+            let preview = code.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("<empty>");
+            let line_count = code.lines().count();
+            let detail = if line_count > 1 { format!("{preview}  ({line_count} lines)") } else { preview.to_string() };
+            Choice { label, detail, pick: Pick::Run(format!("/copy code {n}")), current: n == total }
+        })
+        .collect();
+    Picker { title: "Copy a fenced code block".into(), choices }
 }
 
 /// Commands the UI answers itself, since they need the terminal: `/copy`,
@@ -190,13 +216,19 @@ fn ui_command(d: &Driver, text: &str) -> Option<Vec<UiEvent>> {
             if let Some(rest) = trimmed.strip_prefix("code") {
                 let rest = rest.trim();
                 let n = if rest.is_empty() {
+                    let blocks = code_blocks(d);
+                    if blocks.len() > 1 {
+                        return Some(vec![UiEvent::Picker(code_picker(&blocks))]);
+                    }
+                    None
+                } else if rest == "last" {
                     None
                 } else {
                     match rest.parse::<usize>().ok().filter(|n| *n > 0) {
                         Some(k) => Some(k),
                         None => {
                             return Some(vec![reply(
-                                "Usage: /copy code [n]  (#n in the latest code answer)".into(),
+                                "Usage: /copy code [n | last]  (#n in the latest code answer)".into(),
                                 true,
                             )]);
                         }
@@ -217,7 +249,7 @@ fn ui_command(d: &Driver, text: &str) -> Option<Vec<UiEvent>> {
             }
             let n = if trimmed.is_empty() { Some(1) } else { trimmed.parse::<usize>().ok().filter(|n| *n > 0) };
             let Some(n) = n else {
-                return Some(vec![reply("Usage: /copy [n] | /copy code [n]".into(), true)]);
+                return Some(vec![reply("Usage: /copy [n] | /copy code [n | last]".into(), true)]);
             };
             match answer_text(d, n) {
                 Some(t) => {
@@ -1084,5 +1116,76 @@ mod tests {
             blocks,
             vec![("rust".to_string(), "fn main() {}".to_string()), ("sh".to_string(), "echo hi".to_string()),]
         );
+    }
+
+    #[tokio::test]
+    async fn copy_code_opens_picker_for_multiple_blocks_and_direct_copies_with_last_or_index() {
+        use kodact_core::commands::picker::Pick;
+        let mut t = start(|_| {});
+        until_idle(&mut t.ui).await;
+
+        // No code block yet: bare `/copy code` replies with an error instead of a picker.
+        t.to.send(ToSession::Input("/copy code".into())).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Reply { is_error: true, .. })));
+
+        // Single fenced code block: bare `/copy code` copies directly without opening a picker.
+        t.p.push(MockTurn::text("Here:\n```rust\nfn only() {}\n```\n"));
+        t.to.send(ToSession::Input("one block".into())).unwrap();
+        until_idle(&mut t.ui).await;
+
+        t.to.send(ToSession::Input("/copy code".into())).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Copy(c) if c == "fn only() {}")));
+        assert!(!evs.iter().any(|e| matches!(e, UiEvent::Picker(_))));
+
+        // Multiple fenced code blocks: bare `/copy code` opens an interactive picker,
+        // while `/copy code last` (Alt+C) and `/copy code 1` copy directly.
+        t.p.push(MockTurn::text(
+            "Two snippets:\n```rust\nfn first() {}\nprintln!(\"one\");\n```\nthen\n~~~sh\necho second\n~~~\n",
+        ));
+        t.to.send(ToSession::Input("two blocks".into())).unwrap();
+        until_idle(&mut t.ui).await;
+
+        t.to.send(ToSession::Input("/copy code".into())).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        let picker = evs
+            .iter()
+            .find_map(|e| match e {
+                UiEvent::Picker(p) => Some(p),
+                _ => None,
+            })
+            .expect("multi-block /copy code opens a Picker");
+        assert_eq!(picker.title, "Copy a fenced code block");
+        assert_eq!(picker.choices.len(), 2);
+        assert_eq!(picker.choices[0].label, "#1 rust");
+        assert!(picker.choices[0].detail.contains("fn first() {}") && picker.choices[0].detail.contains("(2 lines)"));
+        assert_eq!(picker.choices[0].pick, Pick::Run("/copy code 1".into()));
+        assert!(!picker.choices[0].current);
+        assert_eq!(picker.choices[1].label, "#2 sh");
+        assert_eq!(picker.choices[1].detail, "echo second");
+        assert_eq!(picker.choices[1].pick, Pick::Run("/copy code 2".into()));
+        assert!(picker.choices[1].current, "latest block is pre-selected as current");
+
+        t.to.send(ToSession::Input("/copy code last".into())).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Copy(c) if c == "echo second")));
+
+        t.to.send(ToSession::Input("/copy code 1".into())).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Copy(c) if c == "fn first() {}\nprintln!(\"one\");")));
+
+        t.to.send(ToSession::Input("/copy code 99".into())).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Reply { is_error: true, .. })));
+
+        t.to.send(ToSession::Input("/copy code bogey".into())).unwrap();
+        let evs = until_idle(&mut t.ui).await;
+        assert!(evs
+            .iter()
+            .any(|e| matches!(e, UiEvent::Reply { text, is_error: true } if text.contains("[n | last]"))));
+
+        drop(t.to);
+        tokio::time::timeout(Duration::from_secs(10), t.task).await.unwrap().unwrap();
     }
 }
