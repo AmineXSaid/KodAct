@@ -427,7 +427,7 @@ impl<B: Backend> Screen<B> {
         self.height = self.height.min(rows.saturating_sub(1)).max(1);
         let room = rows.saturating_sub(self.height) as usize;
         let lines: Vec<Line<'static>> = self.tail.iter().cloned().collect();
-        let wrapped = text::wrap(app::lay_out_mode(lines, width, verbose), width);
+        let wrapped = app::wrap_lines(lines, width, verbose);
         let newest = wrapped[wrapped.len().saturating_sub(room)..].to_vec();
         self.write_above(newest)
     }
@@ -452,7 +452,7 @@ impl<B: Backend> Screen<B> {
         while self.tail.len() > TAIL_LINES {
             self.tail.pop_front();
         }
-        let rows = text::wrap(app::lay_out_mode(lines, self.width(), verbose), self.width());
+        let rows = app::wrap_lines(lines, self.width(), verbose);
         self.write_above(rows)
     }
 
@@ -511,7 +511,7 @@ const TRANSCRIPT_INDENT: u16 = 2;
 /// expanding collapsible thoughts, diffs, and shell outputs.
 fn indented_mode(lines: Vec<Line<'static>>, width: u16, verbose: bool) -> Vec<Line<'static>> {
     let indent = TRANSCRIPT_INDENT.min(width.saturating_sub(4));
-    text::wrap(app::lay_out_mode(lines, width - indent, verbose), width - indent)
+    app::wrap_lines(lines, width - indent, verbose)
         .into_iter()
         .map(|l| {
             if indent == 0 || l.spans.is_empty() {
@@ -769,7 +769,7 @@ impl<B: Backend> Full<B> {
     /// The transcript as text with ANSI styles, wrapped to `cols` for the terminal's
     /// scrollback once the full screen has closed, respecting `verbose` expansion.
     pub fn transcript_text_mode(&self, cols: u16, verbose: bool) -> Vec<String> {
-        text::wrap(app::lay_out_mode(self.transcript.clone(), cols, verbose), cols).iter().map(brand::ansi).collect()
+        app::wrap_lines(self.transcript.clone(), cols, verbose).iter().map(brand::ansi).collect()
     }
 }
 
@@ -2237,6 +2237,66 @@ mod tests {
         f.sync_find(&mut a);
         assert_eq!(a.find.as_ref().unwrap().total, 0);
         assert_eq!(f.scroll, 0);
+    }
+
+    #[test]
+    fn wide_full_screen_bounds_prose_and_paints_frame_prompt_band() {
+        let theme = text::Theme::named("dark", true, palette::Depth::True);
+        let prompt_bg = palette::PROMPT_BG.color(theme.depth, theme.light);
+        let mut a = app::App::new(theme, vec![]);
+        a.look = look::Look::Frame;
+        a.front = false;
+        a.submit("fix the bug cleanly".into());
+
+        // Long assistant answer (> 150 chars) + full-width shellbox.
+        let ev = |event| app::UiEvent::Engine(kodact_engine::EngineEvent::Stream { event, parent_tool_use_id: None });
+        a.on_event(ev(kodact_types::StreamEvent::ContentBlockStart {
+            index: 0,
+            content_block: kodact_types::ContentBlock::text(""),
+        }));
+        let long_prose = (0..26).map(|i| format!("token{i:02}")).collect::<Vec<_>>().join(" ");
+        a.on_event(ev(kodact_types::StreamEvent::ContentBlockDelta {
+            index: 0,
+            delta: kodact_types::Delta::TextDelta { text: format!("{long_prose}\n") },
+        }));
+        a.on_event(ev(kodact_types::StreamEvent::ContentBlockStop { index: 0 }));
+
+        let mut lines = a.take_pending();
+        lines.push(crate::tui::shellbox::placeholder(
+            &theme,
+            "echo ok",
+            "ok",
+            crate::tui::shellbox::State::Ended { code: Some(0), failed: false },
+        ));
+
+        let mut f = Full::new(TestBackend::new(180, 30), front::FrontInfo::default()).unwrap();
+        f.commit_mode(lines, false);
+        f.draw(&a).unwrap();
+
+        let buf = f.terminal.backend().buffer();
+        let prompt_y = (0..buf.area.height)
+            .find(|&y| {
+                let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
+                row.contains("❯ fix the bug")
+            })
+            .expect("prompt row drawn");
+        // Outer gutter (0..2) and transcript indent (2..4) stay un-tinted;
+        // PROMPT_BG spans x=4..4+PROSE_MAX_COLS, and stops past column 108.
+        assert_ne!(buf[(1, prompt_y)].bg, prompt_bg);
+        assert_ne!(buf[(3, prompt_y)].bg, prompt_bg);
+        assert_eq!(buf[(4, prompt_y)].bg, prompt_bg);
+        assert_eq!(buf[(4 + app::PROSE_MAX_COLS - 1, prompt_y)].bg, prompt_bg);
+        assert_ne!(buf[(4 + app::PROSE_MAX_COLS, prompt_y)].bg, prompt_bg);
+
+        let rendered = rows(f.terminal.backend());
+        let first_prose = rendered.iter().find(|r| r.contains("token00")).unwrap();
+        assert!(text::width(first_prose) <= (4 + app::PROSE_MAX_COLS) as usize, "prose capped at 104: {first_prose}");
+        assert!(
+            rendered.iter().any(|r| r.contains("token25") && !r.contains("token00")),
+            "prose wraps cleanly: {rendered:#?}"
+        );
+        let top_box = rendered.iter().find(|r| r.contains("╭───")).unwrap();
+        assert!(text::width(top_box) > 150, "shellbox stays full-width on 180 cols: {top_box}");
     }
 }
 

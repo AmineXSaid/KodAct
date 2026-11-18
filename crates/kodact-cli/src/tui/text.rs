@@ -1154,7 +1154,7 @@ pub fn wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
         let base = line.style;
         let cells = cells_of(&line.spans, base);
         if cells.is_empty() {
-            out.push(Line::default());
+            out.push(Line::default().style(base));
             continue;
         }
         // Continuation rows start under the text; never more than half the width.
@@ -1201,10 +1201,10 @@ pub fn wrap(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
                     next = sp + 1;
                 }
             }
-            let mut row = spans_of(&cells[start..end]);
+            let mut row = spans_of(&cells[start..end]).style(base);
             if !first && indent > 0 {
                 let mut lead = if rail > 0 { spans_of(&cells[..rail]).spans } else { vec![] };
-                lead.push(Span::raw(" ".repeat(indent - rail)));
+                lead.push(Span::styled(" ".repeat(indent - rail), base));
                 row.spans.splice(0..0, lead);
             }
             out.push(row);
@@ -1473,9 +1473,17 @@ mod tests {
         let rows: Vec<String> =
             wrap(vec![Line::from("Directory:   /tmp/a-long/path/to/proj")], 30).iter().map(plain).collect();
         assert_eq!(rows, ["Directory:   /tmp/a-long/path/", "             to/proj"]);
-        // Styles survive the wrap.
+        // Styles survive the wrap, including Line::style backgrounds on continuation indents.
         let l = Line::from(vec![Span::raw("aa "), Span::styled("bbbb", T.bold())]);
         let w = wrap(vec![l], 4);
         assert_eq!(w[1].spans[0].style, T.bold());
+
+        let band = Style::default().bg(palette::PROMPT_BG.color(Depth::True, false));
+        let prompt = Line::from(vec![Span::styled("❯ ", T.accent()), Span::raw("hello world")]).style(band);
+        let w = wrap(vec![prompt], 10);
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[1].style, band);
+        assert_eq!(w[1].spans[0].style.bg, band.bg, "continuation indent carries base bg");
+        assert_eq!(w[1].spans[1].style.bg, band.bg);
     }
 }

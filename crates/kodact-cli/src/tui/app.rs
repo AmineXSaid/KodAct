@@ -838,6 +838,8 @@ const DIFF_MARK: &str = "\u{e000}kodact-diff";
 pub const THOUGHT_MARK: &str = "\u{e000}kodact-thought";
 /// Width from which a diff is drawn side by side.
 pub const SPLIT_DIFF_COLS: u16 = 140;
+/// Maximum reading width for prose, prompts, and thoughts on wide terminals.
+pub const PROSE_MAX_COLS: u16 = 104;
 
 /// A line that stands for an edit's changes: the styles they are drawn in, and
 /// the hunks. [`lay_out`] turns it into rows at the width of the moment.
@@ -858,6 +860,7 @@ pub fn lay_out(lines: Vec<Line<'static>>, width: u16) -> Vec<Line<'static>> {
 }
 
 /// Lines ready to wrap at `width`, optionally expanding thoughts, truncated diffs, and shell output.
+#[cfg(test)]
 pub fn lay_out_mode(lines: Vec<Line<'static>>, width: u16, verbose: bool) -> Vec<Line<'static>> {
     let mut out = Vec::with_capacity(lines.len());
     for l in lines {
@@ -886,6 +889,55 @@ pub fn lay_out_mode(lines: Vec<Line<'static>>, width: u16, verbose: bool) -> Vec
                 }
                 None => out.push(l),
             },
+        }
+    }
+    out
+}
+
+fn is_mode_banner(l: &Line<'_>) -> bool {
+    l.spans.first().is_some_and(|s| s.content == "── ") && l.spans.get(1).is_some_and(|s| s.content == "◆ ")
+}
+
+/// Lay out placeholders and wrap transcript lines: structured full-width elements
+/// (`shellbox`, split diffs, Markdown tables, mode banners) use full `width`, while prose,
+/// thoughts, and prompts wrap to `width.min(PROSE_MAX_COLS)`. Prompt rows carrying a
+/// `Line::style` background tint are padded to the prose measure so their surface forms a band.
+pub fn wrap_lines(lines: Vec<Line<'static>>, width: u16, verbose: bool) -> Vec<Line<'static>> {
+    let full_w = width.max(1);
+    let prose_w = full_w.min(PROSE_MAX_COLS);
+    let mut out = Vec::with_capacity(lines.len());
+    for l in lines {
+        if super::shellbox::is_placeholder(&l) {
+            out.extend(super::text::wrap(super::shellbox::lay_out_mode(&l, full_w, verbose), full_w));
+        } else if l.spans.first().is_some_and(|s| s.content == DIFF_MARK) && l.spans.len() == 5 {
+            let styles = [l.spans[0].style, l.spans[1].style, l.spans[2].style, l.spans[3].style];
+            let hunks: Vec<Value> = serde_json::from_str(&l.spans[4].content).unwrap_or_default();
+            out.extend(super::text::wrap(diff_rows(&hunks, styles, full_w, verbose), full_w));
+        } else if let Some(at) = l.spans.iter().position(|s| s.content == super::text::TABLE_MARK) {
+            let lead = l.spans[..at].to_vec();
+            out.extend(super::text::wrap(super::text::lay_out_table(lead, &l.spans[at..], full_w), full_w));
+        } else if l.spans.first().is_some_and(|s| s.content == THOUGHT_MARK) && l.spans.len() == 3 {
+            let (subtle, italic) = (l.spans[0].style, l.spans[1].style);
+            let v: Value = serde_json::from_str(&l.spans[2].content).unwrap_or_default();
+            let secs = v["secs"].as_u64().unwrap_or(1).max(1);
+            let count = v["lines"].as_u64().unwrap_or(1).max(1);
+            let body = v["body"].as_str().unwrap_or("");
+            out.extend(super::text::wrap(thought_rows(secs, count, body, subtle, italic, verbose), prose_w));
+        } else if is_mode_banner(&l) {
+            out.extend(super::text::wrap(vec![l], full_w));
+        } else {
+            let band = l.style;
+            for mut row in super::text::wrap(vec![l], prose_w) {
+                if band.bg.is_some() {
+                    let used: usize = row.spans.iter().map(|s| super::text::width(&s.content)).sum();
+                    let pad = (prose_w as usize).saturating_sub(used);
+                    if pad > 0 {
+                        row.spans.push(Span::styled(" ".repeat(pad), band));
+                    }
+                    row.style = Style::default();
+                }
+                out.push(row);
+            }
         }
     }
     out
@@ -1455,10 +1507,12 @@ impl App {
                         .push(Line::from(vec![Span::styled(mark, t.subtle()), Span::styled(l.to_string(), t.bold())]));
                 }
             }
-            // The input's own mark, in the colour of the mode the words were sent in, then
-            // the words, bright and bold: what was typed reads as typed, with no surface.
+            // The input's own mark, in the colour of the mode the words were sent in, on a
+            // subtle raised surface band so user turns separate cleanly from replies.
             Look::Frame => {
                 let mark = if t.color { t.mode(&self.status.mode) } else { t.bold() };
+                let band = (t.color && t.depth != super::palette::Depth::Ansi16)
+                    .then(|| Style::default().bg(super::palette::PROMPT_BG.color(t.depth, t.light)));
                 let words = if t.color {
                     Style::default()
                         .fg(super::palette::PROMPT_FG.color(t.depth, t.light))
@@ -1469,7 +1523,11 @@ impl App {
                 for (i, l) in text.lines().enumerate() {
                     let lead =
                         if i == 0 { Span::styled(format!("{} ", glyphs::PROMPT), mark) } else { Span::raw("  ") };
-                    self.pending.push(Line::from(vec![lead, Span::styled(l.to_string(), words)]));
+                    let mut line = Line::from(vec![lead, Span::styled(l.to_string(), words)]);
+                    if let Some(st) = band {
+                        line = line.style(st);
+                    }
+                    self.pending.push(line);
                 }
             }
             Look::Status => {
@@ -4505,5 +4563,105 @@ mod tests {
             parent_tool_use_id: None,
         }));
         assert!(a.has_collapsible);
+    }
+
+    #[test]
+    fn frame_prompt_surface_and_wide_prose_measure() {
+        use super::super::look::Look;
+        let dark = Theme::named("dark", true, super::super::palette::Depth::True);
+        let expected_bg = super::super::palette::PROMPT_BG.color(dark.depth, dark.light);
+        let mut a = App::new(dark, vec![]);
+        a.look = Look::Frame;
+        a.echo_prompt("first line\nsecond line");
+        let lines = a.take_pending();
+        let prompt_lines: Vec<_> = lines.iter().filter(|l| l.style.bg.is_some()).collect();
+        assert_eq!(prompt_lines.len(), 2, "both prompt rows carry PROMPT_BG tint: {lines:?}");
+        assert!(prompt_lines.iter().all(|l| l.style.bg == Some(expected_bg)));
+
+        // Ansi16 and no-color terminals skip the PROMPT_BG tint.
+        let mut ansi16 = App::new(Theme::named("dark", true, super::super::palette::Depth::Ansi16), vec![]);
+        ansi16.look = Look::Frame;
+        ansi16.echo_prompt("plain ansi16");
+        assert!(ansi16.take_pending().iter().all(|l| l.style.bg.is_none()));
+
+        // Mixed transcript at 174 content cols: prose wraps <= PROSE_MAX_COLS while
+        // shellbox, split diff, table, and mode banners stay full-width.
+        a.echo_prompt(&format!("{} ", "promptword".repeat(14)));
+        let long_prose = (0..30).map(|i| format!("word{i:02}")).collect::<Vec<_>>().join(" ");
+        a.commit_text_line(&long_prose);
+        let shell = super::super::shellbox::placeholder(
+            &dark,
+            "cargo test --workspace",
+            "test result: ok",
+            super::super::shellbox::State::Ended { code: Some(0), failed: false },
+        );
+        let diff_json = json!({
+            "structuredPatch": [{"oldStart": 1, "newStart": 1, "lines": ["-old_value_line()", "+new_value_line()"]}]
+        });
+        let diff = result_lines(&dark, "Edit", "", false, Some(&diff_json));
+        let mut md = Markdown::default();
+        md.push(
+            "| LeftColumnNameWithExtraChars | RightColumnNameWithExtraCharsAndMuchMoreDetailsHereToExceedMeasureWidthNow |",
+            &dark,
+        );
+        md.push("| --- | --- |", &dark);
+        md.push(
+            "| alpha_identifier_one_two_three | beta_identifier_with_very_long_explanation_spanning_columns_cleanly_ok_yes |",
+            &dark,
+        );
+        let table = md.finish(&dark);
+        let mut items = a.take_pending();
+        a.busy = true;
+        a.set_mode(kodact_permissions::PermissionMode::AcceptEdits);
+        let banner = a.take_pending();
+        items.push(shell);
+        items.extend(diff);
+        items.extend(table);
+        items.extend(banner);
+
+        let wrapped = wrap_lines(items, 174, false);
+        let row_texts = texts(&wrapped);
+        // Prompt rows extend their PROMPT_BG band cleanly to PROSE_MAX_COLS across spans, not Line::style.
+        let tinted_rows: Vec<_> = wrapped
+            .iter()
+            .filter(|l| {
+                let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                (text.contains("first line") || text.contains("second line") || text.contains("promptword"))
+                    && l.spans.iter().any(|s| s.style.bg == Some(expected_bg))
+            })
+            .collect();
+        assert_eq!(tinted_rows.len(), 2, "wrapped prompt spans keep PROMPT_BG band: {tinted_rows:?}");
+        for r in &tinted_rows {
+            assert_eq!(r.style, Style::default(), "Line::style cleared after padding spans");
+            let w: usize = r.spans.iter().map(|s| super::super::text::width(&s.content)).sum();
+            assert_eq!(w, PROSE_MAX_COLS as usize);
+        }
+        // Prose rows stay within PROSE_MAX_COLS.
+        let prose_rows: Vec<_> = row_texts.iter().filter(|r| r.contains("word00") || r.contains("word25")).collect();
+        assert!(prose_rows.len() >= 2, "180+ char prose wraps into >=2 rows: {prose_rows:?}");
+        for r in &prose_rows {
+            assert!(super::super::text::width(r) <= PROSE_MAX_COLS as usize, "prose exceeded measure: {r}");
+        }
+        // Structured elements exceed PROSE_MAX_COLS cleanly.
+        assert!(
+            row_texts.iter().any(|r| r.starts_with("  ╭─") && super::super::text::width(r) == 174),
+            "{row_texts:?}"
+        );
+        assert!(
+            row_texts.iter().any(|r| r.contains("old_value_line") && r.contains(" │ ") && r.contains("new_value_line")),
+            "split diff keeps full width >= SPLIT_DIFF_COLS: {row_texts:?}"
+        );
+        assert!(
+            row_texts
+                .iter()
+                .any(|r| r.contains("LeftColumnName") && super::super::text::width(r) > PROSE_MAX_COLS as usize),
+            "table uses full width: {row_texts:?}"
+        );
+        assert!(
+            row_texts
+                .iter()
+                .any(|r| r.contains("◆ Accept edits mode") && super::super::text::width(r) > PROSE_MAX_COLS as usize),
+            "mode banner uses full width: {row_texts:?}"
+        );
     }
 }
