@@ -612,7 +612,20 @@ impl<B: Backend> Full<B> {
             self.wrapped_w = width;
         }
         let page = front::front_page(&app.theme, app.look, &self.info, width as usize);
-        let (view, max) = render::full_view(app, width, size.height, &self.wrapped, &page, self.scroll);
+        let open = matches!(app.look, look::Look::Bare | look::Look::Ledger);
+        let front_w = (page.box_w as u16).saturating_sub(if open { 0 } else { 2 }).max(12).min(width);
+        let front_rows;
+        let rows = if app.front && app.dialog.is_none() && !app.busy && self.transcript.len() <= 6 && front_w < width {
+            front_rows = indented(self.transcript.clone(), front_w);
+            if front_rows.len() <= 6 {
+                &front_rows
+            } else {
+                &self.wrapped
+            }
+        } else {
+            &self.wrapped
+        };
+        let (view, max) = render::full_view(app, width, size.height, rows, &page, self.scroll);
         self.max_scroll = max;
         self.in_view = if max > 0 { self.wrapped.len() - max } else { 0 };
         self.scroll = self.scroll.min(max);
@@ -1663,6 +1676,30 @@ mod tests {
         assert!(!rows.iter().any(|r| r.contains("❯ the old question")), "the old conversation is gone: {rows:#?}");
         assert!(rows.iter().any(|r| r.contains("/resume") && r.contains("the old question")), "{rows:#?}");
         assert!(rows.iter().any(|r| r.contains("❯ /clear")), "{rows:#?}");
+        // A long warning on the front page wraps once to the box's width (never pre-wrapped at
+        // the window's width and then wrapped a second time into a jagged short line) and lines
+        // up with `/resume` and `❯`.
+        f.reset(vec![("hi".into(), "just now".into())]);
+        a.on_event(app::UiEvent::Engine(kodact_engine::EngineEvent::Notice {
+            level: kodact_engine::NoticeLevel::Warning,
+            text: "KodAct doesn't know the model deep-thinking: it assumes a 1,000,000-token context window \
+                   and 32,000 output tokens, and has no price for it. Set its limits with \"modelLimits\" in \
+                   settings (and its price with \"modelPricing\"), or KODACT_CONTEXT_WINDOW for every unknown model."
+                .into(),
+        }));
+        f.commit(a.take_pending());
+        f.draw(&a).unwrap();
+        let wrows = self::rows(f.terminal.backend());
+        assert!(
+            !wrows.iter().any(|r| r.trim() == "settings (and its price"),
+            "no double-wrapped orphan line: {wrows:#?}"
+        );
+        let box_row = wrows.iter().find(|r| r.contains("What shall we build")).unwrap();
+        let resume_row = wrows.iter().find(|r| r.contains("/resume")).unwrap();
+        let warn_row = wrows.iter().find(|r| r.contains("▲ KodAct")).unwrap();
+        let col = |r: &str, s: &str| text::width(&r[..r.find(s).unwrap()]);
+        assert_eq!(col(resume_row, "/resume"), col(box_row, "❯"), "`/resume` aligns with `❯`: {wrows:#?}");
+        assert_eq!(col(warn_row, "▲"), col(box_row, "❯"), "warning aligns with `❯`: {wrows:#?}");
     }
 
     fn rows(b: &TestBackend) -> Vec<String> {

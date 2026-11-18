@@ -404,7 +404,7 @@ fn frame(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let fw = cols.saturating_sub(8).clamp(cols.min(20), 96.max(lw));
     let m = (cols - fw) / 2;
     // The text column inside the panel: the lines under it start there too.
-    let col = m + 4;
+    let col = m + 2;
     let room = fw.saturating_sub(4);
     above.push(Line::default());
     above.push(centred(Line::from(Span::styled(SHORT_TAGLINE, t.dim())), cols));
@@ -520,7 +520,7 @@ fn glow(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let mut below = vec![];
     if let Some((what, ago)) = info.recent.first() {
         below.push(Line::default());
-        below.push(centred(Line::from(resume_spans(t, what, ago, cols)), cols));
+        below.push(centred(Line::from(resume_spans(t, what, ago, bw)), cols));
     }
     FrontPage { above, below, box_left: (cols - bw) / 2, box_w: bw, under: true, ..Default::default() }
 }
@@ -560,7 +560,7 @@ fn mark_card(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let mut below = vec![];
     if let Some((what, ago)) = info.recent.first() {
         below.push(Line::default());
-        below.push(centred(Line::from(resume_spans(t, what, ago, cols)), cols));
+        below.push(centred(Line::from(resume_spans(t, what, ago, cw)), cols));
     }
     FrontPage { above: boxed(x, cw, rows, border), below, box_left: x, box_w: cw, ..Default::default() }
 }
@@ -653,7 +653,7 @@ fn status_board(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let mut below = vec![];
     if let Some((what, ago)) = info.recent.first() {
         below.push(Line::default());
-        below.push(centred(Line::from(resume_spans(t, what, ago, cols)), cols));
+        below.push(centred(Line::from(resume_spans(t, what, ago, total)), cols));
     }
     FrontPage { above, below, box_left: x, box_w: total, ..Default::default() }
 }
@@ -782,9 +782,17 @@ mod tests {
         for gone in ["Version", "tools ready", "KodAct reads", "~/acme/shop", "jira"] {
             assert!(!frame.contains(gone), "{gone}\n{frame}");
         }
-        let below = plain(&front_page(&DARK, Look::Frame, &info(), 120).below).join("\n");
+        let fp = front_page(&DARK, Look::Frame, &info(), 120);
+        let below = plain(&fp.below).join("\n");
         assert!(below.contains("/resume  checkout rounding"), "{below}");
         assert!(below.contains("figma didn't start  ·  /mcp"), "a server that failed says so: {below}");
+        for l in plain(&fp.below).into_iter().filter(|l| !l.trim().is_empty()) {
+            assert_eq!(
+                l.len() - l.trim_start().len(),
+                fp.box_left + 2,
+                "lines under the panel align with its text: {l:?}"
+            );
+        }
         let ledger = front_page(&DARK, Look::Ledger, &info(), 120);
         assert!(ledger.dock && plain(&ledger.above).join("\n").contains("1   checkout rounding"));
         let board = plain(&front_page(&DARK, Look::Status, &info(), 120).above).join("\n");
