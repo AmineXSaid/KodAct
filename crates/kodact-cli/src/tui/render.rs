@@ -1371,6 +1371,8 @@ pub fn full_view_at(
             })
             .collect();
         let popup = usize::from(app.search.is_some())
+            + if app.search.is_some() { app.search_matches().len().min(4) } else { 0 }
+            + usize::from(app.find.is_some())
             + app.menu().len().min(MENU_ROWS)
             + if app.menu().is_empty() { app.file_menu().len().min(MENU_ROWS) } else { 0 };
         let base_input_len = input.len().saturating_sub(popup);
@@ -1450,6 +1452,30 @@ pub fn full_view_at(
     let scroll = scroll.min(max_scroll);
     let end = rows.len() - scroll;
     let mut out: Vec<Line<'static>> = rows[end.saturating_sub(avail)..end].to_vec();
+    if let Some(q) = app.find.as_ref().filter(|f| !f.query.is_empty()).map(|f| f.query.as_str()) {
+        let hi = app.theme.accent().add_modifier(ratatui::style::Modifier::BOLD | ratatui::style::Modifier::REVERSED);
+        out = out
+            .into_iter()
+            .map(|l| {
+                let spans = l
+                    .spans
+                    .into_iter()
+                    .flat_map(|sp| {
+                        let base = sp.style;
+                        highlight_match(&sp.content, q, hi).into_iter().map(move |mut piece| {
+                            if piece.style == Style::default() {
+                                piece.style = base;
+                            } else {
+                                piece.style = base.patch(piece.style);
+                            }
+                            piece
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                Line::from(spans).style(l.style)
+            })
+            .collect();
+    }
     if scroll > 0 && !out.is_empty() {
         let t = app.theme;
         let note = format!("↓ {scroll} more {} · wheel / PgDn", if scroll == 1 { "line" } else { "lines" });
@@ -1744,21 +1770,76 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
         vec![]
     };
     let lead = if front && open { "" } else { "  " };
-    // Ctrl+R: what is being searched for, above the input.
-    let search: Vec<Line<'static>> = app
-        .search
-        .as_ref()
-        .map(|s| {
-            let miss = if s.hit.is_none() && !s.query.is_empty() { " (no match)" } else { "" };
-            let mut spans = vec![];
-            if left > 0 {
-                spans.push(Span::raw(" ".repeat(left)));
+    // Ctrl+R: history search panel (header + up to 4 matching rows) or Ctrl+F: discussion find bar.
+    let mut search: Vec<Line<'static>> = Vec::new();
+    if let Some(s) = app.search.as_ref() {
+        let matches = app.search_matches();
+        let total = matches.len();
+        let pos = s.hit.and_then(|h| matches.iter().position(|(idx, _)| *idx == h));
+        let pad = if left > 0 { Some(Span::raw(" ".repeat(left))) } else { None };
+        let mut head = Vec::new();
+        if let Some(p) = pad.clone() {
+            head.push(p);
+        }
+        head.push(Span::styled(format!("{lead}history: "), t.accent()));
+        head.push(Span::styled(format!("{}▏", s.query), t.bold()));
+        if total == 0 && !s.query.is_empty() {
+            head.push(Span::styled("  (no match)", t.error()));
+        } else if total > 0 {
+            let count = match pos {
+                Some(i) => format!("  {}/{total}", i + 1),
+                None => format!("  {total} matches"),
+            };
+            head.push(Span::styled(count, t.dim()));
+        }
+        head.push(Span::styled("  · Ctrl+R / ↑↓ · Enter · Esc", t.dim()));
+        search.push(Line::from(head));
+
+        let shown_rows = 4usize;
+        let active = pos.unwrap_or(0);
+        let first = active.saturating_sub(shown_rows / 2).min(total.saturating_sub(shown_rows));
+        for &(idx, entry) in matches.iter().skip(first).take(shown_rows) {
+            let selected = s.hit == Some(idx);
+            let mark = if selected { "❯ " } else { "  " };
+            let one_line = entry.lines().next().unwrap_or("");
+            let avail = bw.saturating_sub(lead.len() + 2).max(8);
+            let snippet = fit(one_line, avail);
+            let mut row_spans = Vec::new();
+            if let Some(p) = pad.clone() {
+                row_spans.push(p);
             }
-            spans.push(Span::styled(fit(&format!("{lead}search history: {}{miss}", s.query), bw), t.accent()));
-            Line::from(spans)
-        })
-        .into_iter()
-        .collect();
+            row_spans.push(Span::styled(format!("{lead}{mark}"), if selected { t.accent() } else { t.dim() }));
+            let base_style = if selected { t.selected() } else { t.dim() };
+            if s.query.is_empty() {
+                row_spans.push(Span::styled(snippet, base_style));
+            } else {
+                let hi = t.accent().add_modifier(ratatui::style::Modifier::BOLD | ratatui::style::Modifier::UNDERLINED);
+                for mut sp in highlight_match(&snippet, &s.query, hi) {
+                    if sp.style == Style::default() {
+                        sp.style = base_style;
+                    }
+                    row_spans.push(sp);
+                }
+            }
+            search.push(Line::from(row_spans));
+        }
+    } else if let Some(f) = app.find.as_ref() {
+        let mut spans = Vec::new();
+        if left > 0 {
+            spans.push(Span::raw(" ".repeat(left)));
+        }
+        spans.push(Span::styled(format!("{lead}find: "), t.accent()));
+        spans.push(Span::styled(format!("{}▏", f.query), t.bold()));
+        if !f.query.is_empty() {
+            if f.total == 0 {
+                spans.push(Span::styled("  (no matches)", t.error()));
+            } else {
+                spans.push(Span::styled(format!("  {}/{}", f.current + 1, f.total), t.dim()));
+            }
+        }
+        spans.push(Span::styled("  · Enter / ↑↓ next · Esc close", t.dim()));
+        search.push(Line::from(spans));
+    }
     // 6. The `/` or `@` menu, 7. the status line.
     let menu = menu(app, left, bw, lead);
     let status = status(app, w, now);
@@ -2549,11 +2630,12 @@ mod tests {
         a.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
         typed(&mut a, "car");
         let (rows, _) = draw(&live_view(&a, 40, 30), 40);
-        assert_eq!(rows[0], "  search history: car");
-        assert!(rows[2].starts_with('│') && rows[2].contains("cargo test"), "the match in the box: {rows:#?}");
+        assert!(rows[0].contains("history: car") && rows[0].contains("1/1"), "{rows:#?}");
+        assert!(rows[1].contains("cargo test"), "match preview row: {rows:#?}");
+        assert!(rows[3].starts_with('│') && rows[3].contains("cargo test"), "the match in the box: {rows:#?}");
         typed(&mut a, "zz");
         let (rows, _) = draw(&live_view(&a, 40, 30), 40);
-        assert_eq!(rows[0], "  search history: carzz (no match)");
+        assert!(rows[0].contains("history: carzz") && rows[0].contains("(no match)"), "{rows:#?}");
 
         // `@` lists matching paths.
         let mut a = app(false);
@@ -2981,8 +3063,8 @@ mod tests {
         a.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
         let (vr, _) = full_view(&a, 100, 36, &[], &page, 0);
         let (rrows, _) = draw(&vr, 100);
-        let search_row = rrows.iter().find(|r| r.contains("search history:")).unwrap();
-        assert_eq!(col(search_row, 's'), col(prompt_row, '❯'), "Ctrl+R aligns with `❯`: {rrows:#?}");
+        let search_row = rrows.iter().find(|r| r.contains("history:")).unwrap();
+        assert_eq!(col(search_row, 'h'), col(prompt_row, '❯'), "Ctrl+R aligns with `❯`: {rrows:#?}");
         a.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         // After the first message: the transcript from the top, the input at the bottom.
         a.submit("hello".into());

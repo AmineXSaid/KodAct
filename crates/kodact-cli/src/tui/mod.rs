@@ -601,6 +601,37 @@ impl<B: Backend> Full<B> {
         self.scroll = (self.scroll as isize + rows).clamp(0, self.max_scroll as isize) as usize;
     }
 
+    /// Update `app.find` match count and scroll the transcript to keep the active match in view.
+    pub fn sync_find(&mut self, app: &mut App) {
+        let Some(f) = app.find.as_mut() else { return };
+        if f.query.is_empty() {
+            f.total = 0;
+            f.current = 0;
+            return;
+        }
+        let q = f.query.to_lowercase();
+        let matches: Vec<usize> = self
+            .wrapped
+            .iter()
+            .enumerate()
+            .rev()
+            .filter_map(|(i, line)| {
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                text.to_lowercase().contains(&q).then_some(i)
+            })
+            .collect();
+        f.total = matches.len();
+        if matches.is_empty() {
+            f.current = 0;
+            return;
+        }
+        f.current = f.current.min(matches.len() - 1);
+        let row = matches[f.current];
+        let half = self.in_view / 2;
+        let desired_end = (row + 1 + half).min(self.wrapped.len());
+        self.scroll = self.wrapped.len().saturating_sub(desired_end).min(self.max_scroll);
+    }
+
     /// Whether an unadorned `Up` or `Down` key can scroll the transcript instead of editing
     /// the prompt: only when no dialog, menu, search, multi-line line move or queued-message
     /// recall owns the key.
@@ -615,6 +646,7 @@ impl<B: Backend> Full<B> {
             && app.dialog.is_none()
             && !app.danger_armed
             && app.search.is_none()
+            && app.find.is_none()
             && app.menu().is_empty()
             && app.file_menu().is_empty()
             && !(code == KeyCode::Up && app.editor.is_empty() && !app.queued.is_empty())
@@ -1237,6 +1269,11 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                                     let _ = to_session.send(ToSession::Exit);
                                     exiting = true;
                                 }
+                            }
+                        }
+                        if app.find.is_some() {
+                            if let Display::Full(f) = &mut screen {
+                                f.sync_find(&mut app);
                             }
                         }
                         if exiting {
@@ -2050,6 +2087,53 @@ mod tests {
         assert!(!f.can_scroll_key(&a, KeyCode::Down));
         a.editor.set("line one\nline two");
         assert!(!f.can_scroll_key(&a, KeyCode::Up), "Up from line 2 moves to line 1 first");
+    }
+
+    #[test]
+    fn ctrl_f_searches_discussion_and_ctrl_r_shows_match_list() {
+        use crossterm::event::KeyEvent;
+        let mut a = app::App::new(
+            text::Theme::named("dark", false, palette::Depth::default()),
+            vec!["Fix Bug One".into(), "add feature two".into()],
+        );
+        a.front = false;
+        let mut f = Full::new(TestBackend::new(80, 16), front::FrontInfo::default()).unwrap();
+        let mut lines: Vec<Line<'static>> = vec![Line::from("• target alpha at the top")];
+        lines.extend((1..=40).map(|i| Line::from(format!("• filler line {i:02}"))));
+        lines.push(Line::from("• target beta at the bottom"));
+        f.commit(lines);
+        f.draw(&a).unwrap();
+        assert_eq!(f.scroll, 0);
+
+        // Ctrl+F opens discussion find, counts matches, and Enter jumps to the older match.
+        a.on_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert!(a.find.is_some());
+        for c in "TARGET".chars() {
+            a.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            f.sync_find(&mut a);
+        }
+        assert_eq!(a.find.as_ref().unwrap().total, 2);
+        assert_eq!(a.find.as_ref().unwrap().current, 0);
+        // Jump to older match (top of transcript): scroll increases.
+        a.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        f.sync_find(&mut a);
+        assert_eq!(a.find.as_ref().unwrap().current, 1);
+        assert!(f.scroll > 0, "jumping to older match scrolls up: {}", f.scroll);
+        f.draw(&a).unwrap();
+        let buf: String = f.terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(buf.contains("find: TARGET") && buf.contains("2/2"), "find bar renders count:\n{buf}");
+        a.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(a.find.is_none());
+
+        // Ctrl+R searches case-insensitively and renders the match list with counts.
+        a.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        for c in "bug".chars() {
+            a.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(a.editor.text(), "Fix Bug One");
+        f.draw(&a).unwrap();
+        let buf: String = f.terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(buf.contains("history: bug") && buf.contains("1/1") && buf.contains("Fix Bug One"), "{buf}");
     }
 }
 

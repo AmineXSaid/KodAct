@@ -397,6 +397,16 @@ pub struct Search {
     draft: String,
 }
 
+/// Ctrl+F: search through the discussion transcript.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Find {
+    pub query: String,
+    /// 0-based index into matching wrapped lines (newest-first).
+    pub current: usize,
+    /// Total matching wrapped lines (updated by `Full`).
+    pub total: usize,
+}
+
 /// The keyboard shortcuts (`?` on an empty prompt, `/keybindings`).
 /// Each row: its default keys, what they do, and the actions it covers (a row may
 /// cover two, as "start / end of line" does).
@@ -410,6 +420,7 @@ pub const KEYS: &[(&str, &str, &[&str])] = &[
     ("Shift+Tab", "Cycle the permission mode: default, accept edits, plan", &["cycleMode"]),
     ("Up / Down", "Move between lines; earlier prompts", &[]),
     ("Ctrl+R", "Search earlier prompts", &["historySearch"]),
+    ("Ctrl+F", "Search in the discussion", &[]),
     ("Tab", "Complete a / command or an @ path", &["complete"]),
     ("@", "Mention a file (a menu of project paths)", &[]),
     ("!", "At the start: run a shell command", &[]),
@@ -516,6 +527,7 @@ pub struct App {
     commands: Vec<CommandInfo>,
     files: Vec<String>,
     pub search: Option<Search>,
+    pub find: Option<Find>,
     pub menu_selected: usize,
     menu_dismissed: bool,
     last_esc: Option<Instant>,
@@ -1160,6 +1172,7 @@ impl App {
             commands: vec![],
             files: vec![],
             search: None,
+            find: None,
             menu_selected: 0,
             menu_dismissed: false,
             last_esc: None,
@@ -2697,7 +2710,22 @@ impl App {
     fn find_history(&self, query: &str, from: Option<usize>) -> Option<usize> {
         let h = self.editor.history();
         let end = from.map(|f| f + 1).unwrap_or(h.len()).min(h.len());
-        (0..end).rev().find(|&i| h[i].contains(query))
+        let q = query.to_lowercase();
+        (0..end).rev().find(|&i| h[i].to_lowercase().contains(&q))
+    }
+
+    /// All history entries matching the active `Ctrl+R` query, newest first.
+    pub fn search_matches(&self) -> Vec<(usize, &str)> {
+        let Some(s) = &self.search else { return vec![] };
+        let q = s.query.to_lowercase();
+        self.editor
+            .history()
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, entry)| entry.to_lowercase().contains(&q))
+            .map(|(i, entry)| (i, entry.as_str()))
+            .collect()
     }
 
     fn search_key(&mut self, key: KeyEvent) -> Option<Vec<Action>> {
@@ -2706,7 +2734,21 @@ impl App {
         match key.code {
             KeyCode::Char('r') if ctrl => {
                 let older = s.hit.and_then(|h| h.checked_sub(1)).and_then(|o| self.find_history(&s.query, Some(o)));
+                s.hit = older.or(s.hit).or_else(|| self.find_history(&s.query, None));
+            }
+            KeyCode::Up => {
+                let older = s.hit.and_then(|h| h.checked_sub(1)).and_then(|o| self.find_history(&s.query, Some(o)));
                 s.hit = older.or(s.hit);
+            }
+            KeyCode::Down => {
+                let h = self.editor.history();
+                let q = s.query.to_lowercase();
+                if let Some(cur) = s.hit {
+                    let newer = ((cur + 1)..h.len()).find(|&i| h[i].to_lowercase().contains(&q));
+                    if let Some(n) = newer {
+                        s.hit = Some(n);
+                    }
+                }
             }
             // Esc or Ctrl+G: back to what was typed.
             KeyCode::Esc => {
@@ -2738,6 +2780,50 @@ impl App {
         }
         self.search = Some(s);
         Some(vec![])
+    }
+
+    fn find_key(&mut self, key: KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let Some(mut f) = self.find.take() else { return false };
+        match key.code {
+            KeyCode::Esc => return true,
+            KeyCode::Char('g') | KeyCode::Char('c') if ctrl => return true,
+            KeyCode::Char('f') | KeyCode::Char('n') if ctrl => {
+                if f.total > 0 {
+                    f.current = (f.current + 1) % f.total;
+                }
+            }
+            KeyCode::Char('p') if ctrl => {
+                if f.total > 0 {
+                    f.current = f.current.checked_sub(1).unwrap_or(f.total - 1);
+                }
+            }
+            KeyCode::Enter | KeyCode::Up => {
+                if f.total > 0 {
+                    f.current = (f.current + 1) % f.total;
+                }
+            }
+            KeyCode::Down => {
+                if f.total > 0 {
+                    f.current = f.current.checked_sub(1).unwrap_or(f.total - 1);
+                }
+            }
+            KeyCode::Backspace => {
+                f.query.pop();
+                f.current = 0;
+            }
+            KeyCode::Char(c) if !ctrl && !alt => {
+                f.query.push(c);
+                f.current = 0;
+            }
+            _ => {
+                self.find = Some(f);
+                return false;
+            }
+        }
+        self.find = Some(f);
+        true
     }
 
     // ---- keys ----
@@ -2826,6 +2912,7 @@ impl App {
         if ctrl && key.code == KeyCode::Char('c') {
             self.danger_armed = false;
             self.search = None;
+            self.find = None;
             if self.dialog.is_some() {
                 self.answer(PermissionAnswer::Deny { message: "The user interrupted.".into(), interrupt: true });
                 return vec![Action::Interrupt];
@@ -2847,6 +2934,9 @@ impl App {
         if self.dialog.is_some() {
             return self.dialog_key(key);
         }
+        if self.find.is_some() && self.find_key(key) {
+            return vec![];
+        }
         if self.search.is_some() {
             if let Some(a) = self.search_key(key) {
                 return a;
@@ -2856,7 +2946,13 @@ impl App {
             self.sidebar = !self.sidebar;
             return vec![];
         }
+        if ctrl && key.code == KeyCode::Char('f') {
+            self.search = None;
+            self.find = Some(Find::default());
+            return vec![];
+        }
         if ctrl && key.code == KeyCode::Char('r') {
+            self.find = None;
             let draft = self.editor.text();
             self.search = Some(Search { query: String::new(), hit: None, draft });
             return vec![];
