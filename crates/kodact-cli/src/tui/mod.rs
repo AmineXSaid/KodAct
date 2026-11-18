@@ -1143,11 +1143,16 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                 // The full screen scrolls its transcript: the wheel (SGR mouse or ?1007h
                 // alternate-scroll Up/Down), and PgUp / PgDn with no dialog open.
                 Some(Ok(Event::Mouse(m))) if matches!(screen, Display::Full(_)) => {
-                    if let Display::Full(f) = &mut screen {
-                        match m.kind {
-                            MouseEventKind::ScrollUp => f.scroll_by(3),
-                            MouseEventKind::ScrollDown => f.scroll_by(-3),
-                            _ => {}
+                    let delta = match m.kind {
+                        MouseEventKind::ScrollUp => Some(-3),
+                        MouseEventKind::ScrollDown => Some(3),
+                        _ => None,
+                    };
+                    if let Some(d) = delta {
+                        if !app.scroll_dialog(d) {
+                            if let Display::Full(f) = &mut screen {
+                                f.scroll_by(-d);
+                            }
                         }
                     }
                     app.dirty = true;

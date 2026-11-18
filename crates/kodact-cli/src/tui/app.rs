@@ -381,6 +381,8 @@ pub struct Dialog {
     reply: Option<oneshot::Sender<PermissionAnswer>>,
     kind: DialogKind,
     selected: usize,
+    /// Preview scroll offset (used by permission dialogs).
+    scroll: usize,
     /// "Type an answer" in a question.
     typing: Option<Editor>,
 }
@@ -1096,7 +1098,7 @@ fn rule_text(s: &Suggestion) -> Option<String> {
 /// What an edit would change, for the permission dialog: removed lines as
 /// `  - `, added lines as `  + ` (the dialog colours them), a few of each.
 fn edit_preview(tool: &str, input: &Value) -> Vec<String> {
-    const MAX: usize = 8;
+    const MAX: usize = 200;
     let side = |text: &str, sign: char| -> Vec<String> {
         let lines: Vec<&str> = text.lines().collect();
         let mut out: Vec<String> = lines.iter().take(MAX).map(|l| format!("  {sign} {l}")).collect();
@@ -1115,7 +1117,7 @@ fn edit_preview(tool: &str, input: &Value) -> Vec<String> {
             .as_array()
             .into_iter()
             .flatten()
-            .take(3)
+            .take(20)
             .flat_map(|e| {
                 let mut v = side(e["old_string"].as_str().unwrap_or(""), '-');
                 v.extend(side(e["new_string"].as_str().unwrap_or(""), '+'));
@@ -1984,7 +1986,8 @@ impl App {
             DialogKind::Permission { always, danger: Some(_) } => 1 + usize::from(always.is_some()),
             _ => 0,
         };
-        self.dialog = Some(Dialog { prompt: Some(prompt), reply: Some(reply), kind, selected, typing: None });
+        self.dialog =
+            Some(Dialog { prompt: Some(prompt), reply: Some(reply), kind, selected, scroll: 0, typing: None });
         self.asked_at = Some(Instant::now());
     }
 
@@ -2189,7 +2192,7 @@ impl App {
                 let arg = summarize(&p.tool_name, &p.input);
                 let mut body = vec![];
                 if p.tool_name == "Bash" {
-                    body.extend(p.input["command"].as_str().unwrap_or("").lines().take(6).map(|l| format!("  {l}")));
+                    body.extend(p.input["command"].as_str().unwrap_or("").lines().take(100).map(|l| format!("  {l}")));
                     // Where it runs: a relative path means nothing without it.
                     if !self.status.cwd.is_empty() {
                         body.push(format!("  in {}", super::short_path(&self.status.cwd)));
@@ -2244,6 +2247,23 @@ impl App {
 
     pub fn dialog_selected(&self) -> usize {
         self.dialog.as_ref().map(|d| d.selected).unwrap_or(0)
+    }
+
+    pub fn dialog_scroll(&self) -> usize {
+        self.dialog.as_ref().map(|d| d.scroll).unwrap_or(0)
+    }
+
+    pub fn scroll_dialog(&mut self, delta: isize) -> bool {
+        let Some(d) = self.dialog.as_ref() else { return false };
+        if !matches!(d.kind, DialogKind::Permission { .. }) {
+            return false;
+        }
+        let max_scroll = self.dialog_text().1.len().saturating_sub(1);
+        if let Some(d) = self.dialog.as_mut() {
+            d.scroll = d.scroll.saturating_add_signed(delta).min(max_scroll);
+        }
+        self.dirty = true;
+        true
     }
 
     fn dialog_key(&mut self, key: KeyEvent) -> Vec<Action> {
@@ -2302,6 +2322,11 @@ impl App {
         if let DialogKind::Permission { always, danger } = &d.kind {
             if key.code == KeyCode::BackTab {
                 return self.cycle_mode();
+            }
+            if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+                let delta = if key.code == KeyCode::PageUp { -(DIALOG_PAGE as isize) } else { DIALOG_PAGE as isize };
+                self.scroll_dialog(delta);
+                return vec![];
             }
             // A destructive command is allowed with `y` only: Enter on Allow just says so.
             if danger.is_some() && key.code == KeyCode::Enter && d.selected + 1 < n {
@@ -2444,6 +2469,7 @@ impl App {
             reply: None,
             kind: DialogKind::Picker { picker, filter: String::new() },
             selected,
+            scroll: 0,
             typing: None,
         });
     }
@@ -2454,7 +2480,7 @@ impl App {
     pub fn open_screen(&mut self, screen: Screen) {
         self.flush_live();
         let kind = DialogKind::Viewer { screen, cursor: 0, top: 0, back: vec![] };
-        self.show(Dialog { prompt: None, reply: None, kind, selected: 0, typing: None });
+        self.show(Dialog { prompt: None, reply: None, kind, selected: 0, scroll: 0, typing: None });
     }
 
     /// The open screen: its rows, the highlighted row and the first row shown.
@@ -2548,6 +2574,7 @@ impl App {
                         reply: None,
                         kind: DialogKind::Form { form, at: 0 },
                         selected: 0,
+                        scroll: 0,
                         typing: None,
                     });
                     return vec![];

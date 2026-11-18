@@ -368,7 +368,7 @@ fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
     let t = app.theme;
     let (title, body) = app.dialog_text();
     // A proposed edit's lines: removed in red, added in green.
-    let mut rows: Vec<Line<'static>> = body
+    let rows: Vec<Line<'static>> = body
         .into_iter()
         .map(|l| {
             if l.starts_with("  - ") {
@@ -380,15 +380,16 @@ fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
             }
         })
         .collect();
+    let preview = rows;
+    let mut danger_rows = vec![];
     // What a destructive command would do, in red, with a glyph and a word.
     if let Some(danger) = app.dialog_danger() {
-        rows.push(Line::default());
-        rows.push(Line::from(vec![
+        danger_rows.push(Line::default());
+        danger_rows.push(Line::from(vec![
             Span::styled("▲ ", t.error()),
             Span::styled(format!("This {danger}. It can't be undone."), t.error()),
         ]));
     }
-    rows.push(Line::default());
     let selected = app.dialog_selected();
     let options = app.dialog_options();
     let permission = options.first().is_some_and(|(_, k)| k == "y");
@@ -434,21 +435,45 @@ fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
     };
     let whole = |head: &[Line<'static>], shown: Vec<Line<'static>>, foot: Option<String>| {
         let mut all = head.to_vec();
+        all.extend(danger_rows.iter().cloned());
+        all.push(Line::default());
         all.extend(shown);
         all.push(Line::default());
         all.push(Line::from(Span::styled(foot.unwrap_or_else(|| hint.clone()), t.dim())));
         framed(app, title.clone(), all, w)
     };
-    let all = whole(&rows, (0..options.len()).map(|i| option(i, None)).collect(), None);
+    let option_lines: Vec<Line<'static>> = (0..options.len()).map(|i| option(i, None)).collect();
+    let all = whole(&preview, option_lines.clone(), None);
     if all.len() <= room || options.is_empty() {
         return all;
+    }
+    if permission && preview.len() > 1 {
+        let fixed = whole(&[], option_lines.clone(), None).len();
+        let preview_room = room.saturating_sub(fixed);
+        if preview_room >= 2 {
+            let show = preview_room.saturating_sub(1).max(1);
+            let max_start = preview.len().saturating_sub(show);
+            let start = app.dialog_scroll().min(max_start);
+            let end = (start + show).min(preview.len());
+            let mut sliced = preview[start..end].to_vec();
+            let above = start;
+            let below = preview.len().saturating_sub(end);
+            sliced.push(Line::from(Span::styled(
+                format!("  ↑ {above} above · ↓ {below} below · PgUp/PgDn or wheel"),
+                t.dim(),
+            )));
+            let candidate = whole(&sliced, option_lines, None);
+            if candidate.len() <= room {
+                return candidate;
+            }
+        }
     }
     // More than the window holds (an endpoint that lists a hundred models, a small
     // window): the title, the filter and the keys stay, and the options scroll in what
     // is left, around the selected one. Before, the box ran off the top of the window
     // and took its title, its filter and its first rows with it.
     let inner = if app.look == super::look::Look::Bare { w } else { w.saturating_sub(4) }.max(8);
-    let mut head = rows;
+    let mut head = preview;
     loop {
         let fixed = whole(&head, vec![], None).len();
         let fit_rows = room.saturating_sub(fixed);
@@ -3415,5 +3440,37 @@ mod tests {
             parent_tool_use_id: None,
         }));
         assert_eq!(a.skills_used, vec![("verify".to_string(), 1), ("simplify".to_string(), 1)]);
+    }
+
+    #[test]
+    fn permission_dialog_scrolls_long_preview() {
+        let mut a = app(false);
+        let old = (1..=30).map(|i| format!("old line {i:02}")).collect::<Vec<_>>().join("\n");
+        let new = (1..=30).map(|i| format!("new line {i:02}")).collect::<Vec<_>>().join("\n");
+        ask(
+            &mut a,
+            "Edit",
+            json!({
+                "file_path": "/p/src/lib.rs",
+                "old_string": old,
+                "new_string": new,
+            }),
+        );
+        let rows_top = draw(&live_view(&a, 80, 20), 80).0.join("\n");
+        assert!(rows_top.contains("old line 01"), "top of diff visible initially:\n{rows_top}");
+        assert!(rows_top.contains("PgUp/PgDn or wheel"), "scroll hint shown:\n{rows_top}");
+        assert!(rows_top.contains("1. Allow"), "options stay visible:\n{rows_top}");
+
+        a.on_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::PageDown,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        let rows_paged = draw(&live_view(&a, 80, 20), 80).0.join("\n");
+        assert!(!rows_paged.contains("old line 01"), "top scrolled away after PgDn:\n{rows_paged}");
+        assert!(rows_paged.contains("1. Allow"), "options stay pinned while scrolling:\n{rows_paged}");
+
+        assert!(a.scroll_dialog(-20));
+        let rows_back = draw(&live_view(&a, 80, 20), 80).0.join("\n");
+        assert!(rows_back.contains("old line 01"), "scrolling back up restores top:\n{rows_back}");
     }
 }
