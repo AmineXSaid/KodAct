@@ -103,6 +103,26 @@ fn blocked_path(subject: &Subject) -> Option<String> {
     }
 }
 
+fn decide_for(perm: &kodact_permissions::Engine, req: &Request<'_>, needs_user: bool) -> Decision {
+    let decision = perm.decide(req);
+    // Questions for the person always reach them (contract C8): only deny rules and
+    // bypassPermissions (which approves plans) skip the prompt.
+    if needs_user {
+        match decision {
+            d @ Decision::Deny { reason: kodact_permissions::Reason::Rule { .. } } => d,
+            _ if perm.mode == PermissionMode::BypassPermissions => {
+                Decision::Allow { reason: kodact_permissions::Reason::Mode(perm.mode) }
+            }
+            _ if perm.mode == PermissionMode::DontAsk => {
+                Decision::Deny { reason: kodact_permissions::Reason::Mode(perm.mode) }
+            }
+            _ => Decision::Ask { reason: kodact_permissions::Reason::Default, suggestions: vec![] },
+        }
+    } else {
+        decision
+    }
+}
+
 /// One call's pipeline: validate → rules → PreToolUse → (prompt) → execute → PostToolUse.
 async fn run_one(
     shared: &Shared,
@@ -110,7 +130,7 @@ async fn run_one(
     name: &str,
     mut input: Value,
     cancel: &CancellationToken,
-    mode: &str,
+    _mode: &str,
 ) -> CallResult {
     if cancel.is_cancelled() {
         return CallResult::plain(id, ToolOutput::error(INTERRUPTED));
@@ -162,33 +182,21 @@ async fn run_one(
         read_only: tool.is_read_only(&input),
         sandboxed: tool.sandboxed(&input, &ctx),
     };
-    let mut decision = perm.decide(&req);
+    let mut decision = decide_for(&perm, &req, tool.needs_user());
     tracing::debug!(tool = name, decision = ?decision, mode = perm.mode.as_str(), "permission check");
-    // Questions for the person always reach them (contract C8): only deny rules and
-    // bypassPermissions (which approves plans) skip the prompt.
-    if tool.needs_user() {
-        decision = match decision {
-            d @ Decision::Deny { reason: kodact_permissions::Reason::Rule { .. } } => d,
-            _ if perm.mode == PermissionMode::BypassPermissions => {
-                Decision::Allow { reason: kodact_permissions::Reason::Mode(perm.mode) }
-            }
-            _ if perm.mode == PermissionMode::DontAsk => {
-                Decision::Deny { reason: kodact_permissions::Reason::Mode(perm.mode) }
-            }
-            _ => Decision::Ask { reason: kodact_permissions::Reason::Default, suggestions: vec![] },
-        };
-    }
     let rule_denied = matches!(decision, Decision::Deny { .. });
 
     // 2. PreToolUse hooks.
     let mut stop = None;
+    let mut hook_overrode = false;
     if !rule_denied {
+        let live_mode = shared.permissions.read().unwrap().mode.as_str();
         let o = shared
             .hooks
             .run(
                 HookEvent::PreToolUse,
                 Some(name),
-                mode,
+                live_mode,
                 json!({"tool_name": name, "tool_input": input, "tool_use_id": id}),
                 cancel,
             )
@@ -213,9 +221,18 @@ async fn run_one(
                 rule: format!("PreToolUse hook: {reason}"),
             };
             decision = match d.as_str() {
-                "deny" => Decision::Deny { reason },
-                "allow" => Decision::Allow { reason },
-                "ask" => Decision::Ask { reason, suggestions: perm.suggest(&req) },
+                "deny" => {
+                    hook_overrode = true;
+                    Decision::Deny { reason }
+                }
+                "allow" => {
+                    hook_overrode = true;
+                    Decision::Allow { reason }
+                }
+                "ask" => {
+                    hook_overrode = true;
+                    Decision::Ask { reason, suggestions: perm.suggest(&req) }
+                }
                 _ => decision,
             };
         }
@@ -245,17 +262,42 @@ async fn run_one(
                     g = shared.prompt_lock.lock() => g,
                     _ = cancel.cancelled() => return CallResult::plain(id, ToolOutput::error(INTERRUPTED)),
                 };
-                let prompt = PermissionPrompt {
-                    tool_name: name.into(),
-                    tool_use_id: id.into(),
-                    input: input.clone(),
-                    reason: reason.to_string(),
-                    suggestions,
-                    blocked_path: blocked_path(&subject),
+                // Re-check permissions after acquiring prompt_lock in case the user changed
+                // the mode while an earlier prompt in the same batch was waiting.
+                let live_decision = if hook_overrode {
+                    None
+                } else {
+                    let live_perm = shared.permissions.read().unwrap().clone();
+                    Some(decide_for(&live_perm, &req, tool.needs_user()))
                 };
-                tokio::select! {
-                    a = shared.prompter.ask(prompt) => a,
-                    _ = cancel.cancelled() => return CallResult::plain(id, ToolOutput::error(INTERRUPTED)),
+                match live_decision {
+                    Some(Decision::Allow { .. }) => {
+                        PermissionAnswer::Allow { updated_input: None, updated_permissions: vec![] }
+                    }
+                    Some(Decision::Deny { reason }) => {
+                        return CallResult {
+                            id: id.into(),
+                            output: ToolOutput::error(format!("Permission to use {name} has been denied: {reason}.")),
+                            denial: denial(name, id, &input),
+                            interrupt_turn: false,
+                            stop,
+                            writes_after: 0,
+                        };
+                    }
+                    _ => {
+                        let prompt = PermissionPrompt {
+                            tool_name: name.into(),
+                            tool_use_id: id.into(),
+                            input: input.clone(),
+                            reason: reason.to_string(),
+                            suggestions,
+                            blocked_path: blocked_path(&subject),
+                        };
+                        tokio::select! {
+                            a = shared.prompter.ask(prompt) => a,
+                            _ = cancel.cancelled() => return CallResult::plain(id, ToolOutput::error(INTERRUPTED)),
+                        }
+                    }
                 }
             };
             match answer {
@@ -322,13 +364,14 @@ async fn run_one(
     let event = if output.is_error { HookEvent::PostToolUseFailure } else { HookEvent::PostToolUse };
     let mut output = output;
     if shared.hooks.enabled_for(event) {
+        let live_mode = shared.permissions.read().unwrap().mode.as_str();
         let response = output.structured.clone().unwrap_or_else(|| json!(output.text_content()));
         let o = shared
             .hooks
             .run(
                 event,
                 Some(name),
-                mode,
+                live_mode,
                 json!({"tool_name": name, "tool_input": input, "tool_response": response, "tool_use_id": id}),
                 cancel,
             )

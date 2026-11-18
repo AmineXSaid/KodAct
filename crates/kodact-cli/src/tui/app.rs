@@ -2300,6 +2300,9 @@ impl App {
             return vec![];
         }
         if let DialogKind::Permission { always, danger } = &d.kind {
+            if key.code == KeyCode::BackTab {
+                return self.cycle_mode();
+            }
             // A destructive command is allowed with `y` only: Enter on Allow just says so.
             if danger.is_some() && key.code == KeyCode::Enter && d.selected + 1 < n {
                 self.hint = Some(("Press y to allow it; Enter or n denies".into(), Instant::now()));
@@ -2736,6 +2739,46 @@ impl App {
         self.hint = Some((text.to_string(), Instant::now()));
     }
 
+    fn cycle_mode(&mut self) -> Vec<Action> {
+        let cur = PermissionMode::parse(&self.status.mode).unwrap_or(PermissionMode::Default);
+        let next = cur.next(!self.danger_blocked);
+        if next == PermissionMode::BypassPermissions && !self.danger_confirmed {
+            self.danger_armed = true;
+            return vec![];
+        }
+        self.set_mode(next)
+    }
+
+    fn set_mode(&mut self, mode: PermissionMode) -> Vec<Action> {
+        let m_str = mode.as_str();
+        self.status.mode = m_str.to_string();
+        self.gap();
+        let mut spans = vec![
+            Span::styled("■ ", self.theme.mode(m_str)),
+            Span::styled(format!("{} mode", mode.label()), self.theme.mode(m_str).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" — {}", mode.definition()), self.theme.dim()),
+        ];
+        if self.busy {
+            spans.push(Span::styled(" (active immediately)", self.theme.subtle()));
+        }
+        self.pending.push(Line::from(spans));
+
+        let auto_allow = match &self.dialog {
+            Some(Dialog { kind: DialogKind::Permission { .. }, prompt: Some(p), .. }) => match mode {
+                PermissionMode::BypassPermissions => true,
+                PermissionMode::AcceptEdits | PermissionMode::Auto => {
+                    matches!(p.tool_name.as_str(), "Edit" | "MultiEdit" | "Write" | "NotebookEdit")
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if auto_allow {
+            self.answer(PermissionAnswer::Allow { updated_input: None, updated_permissions: vec![] });
+        }
+        vec![Action::SetMode(mode)]
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) -> Vec<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -2746,11 +2789,9 @@ impl App {
             self.danger_armed = false;
             return if key.code == KeyCode::Char('y') && !ctrl && !alt {
                 self.danger_confirmed = true;
-                self.status.mode = PermissionMode::BypassPermissions.as_str().to_string();
-                vec![Action::SetMode(PermissionMode::BypassPermissions)]
+                self.set_mode(PermissionMode::BypassPermissions)
             } else {
-                self.status.mode = PermissionMode::Default.as_str().to_string();
-                vec![Action::SetMode(PermissionMode::Default)]
+                self.set_mode(PermissionMode::Default)
             };
         }
         // Ctrl-C: clear, interrupt, or (twice) exit; it works in dialogs too.
@@ -2821,14 +2862,7 @@ impl App {
             }
         }
         if key.code == KeyCode::BackTab {
-            let cur = PermissionMode::parse(&self.status.mode).unwrap_or(PermissionMode::Default);
-            let next = cur.next(!self.danger_blocked);
-            if next == PermissionMode::BypassPermissions && !self.danger_confirmed {
-                self.danger_armed = true;
-                return vec![];
-            }
-            self.status.mode = next.as_str().to_string();
-            return vec![Action::SetMode(next)];
+            return self.cycle_mode();
         }
         if key.code == KeyCode::Char('?') && self.editor.is_empty() && !ctrl && !alt {
             self.reply_lines(&keys_text(&self.keymap), false);
@@ -3840,6 +3874,31 @@ mod tests {
         assert_eq!(a.on_key(key(KeyCode::Esc)), vec![Action::Send("/rewind".into())]);
         // Ctrl-D during a turn stops it before leaving.
         assert_eq!(a.on_key(ctrl('d')), vec![Action::Interrupt, Action::Exit]);
+    }
+
+    #[test]
+    fn mode_switch_emits_chat_notification_with_definition_and_resolves_open_dialog() {
+        let mut a = app();
+        a.status.mode = "default".into();
+        let stab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::AcceptEdits)]);
+        let note: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(note.contains("Accept edits mode"), "{note}");
+        assert!(note.contains(PermissionMode::AcceptEdits.definition()), "{note}");
+
+        // While the LLM is working and waiting on an Edit permission dialog, Shift+Tab
+        // switches mode, notifies in chat with "(active immediately)", and auto-approves Edit.
+        a.status.mode = "default".into();
+        a.busy = true;
+        let (tx, mut rx) = oneshot::channel();
+        a.on_event(UiEvent::Ask { prompt: prompt("Edit", json!({"file_path": "a.rs"})), reply: tx });
+        assert!(a.dialog.is_some());
+        assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::AcceptEdits)]);
+        assert!(a.dialog.is_none(), "AcceptEdits auto-resolves pending Edit permission");
+        assert!(matches!(rx.try_recv(), Ok(PermissionAnswer::Allow { .. })));
+        let live_note: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(live_note.contains("Accept edits mode"), "{live_note}");
+        assert!(live_note.contains("active immediately"), "{live_note}");
     }
 
     fn prompt(tool: &str, input: Value) -> PermissionPrompt {

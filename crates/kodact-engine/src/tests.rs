@@ -3319,6 +3319,48 @@ async fn plan_mode_is_told_to_the_model_and_its_end_too() {
 }
 
 #[tokio::test]
+async fn mid_turn_mode_change_notifies_model_with_definition_and_applies_to_queued_tools() {
+    struct LazySwitch {
+        perms: std::sync::OnceLock<Arc<std::sync::RwLock<kodact_permissions::Engine>>>,
+        asks: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl PermissionPrompter for LazySwitch {
+        async fn ask(&self, _prompt: PermissionPrompt) -> PermissionAnswer {
+            self.asks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.perms.get().unwrap().write().unwrap().mode = PermissionMode::Auto;
+            PermissionAnswer::Allow { updated_input: None, updated_permissions: vec![] }
+        }
+    }
+
+    let h = Harness::new(vec![]);
+    std::fs::create_dir_all(h.cwd()).unwrap();
+    let p1 = h.cwd().join("a.txt");
+    let p2 = h.cwd().join("b.txt");
+    h.provider.push(MockTurn::tools(&[
+        ("Write", json!({"file_path": p1.display().to_string(), "content": "one"})),
+        ("Write", json!({"file_path": p2.display().to_string(), "content": "two"})),
+    ]));
+    h.provider.push(MockTurn::text("done"));
+    let lazy = Arc::new(LazySwitch { perms: std::sync::OnceLock::new(), asks: std::sync::atomic::AtomicUsize::new(0) });
+    let mut e = h.engine_with(EngineConfig::default(), PermissionMode::Default, lazy.clone(), json!({}));
+    lazy.perms.set(e.handle().permissions.clone()).unwrap();
+
+    let r = e.submit(prompt("write two files")).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    // Both writes ran, but the second write saw Auto mode after acquiring prompt_lock and skipped prompting.
+    assert_eq!(lazy.asks.load(std::sync::atomic::Ordering::SeqCst), 1, "second Write should not prompt in Auto");
+    assert_eq!(std::fs::read_to_string(&p1).unwrap(), "one");
+    assert_eq!(std::fs::read_to_string(&p2).unwrap(), "two");
+
+    // The second model request in the same turn received the mid-turn mode switch reminder + definition.
+    let req2 = format!("{:?}", h.provider.requests()[1].messages);
+    assert!(req2.contains("Auto (auto) mid-turn"), "{req2}");
+    assert!(req2.contains(PermissionMode::Auto.definition()), "{req2}");
+    assert!(req2.contains("active immediately"), "{req2}");
+}
+
+#[tokio::test]
 async fn agent_registry_stops_one_or_all() {
     let h = Harness::new(vec![]);
     let handle = h.engine().handle();

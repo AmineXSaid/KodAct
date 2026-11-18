@@ -38,6 +38,40 @@ impl PermissionMode {
         }
     }
 
+    /// Human-readable mode name for the TUI and LLM notifications.
+    pub fn label(&self) -> &'static str {
+        match self {
+            PermissionMode::Default => "Manual",
+            PermissionMode::AcceptEdits => "Accept edits",
+            PermissionMode::Plan => "Plan",
+            PermissionMode::DontAsk => "Don't ask",
+            PermissionMode::BypassPermissions => "Dangerous",
+            PermissionMode::Auto => "Auto",
+        }
+    }
+
+    /// Short behavioral definition shown to the user and injected into LLM reminders.
+    pub fn definition(&self) -> &'static str {
+        match self {
+            PermissionMode::Default => "Reads and searches freely; asks before editing files or running shell commands.",
+            PermissionMode::AcceptEdits => {
+                "Reads and edits files in the project automatically; asks before running shell commands."
+            }
+            PermissionMode::Plan => {
+                "Read-only exploration and planning; cannot edit files or run mutating commands until the plan is approved."
+            }
+            PermissionMode::DontAsk => {
+                "Never prompts; reads and pre-allowed tools run, and anything that would ask is denied."
+            }
+            PermissionMode::BypassPermissions => {
+                "Runs all tools, file edits, and shell commands without asking for confirmation."
+            }
+            PermissionMode::Auto => {
+                "Runs file edits and routine project commands automatically; asks before risky or external actions."
+            }
+        }
+    }
+
     /// The Shift+Tab cycle in the TUI.
     pub fn next(&self, bypass_available: bool) -> Self {
         match self {

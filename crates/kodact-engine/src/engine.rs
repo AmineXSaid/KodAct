@@ -968,6 +968,8 @@ pub struct Engine {
     /// The last prompt went out in plan mode: when the mode changes, the
     /// model is told plan mode is over.
     planning: bool,
+    /// The permission mode active when the last model request was built.
+    last_mode: String,
 }
 
 /// A person's prompt in the conversation: a point `/rewind` can go back to.
@@ -1059,6 +1061,7 @@ impl Engine {
             on_permission_update: Mutex::new(None),
             injection_noted: Mutex::new(HashSet::new()),
         });
+        let initial_mode = shared.permissions.read().unwrap().mode.as_str().to_string();
         let session_context = cfg.initial_context.clone();
         Ok(Engine {
             cfg,
@@ -1108,6 +1111,7 @@ impl Engine {
             reminders: vec![],
             start_source: "startup".into(),
             planning: false,
+            last_mode: initial_mode,
         })
     }
 
@@ -1407,6 +1411,38 @@ impl Engine {
 
     fn mode_str(&self) -> &'static str {
         self.shared.permissions.read().unwrap().mode.as_str()
+    }
+
+    /// Detect permission mode changes (at turn start or mid-turn) and return a
+    /// `<system-reminder>` body explaining the active mode and its rules.
+    fn mode_reminder(&mut self, mid_turn: bool) -> Option<String> {
+        if self.cfg.is_subagent {
+            return None;
+        }
+        let cur = self.mode_str();
+        let changed = cur != self.last_mode;
+        let planning = cur == "plan";
+        let note = if planning && (!mid_turn || changed) {
+            Some(PLAN_MODE_REMINDER.to_string())
+        } else if !planning && self.planning {
+            let def = kodact_permissions::PermissionMode::parse(cur).map(|m| m.definition()).unwrap_or("");
+            Some(format!(
+                "Plan mode is off (the permission mode is now {cur}). You may change files and run commands again. {def}"
+            ))
+        } else if changed {
+            let parsed = kodact_permissions::PermissionMode::parse(cur);
+            let label = parsed.map(|m| m.label()).unwrap_or(cur);
+            let def = parsed.map(|m| m.definition()).unwrap_or("");
+            let when = if mid_turn { " mid-turn" } else { "" };
+            Some(format!(
+                "The user switched the permission mode to {label} ({cur}){when}. {def} This change is active immediately."
+            ))
+        } else {
+            None
+        };
+        self.planning = planning;
+        self.last_mode = cur.to_string();
+        note
     }
 
     /// KodAct knows `model`'s price (built in, or `modelPricing`).
@@ -2863,18 +2899,9 @@ impl Engine {
         }
         // The permission mode can change between prompts (a host's
         // `set_permission_mode`, shift+tab): tell the model while it plans,
-        // and once when planning ends, as Claude Code does.
-        if !self.cfg.is_subagent {
-            let planning = self.mode_str() == "plan";
-            if planning {
-                self.reminders.push(PLAN_MODE_REMINDER.to_string());
-            } else if self.planning {
-                self.reminders.push(format!(
-                    "Plan mode is off (the permission mode is now {}). You may change files and run commands again.",
-                    self.mode_str()
-                ));
-            }
-            self.planning = planning;
+        // when planning ends, or when any mode changes.
+        if let Some(note) = self.mode_reminder(false) {
+            self.reminders.push(note);
         }
         // The task list as the reference CLI keeps it (`nudges.todoTracking`): empty as a
         // conversation starts, or unused for a while, said with the prompt.
@@ -3006,6 +3033,10 @@ impl Engine {
             model = fallback.clone().unwrap_or_else(|| self.handle.model());
             if turn.api_calls > 0 {
                 self.maybe_compact(&model, true, &cancel, &mut turn).await;
+                if let Some(note) = self.mode_reminder(true) {
+                    let reminder = format!("<system-reminder>\n{note}\n</system-reminder>");
+                    self.push_user(Message::user_text(reminder), true, None, true);
+                }
             }
             let mut req = self.build_request(&model);
             self.carry_reasoning_into(&mut req, &model);
