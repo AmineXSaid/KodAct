@@ -99,6 +99,9 @@ fn char_rows(chars: &[char], w: usize) -> Vec<(usize, usize)> {
 }
 
 fn status_left(app: &App, now: Instant) -> (String, Style) {
+    if app.danger_armed {
+        return (super::app::DANGER_PROMPT.to_string(), app.theme.error());
+    }
     if let Some((h, at)) = &app.hint {
         if now.duration_since(*at) < HINT_FOR {
             return (h.clone(), app.theme.dim());
@@ -110,7 +113,8 @@ fn status_left(app: &App, now: Instant) -> (String, Style) {
     match mode {
         "acceptEdits" => (format!("{} accept edits on (shift+tab to cycle)", glyphs::MODE_ACCEPT_EDITS), t.warning()),
         "plan" => (format!("{} plan mode on (shift+tab to cycle)", glyphs::MODE_PLAN), t.success()),
-        "bypassPermissions" => (format!("{} bypass permissions on", glyphs::MODE_BYPASS), t.error()),
+        "auto" => ("auto mode on (shift+tab to cycle)".into(), t.violet()),
+        "bypassPermissions" => (format!("{} dangerous mode on (shift+tab to cycle)", glyphs::MODE_BYPASS), t.error()),
         "dontAsk" => ("don't ask mode on (shift+tab to cycle)".into(), t.dim()),
         // The folder the session works in; `?` still lists the keys.
         _ if !app.status.cwd.is_empty() => (super::short_path(&app.status.cwd), t.subtle()),
@@ -174,15 +178,16 @@ fn keep_end(s: &str, max: usize) -> String {
     format!("…{}", tail.into_iter().collect::<String>())
 }
 
-/// A permission mode as people say it.
+/// A permission mode as people say it: `default` is Manual (every edit and command is
+/// asked about), `bypassPermissions` is Dangerous (nothing is).
 pub(super) fn mode_name(mode: &str) -> String {
     match mode {
         "acceptEdits" => "Accept edits",
         "plan" => "Plan",
         "auto" => "Auto",
         "dontAsk" => "Don't ask",
-        "bypassPermissions" => "Bypass permissions",
-        _ => "Default",
+        "bypassPermissions" => "Dangerous",
+        _ => "Manual",
     }
     .to_string()
 }
@@ -1252,7 +1257,19 @@ pub fn full_view_at(
         let mut input = live.lines;
         let status = input.pop().unwrap_or_default();
         let room = h.saturating_sub(1);
-        let notes: Vec<Line<'static>> = rows.to_vec();
+        // Each row in `rows` already carries `TRANSCRIPT_INDENT`, which lines its `❯` up
+        // with the box's when the box starts at column 0; on the front page the box starts
+        // at `page.box_left`, so the notes shift with it.
+        let notes: Vec<Line<'static>> = rows
+            .iter()
+            .cloned()
+            .map(|mut l| {
+                if page.box_left > 0 && !l.spans.is_empty() {
+                    l.spans.insert(0, Span::raw(" ".repeat(page.box_left)));
+                }
+                l
+            })
+            .collect();
         let mut out: Vec<Line<'static>> = page.header.clone();
         let box_at;
         if page.dock {
@@ -2132,7 +2149,7 @@ mod tests {
         a.on_event(UiEvent::Idle);
         let lines: Vec<String> = a.take_pending().iter().map(crate::tui::text::plain).collect();
         // The mode, the model, the time and the tokens; no money.
-        assert_eq!(lines.last().unwrap(), "  Default · deep-thinking · 0s · 1.2k tokens", "{lines:?}");
+        assert_eq!(lines.last().unwrap(), "  Manual · deep-thinking · 0s · 1.2k tokens", "{lines:?}");
         // Sub-agents: the word, and how many are done.
         let mut b = app(false);
         b.look = crate::tui::look::Look::Frame;
@@ -2314,7 +2331,7 @@ mod tests {
                 && rows[n - 4][3..rows[n - 4].len() - 3].trim().is_empty()
         );
         let session = &rows[n - 3];
-        assert!(session.starts_with("│ Default  ·  quick-thinking  ·  gpt.example.net"), "{session}");
+        assert!(session.starts_with("│ Manual  ·  quick-thinking  ·  gpt.example.net"), "{session}");
         assert!(session.ends_with("⡀ ~96% left  ·  25.3k tokens used │"), "the room left on the right: {session}");
         assert_eq!(buf[(0, (n - 6) as u16)].fg, a.theme.accent().fg.unwrap());
         assert_eq!(buf[(2, (n - 3) as u16)].fg, a.theme.mode("default").fg.unwrap(), "the mode in its colour");
@@ -2323,7 +2340,7 @@ mod tests {
         assert!(last.starts_with("  /p") && last.contains("/ commands") && !last.contains("quick-thinking"), "{last}");
         // At 80 columns the endpoint is the first to go, so the context still fits.
         let (rows, _) = draw(&live_view(&a, 80, 12), 80);
-        assert!(rows[n - 3].starts_with("│ Default  ·  quick-thinking  ") && !rows[n - 3].contains("gpt.example.net"));
+        assert!(rows[n - 3].starts_with("│ Manual  ·  quick-thinking  ") && !rows[n - 3].contains("gpt.example.net"));
         assert!(rows[n - 3].contains("~96% left"), "{rows:#?}");
         // Plan mode: named in the box in its colour, not repeated on the line.
         a.status.mode = "plan".into();
@@ -2782,6 +2799,14 @@ mod tests {
         assert!(rows[29].ends_with(&format!("v{}", kodact_core::VERSION)), "the status line on the last row");
         let (_, cy) = v.cursor.unwrap();
         assert!(rows[cy as usize].contains('❯'), "the cursor in the input");
+        // A note on the front page (`/clear` and its answer) lines up with the box's `❯`.
+        let note_rows = vec![Line::from("  ❯ /clear"), Line::from("    Conversation cleared.")];
+        let (vn, _) = full_view(&a, 100, 30, &note_rows, &page, 0);
+        let (nrows, _) = draw(&vn, 100);
+        let box_prompt = nrows.iter().find(|r| r.contains("What shall we build")).unwrap();
+        let clear_row = nrows.iter().find(|r| r.contains("❯ /clear")).unwrap();
+        let col = |r: &str| text::width(&r[..r.find('❯').unwrap()]);
+        assert_eq!(col(clear_row), col(box_prompt), "aligned with the box: {nrows:#?}");
         // After the first message: the transcript from the top, the input at the bottom.
         a.submit("hello".into());
         let transcript: Vec<Line<'static>> = (1..=40).map(|i| Line::from(format!("line {i}"))).collect();
@@ -2974,7 +2999,7 @@ mod tests {
         assert!(rows[top + 1].trim_start().starts_with("│ ❯ What shall we build today?"));
         assert_eq!(
             rows[top + 3].trim(),
-            "Default  ·  opus  ·  127.0.0.1:11434",
+            "Manual  ·  opus  ·  127.0.0.1:11434",
             "the mode, model and endpoint under it"
         );
         assert!(

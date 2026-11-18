@@ -32,9 +32,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, EventStream, KeyCode,
-    KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyCode, KeyEventKind, KeyModifiers,
+    KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use futures::StreamExt;
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -60,12 +59,13 @@ const HISTORY_ENTRIES: usize = 500;
 
 /// Cells as they are written to the terminal: a control character in one (from pasted
 /// input, a file name, a server's name, a status command's output, anything a line was
-/// built from) is drawn as its picture. Every draw of both displays goes through here,
-/// so whatever a line's source forgot, no control character reaches the terminal.
+/// built from) is drawn as its picture, and an `http://` or `https://` address on a row
+/// is wrapped in an OSC 8 hyperlink so clicking it in the discussion opens it. Every
+/// draw of both displays goes through here.
 fn safe_cells<'a>(
     content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
 ) -> Vec<(u16, u16, std::borrow::Cow<'a, ratatui::buffer::Cell>)> {
-    content
+    let mut cells: Vec<(u16, u16, std::borrow::Cow<'a, ratatui::buffer::Cell>)> = content
         .map(|(x, y, cell)| {
             if cell.symbol().chars().any(char::is_control) {
                 let mut safe = cell.clone();
@@ -75,7 +75,75 @@ fn safe_cells<'a>(
                 (x, y, std::borrow::Cow::Borrowed(cell))
             }
         })
-        .collect()
+        .collect();
+    link_cells(&mut cells);
+    cells
+}
+
+/// Wrap contiguous runs of cells that form an `http://` or `https://` URL on the same
+/// row in an OSC 8 hyperlink (`\x1b]8;;url\x07…\x1b]8;;\x07`). Also links a `[text]`
+/// label (underlined) directly followed by ` (https://…)`.
+fn link_cells(cells: &mut [(u16, u16, std::borrow::Cow<'_, ratatui::buffer::Cell>)]) {
+    let mut row_start = 0;
+    while row_start < cells.len() {
+        let y = cells[row_start].1;
+        let mut row_end = row_start + 1;
+        while row_end < cells.len() && cells[row_end].1 == y && cells[row_end].0 == cells[row_end - 1].0 + 1 {
+            row_end += 1;
+        }
+        let row = &mut cells[row_start..row_end];
+        let syms: Vec<char> = row.iter().map(|(_, _, c)| c.symbol().chars().next().unwrap_or(' ')).collect();
+        let text: String = syms.iter().collect();
+        // Byte index -> cell index when every cell is one char.
+        if text.chars().count() == row.len() {
+            let char_idx: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
+            let cell_of = |byte: usize| char_idx.partition_point(|&b| b < byte);
+            let mut at = 0;
+            while at < text.len() {
+                let rest = &text[at..];
+                let Some(rel) = rest.find("https://").into_iter().chain(rest.find("http://")).min() else { break };
+                let u_byte = at + rel;
+                let after = &text[u_byte..];
+                let end_rel = after
+                    .find(|c: char| c.is_whitespace() || matches!(c, ')' | '>' | '"' | '\'' | ']'))
+                    .unwrap_or(after.len());
+                let raw = after[..end_rel].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+                let u_start = cell_of(u_byte);
+                let u_end = cell_of(u_byte + raw.len());
+                if raw.len() > "https://".len() && u_end > u_start && u_end <= row.len() {
+                    let url: String = raw.chars().filter(|c| !c.is_control()).collect();
+                    // Wrap the URL cells themselves.
+                    wrap_osc8(row, u_start, u_end - 1, &url);
+                    // If ` (url)` directly follows underlined link text (`[text](url)`), link the text too.
+                    if u_start >= 2 && syms[u_start - 2] == ' ' && syms[u_start - 1] == '(' {
+                        let t_end = u_start - 2;
+                        let mut t_start = t_end;
+                        while t_start > 0 && row[t_start - 1].2.modifier.contains(ratatui::style::Modifier::UNDERLINED)
+                        {
+                            t_start -= 1;
+                        }
+                        if t_start < t_end {
+                            wrap_osc8(row, t_start, t_end - 1, &url);
+                        }
+                    }
+                }
+                at = u_byte + end_rel.max(1);
+            }
+        }
+        row_start = row_end;
+    }
+}
+
+fn wrap_osc8(
+    row: &mut [(u16, u16, std::borrow::Cow<'_, ratatui::buffer::Cell>)],
+    first: usize,
+    last: usize,
+    url: &str,
+) {
+    let open = format!("\x1b]8;;{url}\x07{}", row[first].2.symbol());
+    row[first].2.to_mut().set_symbol(&open);
+    let close = format!("{}\x1b]8;;\x07", row[last].2.symbol());
+    row[last].2.to_mut().set_symbol(&close);
 }
 
 /// A backend that writes only [`safe_cells`].
@@ -528,7 +596,8 @@ fn full_screen() -> bool {
 // ---- the terminal's modes ----
 
 static ENHANCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// The UI is on the alternate screen, with the mouse captured (for the wheel).
+/// The UI is on the alternate screen, without capturing the mouse so dragging
+/// selects and copies text straight from the terminal.
 static FULL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The terminal turned on the keyboard protocol (Shift+Enter is its own key).
@@ -549,7 +618,7 @@ fn restore() {
         let _ = crossterm::execute!(out, PopKeyboardEnhancementFlags);
     }
     if FULL.swap(false, std::sync::atomic::Ordering::SeqCst) {
-        let _ = crossterm::execute!(out, DisableMouseCapture, crossterm::terminal::LeaveAlternateScreen);
+        let _ = crossterm::execute!(out, crossterm::terminal::LeaveAlternateScreen);
     }
     let _ = crossterm::execute!(out, DisableBracketedPaste, crossterm::cursor::Show);
     let _ = crossterm::terminal::disable_raw_mode();
@@ -571,7 +640,11 @@ fn setup(full: bool) -> std::io::Result<Guard> {
     let mut out = std::io::stdout();
     crossterm::execute!(out, EnableBracketedPaste)?;
     if full {
-        crossterm::execute!(out, crossterm::terminal::EnterAlternateScreen, EnableMouseCapture)?;
+        // No EnableMouseCapture: the terminal keeps mouse selection so output can be
+        // copied straight from the screen. ?1007h asks the terminal to send Up/Down on
+        // the wheel while the alternate screen is up.
+        crossterm::execute!(out, crossterm::terminal::EnterAlternateScreen)?;
+        out.write_all(b"\x1b[?1007h")?;
         FULL.store(true, std::sync::atomic::Ordering::SeqCst);
     }
     if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
@@ -793,6 +866,14 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
     app.skills = driver.info.init.skills.clone();
     app.endpoint = endpoint;
     app.branch = branch.unwrap_or_default();
+    app.danger_blocked = driver
+        .info
+        .settings
+        .managed()
+        .and_then(|m| m.pointer("/permissions/disableBypassPermissionsMode"))
+        .and_then(serde_json::Value::as_str)
+        == Some("disable");
+    app.danger_confirmed = driver.bypass_allowed();
     if !full {
         let rows = crossterm::terminal::size().map(|(_, r)| r as usize).unwrap_or(24);
         app.pending.extend(brand::welcome(
@@ -1199,6 +1280,17 @@ mod tests {
                 "{what}: as their pictures: {drawn:?}"
             );
         };
+
+        // Links in the discussion become OSC 8 hyperlinks on the screen and in ANSI output.
+        let linked = text::inline("See [docs](https://kodact.dev/a) or https://kodact.dev/b.", &theme);
+        let ansi = brand::ansi(&Line::from(linked));
+        assert!(ansi.contains("\x1b]8;;https://kodact.dev/a\x07docs\x1b]8;;\x07"), "{ansi:?}");
+        assert!(ansi.contains("\x1b]8;;https://kodact.dev/b\x07https://kodact.dev/b\x1b]8;;\x07"), "{ansi:?}");
+        let mut s = Screen::new(Box::new(|| TestBackend::new(80, 4)), 1).unwrap();
+        s.commit(vec![Line::from(text::inline("Visit [site](https://kodact.dev/x).", &theme))]).unwrap();
+        let drawn = cells(s.backend());
+        assert!(drawn.contains("\x1b]8;;https://kodact.dev/x\x07site\x1b]8;;\x07"), "{drawn:?}");
+        assert!(drawn.contains("\x1b]8;;https://kodact.dev/x\x07https://kodact.dev/x\x1b]8;;\x07"), "{drawn:?}");
 
         // Full screen: pasted into the prompt, and in a line a source failed to clean.
         let mut a = app::App::new(theme, vec![]);

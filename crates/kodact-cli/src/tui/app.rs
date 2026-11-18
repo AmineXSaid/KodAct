@@ -519,6 +519,13 @@ pub struct App {
     last_ctrl_c: Option<Instant>,
     /// A short hint in the status line ("Press Ctrl-C again to exit").
     pub hint: Option<(String, Instant)>,
+    /// Shift+Tab reached Dangerous and waits for `y` before turning it on.
+    pub danger_armed: bool,
+    /// Dangerous mode was confirmed this session (or the session was launched in it, or
+    /// with `--allow-dangerously-skip-permissions`): Shift+Tab goes to it without asking.
+    pub danger_confirmed: bool,
+    /// Managed settings disable Dangerous mode (`disableBypassPermissionsMode`): the cycle skips it.
+    pub danger_blocked: bool,
     pub exit: bool,
     pub dirty: bool,
     /// Colour is allowed at all (not `NO_COLOR` or `--color never`).
@@ -1120,7 +1127,19 @@ fn edit_preview(tool: &str, input: &Value) -> Vec<String> {
     }
 }
 
-const MODES: [PermissionMode; 3] = [PermissionMode::Default, PermissionMode::AcceptEdits, PermissionMode::Plan];
+/// The Shift+Tab cycle: Manual → Accept edits → Auto → Plan → Dangerous → Manual.
+/// Dangerous is skipped where managed settings disable it, and asks once per session.
+const MODES: [PermissionMode; 5] = [
+    PermissionMode::Default,
+    PermissionMode::AcceptEdits,
+    PermissionMode::Auto,
+    PermissionMode::Plan,
+    PermissionMode::BypassPermissions,
+];
+
+/// What the status line says while Dangerous waits for its confirmation.
+pub const DANGER_PROMPT: &str =
+    "! Dangerous: every tool runs without asking. Press y to turn it on, any other key skips it";
 
 impl App {
     pub fn new(theme: Theme, history: Vec<String>) -> Self {
@@ -1154,6 +1173,9 @@ impl App {
             last_esc: None,
             last_ctrl_c: None,
             hint: None,
+            danger_armed: false,
+            danger_confirmed: false,
+            danger_blocked: false,
             exit: false,
             dirty: true,
             color_ok: theme.color,
@@ -2793,9 +2815,33 @@ impl App {
                 _ => {}
             }
         }
+        // Dangerous mode waits for `y` the first time in a session: `y` turns it on,
+        // Shift+Tab steps past it to Manual, and any other key cancels.
+        if self.danger_armed {
+            self.danger_armed = false;
+            return match key.code {
+                KeyCode::Char('y') if !ctrl && !alt => {
+                    self.danger_confirmed = true;
+                    self.status.mode = PermissionMode::BypassPermissions.as_str().to_string();
+                    vec![Action::SetMode(PermissionMode::BypassPermissions)]
+                }
+                KeyCode::BackTab => {
+                    self.status.mode = PermissionMode::Default.as_str().to_string();
+                    vec![Action::SetMode(PermissionMode::Default)]
+                }
+                _ => vec![],
+            };
+        }
         if key.code == KeyCode::BackTab {
             let cur = MODES.iter().position(|m| m.as_str() == self.status.mode).unwrap_or(0);
-            let next = MODES[(cur + 1) % MODES.len()];
+            let mut next = MODES[(cur + 1) % MODES.len()];
+            if next == PermissionMode::BypassPermissions && self.danger_blocked {
+                next = PermissionMode::Default;
+            }
+            if next == PermissionMode::BypassPermissions && !self.danger_confirmed {
+                self.danger_armed = true;
+                return vec![];
+            }
             self.status.mode = next.as_str().to_string();
             return vec![Action::SetMode(next)];
         }
@@ -3763,11 +3809,30 @@ mod tests {
     fn esc_ctrl_c_and_shift_tab() {
         let mut a = app();
         a.status.mode = "default".into();
-        assert_eq!(
-            a.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
-            vec![Action::SetMode(PermissionMode::AcceptEdits)]
-        );
+        let stab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::AcceptEdits)]);
         assert_eq!(a.status.mode, "acceptEdits");
+        assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::Auto)]);
+        assert_eq!(a.status.mode, "auto");
+        assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::Plan)]);
+        assert_eq!(a.status.mode, "plan");
+        // Reaching Dangerous for the first time arms the confirmation instead of switching.
+        assert!(a.on_key(stab).is_empty() && a.danger_armed && a.status.mode == "plan");
+        // Another Shift+Tab steps past it to Manual.
+        assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::Default)]);
+        assert!(!a.danger_armed && !a.danger_confirmed && a.status.mode == "default");
+        // Reach Plan again, arm Dangerous, confirm with `y`: now it's on and stays confirmed.
+        a.status.mode = "plan".into();
+        assert!(a.on_key(stab).is_empty() && a.danger_armed);
+        assert_eq!(a.on_key(key(KeyCode::Char('y'))), vec![Action::SetMode(PermissionMode::BypassPermissions)]);
+        assert!(a.danger_confirmed && !a.danger_armed && a.status.mode == "bypassPermissions");
+        assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::Default)]);
+        a.status.mode = "plan".into();
+        assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::BypassPermissions)]);
+        // When managed settings disable it, Plan cycles straight back to Manual.
+        a.danger_blocked = true;
+        a.status.mode = "plan".into();
+        assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::Default)]);
         typed(&mut a, "x");
         a.on_key(ctrl('c'));
         assert!(a.editor.is_empty(), "Ctrl-C clears first");

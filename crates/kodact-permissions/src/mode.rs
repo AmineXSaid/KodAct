@@ -42,7 +42,8 @@ impl PermissionMode {
     pub fn next(&self, bypass_available: bool) -> Self {
         match self {
             PermissionMode::Default => PermissionMode::AcceptEdits,
-            PermissionMode::AcceptEdits => PermissionMode::Plan,
+            PermissionMode::AcceptEdits => PermissionMode::Auto,
+            PermissionMode::Auto => PermissionMode::Plan,
             PermissionMode::Plan if bypass_available => PermissionMode::BypassPermissions,
             _ => PermissionMode::Default,
         }

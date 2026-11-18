@@ -35,7 +35,7 @@ pub(super) const GAP: usize = 2;
 pub const WORDMARK_W: usize = 6 * 7 + 5 * GAP;
 
 /// The short tagline, for the default front page.
-pub const SHORT_TAGLINE: &str = "From code to impact, on any model.";
+pub const SHORT_TAGLINE: &str = "From code to impact, with any model.";
 
 /// The tagline under the wordmark.
 pub const TAGLINE: &str = "From code to impact: a coding agent on the model you choose.";
@@ -328,7 +328,7 @@ pub fn first_run(t: &Theme, version: &str, problem: &str, cols: usize) -> Vec<Li
 /// A line as text with ANSI styles, for printing before (or without) the UI.
 pub fn ansi(line: &Line) -> String {
     let mut s = String::new();
-    for span in &line.spans {
+    for (idx, span) in line.spans.iter().enumerate() {
         let st = line.style.patch(span.style);
         let mut codes: Vec<String> = vec![];
         if st.add_modifier.contains(Modifier::BOLD) {
@@ -336,6 +336,9 @@ pub fn ansi(line: &Line) -> String {
         }
         if st.add_modifier.contains(Modifier::DIM) {
             codes.push("2".into());
+        }
+        if st.add_modifier.contains(Modifier::UNDERLINED) {
+            codes.push("4".into());
         }
         if st.add_modifier.contains(Modifier::REVERSED) {
             codes.push("7".into());
@@ -346,10 +349,31 @@ pub fn ansi(line: &Line) -> String {
         if let Some(c) = st.bg.and_then(|c| sgr(c, true)) {
             codes.push(c);
         }
-        if codes.is_empty() {
-            s.push_str(&span.content);
+        // An underlined span (or one immediately followed by ` (https://…)`) becomes an OSC 8 hyperlink.
+        let url = if st.add_modifier.contains(Modifier::UNDERLINED) {
+            let trimmed = span.content.trim();
+            if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
+                Some(trimmed.to_string())
+            } else {
+                line.spans
+                    .get(idx + 1)
+                    .and_then(|next| next.content.strip_prefix(" (")?.strip_suffix(')'))
+                    .filter(|u| u.starts_with("https://") || u.starts_with("http://"))
+                    .map(str::to_string)
+            }
         } else {
-            s.push_str(&format!("\x1b[{}m{}\x1b[0m", codes.join(";"), span.content));
+            None
+        };
+        let body = if let Some(u) = url {
+            let u: String = u.chars().filter(|c| !c.is_control()).collect();
+            format!("\x1b]8;;{u}\x07{}\x1b]8;;\x07", span.content)
+        } else {
+            span.content.to_string()
+        };
+        if codes.is_empty() {
+            s.push_str(&body);
+        } else {
+            s.push_str(&format!("\x1b[{}m{}\x1b[0m", codes.join(";"), body));
         }
     }
     s

@@ -187,11 +187,14 @@ The live region, top to bottom (each part only when present):
 6. The `/` menu: up to 8 rows of `/name args` padded to the longest name,
    then the description (dim). The selected row uses `theme.selected()`.
 7. The status line:
-   - left: the hint if one is fresh (under 2 s), else the mode:
+   - left: the hint if one is fresh (under 2 s), else the mode (`Shift+Tab` cycles
+     Manual → Accept edits → Auto → Plan → Dangerous → Manual, with a one-time `y`
+     confirmation the first time Dangerous is reached in a session):
      - `» accept edits on (shift+tab to cycle)`;
+     - `auto mode on (shift+tab to cycle)`;
      - `‖ plan mode on (shift+tab to cycle)`;
-     - `! bypass permissions on`;
-     - `? for shortcuts` for the default mode;
+     - `! dangerous mode on (shift+tab to cycle)`;
+     - `? for shortcuts` for Manual (`default`) mode;
    - right: `{model} · {ctx}% context · ${cost:.2}`.
 
 If the lines exceed `max_height` (the terminal height minus 1), drop rows
@@ -283,7 +286,7 @@ with `{"text", "cwd"}`:
     shadow); twice the size only on a first run in a folder (no earlier
     conversation there) from 110 columns, normal size after that, so the
     input leads (without colour the letters alone; under 57 columns the
-    name in one row). "From code to impact, on any model.", the
+    name in one row). "From code to impact, with any model.", the
     input (at least as wide as the name above it), then, in the panel's
     text column, one `/resume` line for the last conversation, or on a
     first run `Try "explain this project" · /init writes KODACT.md for it`.
