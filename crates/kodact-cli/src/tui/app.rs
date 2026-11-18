@@ -2867,14 +2867,18 @@ impl App {
         let m_str = mode.as_str();
         self.status.mode = m_str.to_string();
         self.gap();
+        let t = self.theme;
         let mut spans = vec![
-            Span::styled("■ ", self.theme.mode(m_str)),
-            Span::styled(format!("{} mode", mode.label()), self.theme.mode(m_str).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" — {}", mode.definition()), self.theme.dim()),
+            Span::styled("── ", t.hairline()),
+            Span::styled("◆ ", t.mode(m_str)),
+            Span::styled(format!("{} mode", mode.label()), t.mode(m_str).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" · {}", mode.short_rule()), t.subtle()),
+            Span::styled(format!(" — {}", mode.definition()), t.dim()),
         ];
         if self.busy {
-            spans.push(Span::styled(" (active immediately)", self.theme.subtle()));
+            spans.push(Span::styled(" (active immediately)", t.subtle()));
         }
+        spans.push(Span::styled(" ──", t.hairline()));
         self.pending.push(Line::from(spans));
 
         let auto_allow = match &self.dialog {
@@ -4024,8 +4028,10 @@ mod tests {
         let stab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
         assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::AcceptEdits)]);
         let note: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(note.contains("Accept edits mode"), "{note}");
+        assert!(note.contains("── ◆ Accept edits mode"), "{note}");
+        assert!(note.contains(PermissionMode::AcceptEdits.short_rule()), "{note}");
         assert!(note.contains(PermissionMode::AcceptEdits.definition()), "{note}");
+        assert!(!note.contains("■ "), "must not collide with turn summary marker: {note}");
 
         // While the LLM is working and waiting on an Edit permission dialog, Shift+Tab
         // switches mode, notifies in chat with "(active immediately)", and auto-approves Edit.
@@ -4038,7 +4044,7 @@ mod tests {
         assert!(a.dialog.is_none(), "AcceptEdits auto-resolves pending Edit permission");
         assert!(matches!(rx.try_recv(), Ok(PermissionAnswer::Allow { .. })));
         let live_note: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(live_note.contains("Accept edits mode"), "{live_note}");
+        assert!(live_note.contains("── ◆ Accept edits mode"), "{live_note}");
         assert!(live_note.contains("active immediately"), "{live_note}");
     }
 

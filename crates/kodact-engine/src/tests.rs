@@ -3358,6 +3358,7 @@ async fn mid_turn_mode_change_notifies_model_with_definition_and_applies_to_queu
     assert!(req2.contains("Auto (auto) mid-turn"), "{req2}");
     assert!(req2.contains(PermissionMode::Auto.definition()), "{req2}");
     assert!(req2.contains("active immediately"), "{req2}");
+    assert!(req2.contains("Do not mention, analyze, or speculate about permission prompts"), "{req2}");
 }
 
 #[tokio::test]

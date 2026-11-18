@@ -72,6 +72,18 @@ impl PermissionMode {
         }
     }
 
+    /// Ultra-concise capability tag shown in compact UI chrome.
+    pub fn short_rule(&self) -> &'static str {
+        match self {
+            PermissionMode::Default => "asks edits & shell",
+            PermissionMode::AcceptEdits => "auto-edits · asks shell",
+            PermissionMode::Auto => "auto-edits & routine shell",
+            PermissionMode::Plan => "read-only",
+            PermissionMode::DontAsk => "denies unallowed",
+            PermissionMode::BypassPermissions => "no prompts",
+        }
+    }
+
     /// The Shift+Tab cycle in the TUI.
     pub fn next(&self, bypass_available: bool) -> Self {
         match self {
@@ -173,4 +185,19 @@ pub(crate) fn auto_mode_allows(command: &str) -> bool {
                     .iter()
                     .any(|pre| p == pre.trim() || p.starts_with(&format!("{} ", pre.trim())) || p.starts_with(pre))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PermissionMode;
+
+    #[test]
+    fn short_rules_distinguish_all_modes() {
+        assert_eq!(PermissionMode::Default.short_rule(), "asks edits & shell");
+        assert_eq!(PermissionMode::AcceptEdits.short_rule(), "auto-edits · asks shell");
+        assert_eq!(PermissionMode::Auto.short_rule(), "auto-edits & routine shell");
+        assert_eq!(PermissionMode::Plan.short_rule(), "read-only");
+        assert_eq!(PermissionMode::DontAsk.short_rule(), "denies unallowed");
+        assert_eq!(PermissionMode::BypassPermissions.short_rule(), "no prompts");
+    }
 }

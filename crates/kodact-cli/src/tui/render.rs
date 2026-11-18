@@ -2006,8 +2006,18 @@ fn session_row(app: &App, room: usize) -> Vec<Span<'static>> {
             Span::styled(model.clone(), Style::default())
         };
         left.extend([sep(), model_span]);
+        let endpoint_shown =
+            endpoint.is_none() || endpoint.as_ref().is_some_and(|e| 5 + text_width(&model) + w_of(e) <= free);
         if let Some(e) = endpoint.filter(|e| 5 + text_width(&model) + w_of(e) <= free) {
             left.extend(e);
+        }
+        if endpoint_shown && !app.danger_armed {
+            let parsed = kodact_permissions::PermissionMode::parse(&s.mode).unwrap_or_default();
+            let rule_spans = vec![sep(), Span::styled(parsed.short_rule(), t.subtle())];
+            let used = w_of(&left) + w_of(&rule_spans) + w_of(&right) + if right.is_empty() { 0 } else { 4 };
+            if used <= room {
+                left.extend(rule_spans);
+            }
         }
     }
     let gap = room.saturating_sub(w_of(&left) + w_of(&right));
@@ -2540,6 +2550,7 @@ mod tests {
         );
         let session = &rows[n - 3];
         assert!(session.starts_with("│ Manual  ·  quick-thinking  ·  gpt.example.net"), "{session}");
+        assert!(session.contains("asks edits & shell"), "wide box shows concise mode rule: {session}");
         assert!(session.ends_with("⡀ ~96% left  ·  25.3k tokens used │"), "the room left on the right: {session}");
         assert_eq!(buf[(0, (n - 6) as u16)].fg, a.theme.accent().fg.unwrap());
         assert_eq!(buf[(2, (n - 3) as u16)].fg, a.theme.mode("default").fg.unwrap(), "the mode in its colour");

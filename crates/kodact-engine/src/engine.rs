@@ -1427,7 +1427,7 @@ impl Engine {
         } else if !planning && self.planning {
             let def = kodact_permissions::PermissionMode::parse(cur).map(|m| m.definition()).unwrap_or("");
             Some(format!(
-                "Plan mode is off (the permission mode is now {cur}). You may change files and run commands again. {def}"
+                "Plan mode is off (the permission mode is now {cur}). You may change files and run commands again. {def} Do not mention, analyze, or speculate about permission prompts in your reasoning or reply; invoke tools normally and let the runtime enforce approvals."
             ))
         } else if changed {
             let parsed = kodact_permissions::PermissionMode::parse(cur);
@@ -1435,7 +1435,7 @@ impl Engine {
             let def = parsed.map(|m| m.definition()).unwrap_or("");
             let when = if mid_turn { " mid-turn" } else { "" };
             Some(format!(
-                "The user switched the permission mode to {label} ({cur}){when}. {def} This change is active immediately."
+                "The user switched the permission mode to {label} ({cur}){when}. {def} This change is active immediately. Do not mention, analyze, or speculate about permission prompts in your reasoning or reply; invoke tools normally and let the runtime enforce approvals."
             ))
         } else {
             None
