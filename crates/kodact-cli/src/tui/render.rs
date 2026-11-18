@@ -581,7 +581,7 @@ fn hints(app: &App, room: usize) -> Vec<Span<'static>> {
 }
 
 /// The `@` menu: matching paths.
-fn file_menu(app: &App, w: usize) -> Vec<Line<'static>> {
+fn file_menu(app: &App, left: usize, w: usize, lead: &str) -> Vec<Line<'static>> {
     let t = app.theme;
     let items = app.file_menu();
     if items.is_empty() {
@@ -594,16 +594,21 @@ fn file_menu(app: &App, w: usize) -> Vec<Line<'static>> {
         .enumerate()
         .map(|(i, f)| {
             let st = if first + i == sel { t.selected() } else { Style::default() };
-            Line::from(Span::styled(fit(&format!("  {f}"), w), st))
+            let mut spans = vec![];
+            if left > 0 {
+                spans.push(Span::raw(" ".repeat(left)));
+            }
+            spans.push(Span::styled(fit(&format!("{lead}{f}"), w), st));
+            Line::from(spans)
         })
         .collect()
 }
 
-fn menu(app: &App, w: usize) -> Vec<Line<'static>> {
+fn menu(app: &App, left: usize, w: usize, lead: &str) -> Vec<Line<'static>> {
     let t = app.theme;
     let items = app.menu();
     if items.is_empty() {
-        return file_menu(app, w);
+        return file_menu(app, left, w, lead);
     }
     let sel = app.menu_selected.min(items.len() - 1);
     let first = sel.saturating_sub(MENU_ROWS - 1);
@@ -621,11 +626,16 @@ fn menu(app: &App, w: usize) -> Vec<Line<'static>> {
         .enumerate()
         .map(|(i, c)| {
             let l = fit(&label(c), pad);
-            let l = format!("  {l}{}", " ".repeat(pad.saturating_sub(text_width(&l))));
+            let l = format!("{lead}{l}{}", " ".repeat(pad.saturating_sub(text_width(&l))));
             let desc = fit(&c.description, w.saturating_sub(text_width(&l) + 2));
             let selected = first + i == sel;
             let st = if selected { t.selected() } else { Style::default() };
-            Line::from(vec![Span::styled(l, st), Span::raw("  "), Span::styled(desc, t.dim())])
+            let mut spans = vec![];
+            if left > 0 {
+                spans.push(Span::raw(" ".repeat(left)));
+            }
+            spans.extend([Span::styled(l, st), Span::raw("  "), Span::styled(desc, t.dim())]);
+            Line::from(spans)
         })
         .collect()
 }
@@ -1292,16 +1302,25 @@ pub fn full_view_at(
                 l
             })
             .collect();
+        let popup = usize::from(app.search.is_some())
+            + app.menu().len().min(MENU_ROWS)
+            + if app.menu().is_empty() { app.file_menu().len().min(MENU_ROWS) } else { 0 };
+        let base_input_len = input.len().saturating_sub(popup);
         let mut out: Vec<Line<'static>> = page.header.clone();
         let box_at;
         if page.dock {
             // The page from the top, the input at the bottom.
             out.extend(page.above.iter().cloned());
             if !notes.is_empty() {
-                out.push(Line::default());
-                out.extend(notes);
+                if out.len() + 1 + notes.len() > room.saturating_sub(base_input_len) && !rows.is_empty() {
+                    break 'front;
+                }
+                if out.len() + 1 + notes.len() <= room.saturating_sub(input.len()) {
+                    out.push(Line::default());
+                    out.extend(notes);
+                }
             }
-            if out.len() > room.saturating_sub(input.len()) && !rows.is_empty() {
+            if out.len() > room.saturating_sub(base_input_len) && !rows.is_empty() {
                 break 'front;
             }
             out.truncate(room.saturating_sub(input.len()));
@@ -1311,25 +1330,36 @@ pub fn full_view_at(
         } else {
             let mut mid: Vec<Line<'static>> = vec![];
             // The style's art goes first when the screen is too short for it all.
-            let fits = page.header.len() + page.above.len() + input.len() + page.below.len() <= room;
+            let fits = page.header.len() + page.above.len() + base_input_len + page.below.len() <= room
+                && page.header.len() + page.above.len() + input.len() <= room;
             if fits {
                 mid.extend(page.above.iter().cloned());
             }
             let at = mid.len();
             mid.extend(input);
+            let mut base_mid_len = mid.len().saturating_sub(popup);
+            if page.header.len() + base_mid_len + page.below.len() <= room {
+                base_mid_len += page.below.len();
+            }
             if mid.len() + page.below.len() + page.header.len() <= room {
                 mid.extend(page.below.iter().cloned());
             }
             if !notes.is_empty() {
-                if page.header.len() + mid.len() + 1 + notes.len() > room {
+                if page.header.len() + base_mid_len + 1 + notes.len() > room {
                     break 'front;
                 }
-                mid.push(Line::default());
-                mid.extend(notes);
+                base_mid_len += 1 + notes.len();
+                if page.header.len() + mid.len() + 1 + notes.len() <= room {
+                    mid.push(Line::default());
+                    mid.extend(notes);
+                }
             }
+            let base_free = room.saturating_sub(page.header.len() + base_mid_len);
             let free = room.saturating_sub(page.header.len() + mid.len());
             // Centred down the screen, the empty rows split evenly above and below; or from the top.
-            let top = if page.top { free.min(1) } else { free / 2 };
+            // A popup menu (`/`, `@`, Ctrl+R) opens into the space below the input box without
+            // jumping the wordmark and box upward unless the screen is too short to hold the menu.
+            let top = if page.top { free.min(1) } else { (base_free / 2).min(free) };
             out.extend(vec![Line::default(); top]);
             box_at = out.len() + at;
             out.extend(mid);
@@ -1645,22 +1675,24 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
     } else {
         vec![]
     };
+    let lead = if front && open { "" } else { "  " };
     // Ctrl+R: what is being searched for, above the input.
     let search: Vec<Line<'static>> = app
         .search
         .as_ref()
         .map(|s| {
             let miss = if s.hit.is_none() && !s.query.is_empty() { " (no match)" } else { "" };
-            let pad = 0;
-            Line::from(vec![
-                Span::raw(" ".repeat(pad)),
-                Span::styled(fit(&format!("  search history: {}{miss}", s.query), w.saturating_sub(pad)), t.accent()),
-            ])
+            let mut spans = vec![];
+            if left > 0 {
+                spans.push(Span::raw(" ".repeat(left)));
+            }
+            spans.push(Span::styled(fit(&format!("{lead}search history: {}{miss}", s.query), bw), t.accent()));
+            Line::from(spans)
         })
         .into_iter()
         .collect();
     // 6. The `/` or `@` menu, 7. the status line.
-    let menu = menu(app, w);
+    let menu = menu(app, left, bw, lead);
     let status = status(app, w, now);
 
     // The spinner, running steps and queued messages keep a blank row above the input,
@@ -2851,6 +2883,39 @@ mod tests {
         let bare_clear = brows.iter().find(|r| r.contains("› /clear")).unwrap();
         assert_eq!(col(bare_clear, '›'), col(bare_prompt, '›'), "aligned in open style too: {brows:#?}");
         a.look = Look::Frame;
+        // Typing `/`, `@`, or Ctrl+R on the front page lines up with the box's prompt,
+        // fits within the box's right edge, and does not jump the wordmark upward.
+        a.on_event(UiEvent::Files(vec!["src/main.rs".into()]));
+        let base_mark =
+            draw(&full_view(&a, 100, 36, &note_rows, &page, 0).0, 100).0.iter().position(|r| r == "WORDMARK").unwrap();
+        typed(&mut a, "/");
+        let (vm, _) = full_view(&a, 100, 36, &note_rows, &page, 0);
+        let (mrows, _) = draw(&vm, 100);
+        assert_eq!(
+            mrows.iter().position(|r| r == "WORDMARK"),
+            Some(base_mark),
+            "opening `/` does not jump the wordmark upward: {mrows:#?}"
+        );
+        let prompt_row = mrows.iter().find(|r| r.contains("❯ /")).unwrap();
+        let menu_row = mrows.iter().find(|r| r.contains("/clear")).unwrap();
+        assert_eq!(col(menu_row, '/'), col(prompt_row, '❯'), "`/` menu aligns with `❯`: {mrows:#?}");
+        assert!(text::width(menu_row) <= page.box_left + page.box_w, "`/` menu stays within the box: {menu_row:?}");
+        // Even on a shorter window with notes, opening `/` keeps the front page intact.
+        let (vs, _) = full_view(&a, 100, 26, &note_rows, &page, 0);
+        let (srows, _) = draw(&vs, 100);
+        assert!(srows.iter().any(|r| r == "WORDMARK"), "front page stays intact when `/` opens: {srows:#?}");
+        a.editor.set("@");
+        let (vf, _) = full_view(&a, 100, 36, &[], &page, 0);
+        let (frows, _) = draw(&vf, 100);
+        let file_row = frows.iter().find(|r| r.contains("src/main.rs")).unwrap();
+        assert_eq!(col(file_row, 's'), col(prompt_row, '❯'), "`@` menu aligns with `❯`: {frows:#?}");
+        a.editor.clear();
+        a.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let (vr, _) = full_view(&a, 100, 36, &[], &page, 0);
+        let (rrows, _) = draw(&vr, 100);
+        let search_row = rrows.iter().find(|r| r.contains("search history:")).unwrap();
+        assert_eq!(col(search_row, 's'), col(prompt_row, '❯'), "Ctrl+R aligns with `❯`: {rrows:#?}");
+        a.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         // After the first message: the transcript from the top, the input at the bottom.
         a.submit("hello".into());
         let transcript: Vec<Line<'static>> = (1..=40).map(|i| Line::from(format!("line {i}"))).collect();
