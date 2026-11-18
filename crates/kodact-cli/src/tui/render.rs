@@ -1384,7 +1384,7 @@ pub fn full_view_at(
     let mut out: Vec<Line<'static>> = rows[end.saturating_sub(avail)..end].to_vec();
     if scroll > 0 && !out.is_empty() {
         let t = app.theme;
-        let note = format!("↓ {scroll} more {} · PgDn", if scroll == 1 { "line" } else { "lines" });
+        let note = format!("↓ {scroll} more {} · wheel / PgDn", if scroll == 1 { "line" } else { "lines" });
         let pad = (width as usize).saturating_sub(text_width(&note)) / 2;
         let last = out.len() - 1;
         out[last] = Line::from(vec![Span::raw(" ".repeat(pad)), Span::styled(note, t.subtle())]);
@@ -2931,7 +2931,7 @@ mod tests {
         let (rows, _) = draw(&v, 100);
         // The last row turns into the note of what is below.
         assert!(rows.iter().any(|r| r == "line 29") && !rows.iter().any(|r| r == "line 31"), "{rows:#?}");
-        assert!(rows.iter().any(|r| r.trim() == "↓ 10 more lines · PgDn"), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.trim() == "↓ 10 more lines · wheel / PgDn"), "{rows:#?}");
         // A short transcript sits just above the live region, not at the top with a gap.
         let (v, _) = full_view(&a, 100, 30, &transcript[..2], &page, 0);
         let (rows, _) = draw(&v, 100);

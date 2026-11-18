@@ -1163,6 +1163,19 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                     }
                     app.dirty = true;
                 }
+                Some(Ok(Event::Key(k))) if k.kind != KeyEventKind::Release
+                    && k.code == KeyCode::End
+                    && k.modifiers.is_empty()
+                    && app.editor.is_empty()
+                    && app.dialog.is_none()
+                    && !app.danger_armed
+                    && app.search.is_none()
+                    && matches!(screen, Display::Full(ref f) if f.scroll > 0) => {
+                    if let Display::Full(f) = &mut screen {
+                        f.scroll = 0;
+                    }
+                    app.dirty = true;
+                }
                 Some(Ok(Event::Key(k)))
                     if k.kind != KeyEventKind::Release
                         && k.modifiers.is_empty()
