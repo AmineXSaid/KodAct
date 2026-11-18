@@ -3012,7 +3012,9 @@ impl App {
                 }
                 return vec![];
             }
-            KeyCode::Enter if key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
+            KeyCode::Enter | KeyCode::Char('\n') | KeyCode::Char('\r')
+                if key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+            {
                 self.editor.insert("\n")
             }
             KeyCode::Char('j') if ctrl => self.editor.insert("\n"),

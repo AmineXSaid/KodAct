@@ -769,6 +769,7 @@ fn osc52(text: &str) -> String {
 /// Put the terminal back as it was: keyboard flags, paste, raw mode, cursor.
 fn restore() {
     let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x1b[>4;0m");
     if ENHANCED.swap(false, std::sync::atomic::Ordering::SeqCst) {
         let _ = crossterm::execute!(out, PopKeyboardEnhancementFlags);
     }
@@ -804,6 +805,9 @@ fn setup(full: bool) -> std::io::Result<Guard> {
         out.flush()?;
         FULL.store(true, std::sync::atomic::Ordering::SeqCst);
     }
+    // Enable xterm modifyOtherKeys so Shift+Enter is reported on terminals without Kitty enhancement.
+    let _ = out.write_all(b"\x1b[>4;1m");
+    let _ = out.flush();
     if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
         // Shift+Enter becomes a key of its own.
         crossterm::execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES))?;
