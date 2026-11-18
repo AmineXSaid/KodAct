@@ -121,6 +121,62 @@ pub fn answer_text(d: &Driver, n: usize) -> Option<String> {
         .nth(n.checked_sub(1)?)
 }
 
+/// Extract `(language, body)` pairs for every fenced code block in `text`.
+fn extract_fenced_blocks(text: &str) -> Vec<(String, String)> {
+    let mut blocks = Vec::new();
+    let mut open: Option<(String, String, Vec<String>)> = None;
+    for raw in text.lines() {
+        let trimmed = raw.trim_start();
+        if let Some((marker, lang, mut lines)) = open.take() {
+            let ch = marker.chars().next().unwrap();
+            if trimmed.starts_with(marker.as_str()) && trimmed.trim_start_matches(ch).trim().is_empty() {
+                blocks.push((lang, lines.join("\n")));
+            } else {
+                lines.push(raw.to_string());
+                open = Some((marker, lang, lines));
+            }
+            continue;
+        }
+        for marker in ["```", "~~~"] {
+            if let Some(rest) = trimmed.strip_prefix(marker) {
+                let ch = marker.chars().next().unwrap();
+                let run = marker.len() + rest.chars().take_while(|c| *c == ch).count();
+                let lang = rest.trim_start_matches(ch).split_whitespace().next().unwrap_or("").to_lowercase();
+                open = Some((ch.to_string().repeat(run), lang, Vec::new()));
+                break;
+            }
+        }
+    }
+    if let Some((_, lang, lines)) = open {
+        blocks.push((lang, lines.join("\n")));
+    }
+    blocks
+}
+
+/// Find a fenced code block from the latest assistant message that has code blocks.
+/// `n = None` selects the last block; `Some(k)` selects 1-based block `#k`.
+pub fn code_block_text(d: &Driver, n: Option<usize>) -> Option<(String, String, usize)> {
+    for m in d.engine.state.messages.iter().rev() {
+        if m.role != kodact_types::Role::Assistant {
+            continue;
+        }
+        let text = m.content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join("\n");
+        let blocks = extract_fenced_blocks(&text);
+        if blocks.is_empty() {
+            continue;
+        }
+        let total = blocks.len();
+        let idx = match n {
+            None => total - 1,
+            Some(k) if k >= 1 && k <= total => k - 1,
+            Some(_) => return None,
+        };
+        let (lang, code) = blocks.into_iter().nth(idx)?;
+        return Some((lang, code, idx + 1));
+    }
+    None
+}
+
 /// Commands the UI answers itself, since they need the terminal: `/copy`,
 /// `/keybindings`, `/terminal-setup`. `None` for everything else.
 fn ui_command(d: &Driver, text: &str) -> Option<Vec<UiEvent>> {
@@ -130,9 +186,38 @@ fn ui_command(d: &Driver, text: &str) -> Option<Vec<UiEvent>> {
         Builtin::Keybindings => vec![reply(super::app::keys_text(&super::keys::Keymap::load().0), false)],
         Builtin::TerminalSetup => vec![reply(super::app::terminal_setup_text(super::keyboard_protocol()), false)],
         Builtin::Copy => {
-            let n = if args.is_empty() { Some(1) } else { args.parse::<usize>().ok().filter(|n| *n > 0) };
+            let trimmed = args.trim();
+            if let Some(rest) = trimmed.strip_prefix("code") {
+                let rest = rest.trim();
+                let n = if rest.is_empty() {
+                    None
+                } else {
+                    match rest.parse::<usize>().ok().filter(|n| *n > 0) {
+                        Some(k) => Some(k),
+                        None => {
+                            return Some(vec![reply(
+                                "Usage: /copy code [n]  (#n in the latest code answer)".into(),
+                                true,
+                            )]);
+                        }
+                    }
+                };
+                return Some(match code_block_text(d, n) {
+                    Some((lang, code, idx)) => {
+                        let tag = if lang.is_empty() { format!("#{idx}") } else { format!("{lang} #{idx}") };
+                        let note = format!(
+                            "Copied code block {tag} ({} characters) to the clipboard. Terminals without clipboard \
+                             access (OSC 52) ignore it.",
+                            code.chars().count()
+                        );
+                        vec![UiEvent::Copy(code), reply(note, false)]
+                    }
+                    None => vec![reply("No matching fenced code block found to copy.".into(), true)],
+                });
+            }
+            let n = if trimmed.is_empty() { Some(1) } else { trimmed.parse::<usize>().ok().filter(|n| *n > 0) };
             let Some(n) = n else {
-                return Some(vec![reply("Usage: /copy [n]  (1 is the latest answer)".into(), true)]);
+                return Some(vec![reply("Usage: /copy [n] | /copy code [n]".into(), true)]);
             };
             match answer_text(d, n) {
                 Some(t) => {
@@ -989,5 +1074,15 @@ mod tests {
         );
         let blocked = TurnResult { prompt_blocked: Some("no secrets".into()), ..model };
         assert!(matches!(reply_for(&blocked), Some(UiEvent::Reply { is_error: true, .. })));
+    }
+
+    #[test]
+    fn copy_code_extracts_fenced_blocks() {
+        let md = "Here is Rust:\n```rust\nfn main() {}\n```\nAnd bash:\n~~~sh\necho hi\n~~~\n";
+        let blocks = extract_fenced_blocks(md);
+        assert_eq!(
+            blocks,
+            vec![("rust".to_string(), "fn main() {}".to_string()), ("sh".to_string(), "echo hi".to_string()),]
+        );
     }
 }

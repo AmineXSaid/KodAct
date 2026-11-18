@@ -257,6 +257,7 @@ impl Theme {
 pub struct Markdown {
     /// The open code fence: its marker (```` ``` ```` or `~~~`) and language.
     fence: Option<(String, String)>,
+    fence_index: usize,
     table: Vec<String>,
 }
 
@@ -553,7 +554,9 @@ impl Markdown {
                 let run = marker.len() + rest.chars().take_while(|c| *c == ch).count();
                 let lang = rest.trim_start_matches(ch).split_whitespace().next().unwrap_or("").to_lowercase();
                 self.fence = Some((ch.to_string().repeat(run), lang.clone()));
-                let label = if lang.is_empty() { String::new() } else { format!(" {lang}") };
+                self.fence_index += 1;
+                let n = self.fence_index;
+                let label = if lang.is_empty() { format!(" #{n}") } else { format!(" {lang} #{n}") };
                 return Some(Line::from(vec![gutter("╭─"), Span::styled(label, t.subtle())]));
             }
         }
@@ -1275,7 +1278,7 @@ mod tests {
         let mono = Theme { color: false, ..T };
         let l = Markdown::default().line("Run `cargo test` and **check** it", &mono).unwrap();
         assert_eq!(plain(&l), "Run `cargo test` and check it", "without colour, code keeps its backticks");
-        assert_eq!(plain(&md.line("```rust", &T).unwrap()), "╭─ rust", "a fence opens with its language");
+        assert_eq!(plain(&md.line("```rust", &T).unwrap()), "╭─ rust #1", "a fence opens with its language");
         assert_eq!(plain(&md.line("# not a heading", &T).unwrap()), "│ # not a heading");
         assert_eq!(plain(&md.line("```", &T).unwrap()), "╰─");
         assert_eq!(plain(&md.line("# heading", &T).unwrap()), "heading");
@@ -1332,7 +1335,7 @@ mod tests {
         assert_eq!(one("* * *"), "─".repeat(40));
         // Code: a gutter, the language, highlighting, and `~~~` fences too.
         let mut md = Markdown::default();
-        assert_eq!(plain(&md.line("~~~python", &T).unwrap()), "╭─ python");
+        assert_eq!(plain(&md.line("~~~python", &T).unwrap()), "╭─ python #1");
         let l = md.line("def f(x): return \"hi\"  # note", &T).unwrap();
         assert_eq!(plain(&l), "│ def f(x): return \"hi\"  # note");
         let style_of = |w: &str| l.spans.iter().find(|s| s.content.contains(w)).map(|s| s.style).unwrap();

@@ -420,6 +420,7 @@ pub const KEYS: &[(&str, &str, &[&str])] = &[
     ("Alt+B / Alt+F, Ctrl+Left / Ctrl+Right", "Word left / right", &["wordLeft", "wordRight"]),
     ("Ctrl+L", "Redraw the screen", &["redraw"]),
     ("Ctrl+B", "Show or hide the sidebar (full screen, 140+ columns)", &["toggleSidebar"]),
+    ("Alt+C", "Copy the latest fenced code block (/copy code)", &[]),
 ];
 
 /// The shortcuts in effect, one per line: the defaults, or with `keybindings.json`
@@ -2919,6 +2920,7 @@ impl App {
                 self.editor.insert("\n")
             }
             KeyCode::Char('j') if ctrl => self.editor.insert("\n"),
+            KeyCode::Char('c') if alt && !ctrl => return vec![Action::Send("/copy code".into())],
             KeyCode::Enter => {
                 if menu_len > 0 {
                     let c = self.menu()[self.menu_selected.min(menu_len - 1)].clone();
@@ -3561,7 +3563,7 @@ mod tests {
         }));
         assert_eq!(
             texts(&a.take_pending())[2..],
-            ["  • step one", "  ╭─ sh", "  │ ls"],
+            ["  • step one", "  ╭─ sh #1", "  │ ls"],
             "lists get bullets; code gets a gutter"
         );
         // The complete message adds its tool call, not its text again.
