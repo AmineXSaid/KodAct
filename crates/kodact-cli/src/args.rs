@@ -309,8 +309,25 @@ pub enum ConfigAction {
     },
     /// Print one setting: a dotted key (permissions.defaultMode) or a JSON pointer (/permissions/defaultMode)
     Get { key: String },
+    /// Set a setting in user, project, or local scope
+    Set {
+        /// Dotted key (permissions.defaultMode) or JSON pointer (/permissions/defaultMode)
+        key: String,
+        /// Value (JSON literal such as true, 42, ["Read"], or a plain string)
+        value: String,
+        /// Which settings file to write: user, project, or local
+        #[arg(long, value_enum, default_value_t = ConfigScope::User)]
+        scope: ConfigScope,
+    },
     /// Print the configuration, state and cache directories and the settings files read
     Paths,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum ConfigScope {
+    User,
+    Project,
+    Local,
 }
 
 /// `--max-time`: whole seconds, or a number with `s`, `m` or `h`.

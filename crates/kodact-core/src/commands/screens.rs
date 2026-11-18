@@ -326,6 +326,13 @@ pub fn diff_rows(unified: &str, untracked: &[String], by_prompt: &[String]) -> V
             };
             rows.push(Row::text(l.to_string(), tone));
         }
+        if lines.first().is_some_and(|l| l.starts_with("diff --git")) {
+            let quoted = format!("'{}'", name.replace('\'', "'\\''"));
+            rows.push(Row::text(format!("  ↩ Revert {name}"), Tone::Dim).with(RowAction::Confirm {
+                question: format!("Revert all unstaged changes to {name}?"),
+                command: format!("!git checkout -- {quoted}"),
+            }));
+        }
     }
     rows
 }

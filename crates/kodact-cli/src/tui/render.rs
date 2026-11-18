@@ -561,10 +561,53 @@ fn input(app: &App, w: usize) -> (Vec<Line<'static>>, (u16, u16)) {
                 }
             }
             let prefix = if rows.is_empty() { prompt() } else { Span::raw("  ") };
-            rows.push(Line::from(vec![prefix, Span::raw(chars[*a..*b].iter().collect::<String>())]));
+            let text: String = chars[*a..*b].iter().collect();
+            let mut spans = vec![prefix];
+            if let Some(q) =
+                app.search.as_ref().filter(|s| s.hit.is_some() && !s.query.is_empty()).map(|s| s.query.as_str())
+            {
+                spans.extend(highlight_match(
+                    &text,
+                    q,
+                    t.accent().add_modifier(ratatui::style::Modifier::BOLD | ratatui::style::Modifier::UNDERLINED),
+                ));
+            } else {
+                spans.push(Span::raw(text));
+            }
+            rows.push(Line::from(spans));
         }
     }
     (rows, cursor)
+}
+
+fn highlight_match(text: &str, query: &str, hi: Style) -> Vec<Span<'static>> {
+    let q_lower: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+    if q_lower.is_empty() {
+        return vec![Span::raw(text.to_string())];
+    }
+    let t_chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut plain = String::new();
+    while i < t_chars.len() {
+        if i + q_lower.len() <= t_chars.len()
+            && t_chars[i..i + q_lower.len()].iter().flat_map(|c| c.to_lowercase()).eq(q_lower.iter().copied())
+        {
+            if !plain.is_empty() {
+                out.push(Span::raw(std::mem::take(&mut plain)));
+            }
+            let matched: String = t_chars[i..i + q_lower.len()].iter().collect();
+            out.push(Span::styled(matched, hi));
+            i += q_lower.len();
+        } else {
+            plain.push(t_chars[i]);
+            i += 1;
+        }
+    }
+    if !plain.is_empty() {
+        out.push(Span::raw(plain));
+    }
+    out
 }
 
 /// The keys that help now, for the frame style's status line: while the model
@@ -2616,7 +2659,7 @@ mod tests {
         assert_eq!(a.viewer().unwrap().1, 1, "back on the file list");
         a.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         let (rows, _) = draw(&live_view(&a, 40, 15), 40);
-        assert_eq!(rows[page + 1], "│ ❯ +New title                         │");
+        assert_eq!(rows[page + 1], "│ ❯   ↩ Revert README.md               │");
         assert!(rows[page + 3].contains(&format!("{}-{n} of {n}", n - page + 1)), "{}", rows[page + 3]);
         a.on_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
         assert_eq!(a.viewer().unwrap().1, n - 1 - page);

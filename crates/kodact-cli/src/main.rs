@@ -35,7 +35,7 @@ use kodact_types::MessageContent;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use args::{Cli, Command, ConfigAction, InputFormat, Opts, OutputFormat, PermissionPrompts};
+use args::{Cli, Command, ConfigAction, ConfigScope, InputFormat, Opts, OutputFormat, PermissionPrompts};
 use exit::Fail;
 use host::{ControlContext, HostPrompter, Input};
 use output::{result_message, Out, QuietSink, StreamSink};
@@ -658,6 +658,24 @@ fn run_config(action: Option<ConfigAction>) -> Result<i32, Fail> {
                     return Ok(exit::FAILED);
                 }
             }
+        }
+        Some(ConfigAction::Set { key, value, scope }) => {
+            let parts: Vec<&str> = if let Some(rest) = key.strip_prefix('/') {
+                rest.split('/').filter(|s| !s.is_empty()).collect()
+            } else {
+                key.split('.').filter(|s| !s.is_empty()).collect()
+            };
+            if parts.is_empty() {
+                return Err(Fail::config(format!("invalid setting key: {key}")));
+            }
+            let path = match scope {
+                ConfigScope::User => kodact_config::kodact_home().join("settings.json"),
+                ConfigScope::Project => kodact_config::project_dir(&cwd).join("settings.json"),
+                ConfigScope::Local => kodact_config::project_dir(&cwd).join("settings.local.json"),
+            };
+            let val: Value = serde_json::from_str(&value).unwrap_or_else(|_| Value::String(value));
+            kodact_config::write_setting(&path, &parts, val).map_err(|e| Fail::config(e.to_string()))?;
+            outln!("Set {key} in {}", path.display());
         }
         Some(ConfigAction::Paths) => {
             outln!("config  {}", kodact_config::config_dir().display());
