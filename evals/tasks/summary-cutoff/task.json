@@ -1,0 +1,7 @@
+{
+  "instruction": "Count the lines of data.txt and write the number, and nothing else, to done.txt.",
+  "check": "test \"$(cat done.txt)\" = 1000",
+  "pillar": "context",
+  "tags": ["compaction", "reasoning-model"],
+  "timeout_secs": 300
+}

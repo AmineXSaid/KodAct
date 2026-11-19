@@ -105,3 +105,34 @@ Measured on 2026-11-19. A is 0f69989, before the fix; B is the fix.
 | --- | --- | --- |
 | Pass rate | 0/3 | 3/3 |
 | kodact started | 0/3: `error: unexpected argument '- ' found` (exit 2) | 3/3 |
+
+## `openai_summary_cutoff.py`: the `summary-cutoff` task
+
+A model that does what quick-thinking did on 2026-11-17 (a 100k window).
+Asked to summarize the whole conversation, it reasons until the output limit
+(`finish_reason: length`) and writes no summary, every time; given its own
+analysis back instead, it writes the summary. The server refuses one work
+request as overflowing (the vLLM/LiteLLM wording), so KodAct compacts.
+
+```bash
+python3 evals/scripted/openai_summary_cutoff.py 8798 &
+export KODACT_OPENAI_BASE_URL=http://127.0.0.1:8798/v1 KODACT_OPENAI_API_KEY=sk-test0123456789
+kodact-eval run --only summary-cutoff --kodact <kodact> --label <label> --repeat 3 -- --model m --permission-mode bypassPermissions
+```
+
+Measured on 2026-11-19. A is abc180d, before the change; B is the change that
+gives the second summary attempt the first one's analysis in place of the
+conversation.
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate | 3/3 | 3/3 |
+| Compactions done / failed / KodAct's note | 1 / 2 / 1 | 1 / 1 / 0 |
+| Summary written by the model | 0/3 | 3/3 |
+
+Both pass, because the scripted model finishes the task either way. What
+changes is what the run keeps after compacting: a summary of the model's own,
+instead of KodAct's note, and one attempt that reasons to the output limit
+instead of two. On the 2026-11-17 run each such attempt was 20k to 32k tokens
+of reasoning, minutes on that endpoint. A real-model comparison still needs
+an API key.

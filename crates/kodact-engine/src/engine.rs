@@ -938,6 +938,9 @@ pub struct Engine {
     lsp: Option<Arc<crate::lsp::Manager>>,
     /// This turn's raised output cap, after a `max_tokens` stop.
     output_cap: Option<u32>,
+    /// The reasoning of the last summary attempt that reached the output cap before it wrote a
+    /// summary: the next attempt summarizes from it ([`Self::summary_notes`]).
+    cut_summary: Option<String>,
     /// The most reply a request asks for after a refusal for length whose prompt fit the window
     /// (`shrink_reply`); cleared when the turn starts and when a compaction makes room.
     reply_shrink: Option<u32>,
@@ -1095,6 +1098,7 @@ impl Engine {
             stale_end_told: false,
             size_told: HashMap::new(),
             output_cap: None,
+            cut_summary: None,
             reply_shrink: None,
             held: None,
             held_failures: 0,
@@ -2081,7 +2085,7 @@ impl Engine {
         let cancel = self.new_turn_token();
         let model = self.handle.model();
         let mut turn = TurnAcc::default();
-        self.compact_inner(instructions, "manual", false, &model, &cancel, &mut turn).await
+        self.compact_inner(instructions, None, "manual", false, &model, &cancel, &mut turn).await
     }
 
     /// Compact to make room: the conversation is nearly full, or (`overflowed`) no longer fits.
@@ -2100,19 +2104,32 @@ impl Engine {
         turn: &mut TurnAcc,
     ) -> Result<CompactInfo, String> {
         let again = |r: &Result<CompactInfo, String>| matches!(r, Err(e) if e != "interrupted" && (overflowed || e == EMPTY_SUMMARY));
-        let mut compacted = self.compact_inner(None, "auto", continue_work, model, cancel, turn).await;
+        self.cut_summary = None;
+        let mut compacted = self.compact_inner(None, None, "auto", continue_work, model, cancel, turn).await;
+        // Cut off at the output cap while still analyzing: the conversation again would only be
+        // analyzed again, so the second try summarizes from that analysis instead.
+        let analysis = self.cut_summary.take();
         if again(&compacted) {
-            compacted = self.compact_inner(Some(SUMMARY_RETRY), "auto", continue_work, model, cancel, turn).await;
+            let notes = analysis.as_deref().map(|a| self.summary_notes(a, model));
+            compacted = self
+                .compact_inner(Some(SUMMARY_RETRY), notes.as_deref(), "auto", continue_work, model, cancel, turn)
+                .await;
         }
+        let analysis = analysis.or_else(|| self.cut_summary.take());
         if again(&compacted) {
-            compacted = Ok(self.compact_without_model("auto", continue_work, model));
+            compacted = Ok(self.compact_without_model("auto", continue_work, model, analysis.as_deref()));
         }
         compacted
     }
 
+    /// Summarize the conversation and put the summary in its place. With `notes`, the request
+    /// carries those notes instead of the conversation (`summary_notes`: the model's own analysis
+    /// from an attempt the output cap cut off).
+    #[allow(clippy::too_many_arguments)]
     async fn compact_inner(
         &mut self,
         instructions: Option<&str>,
+        notes: Option<&str>,
         trigger: &str,
         continue_work: bool,
         model: &str,
@@ -2143,6 +2160,9 @@ impl Engine {
             extra.push_str(c);
         }
         let mut req = self.build_request(model);
+        if let Some(n) = notes {
+            req.messages = vec![Message::user(vec![ContentBlock::text(n)])];
+        }
         let ask = ContentBlock::text(kodact_compact::summary_instruction(
             Some(extra.as_str()).filter(|e| !e.trim().is_empty()),
         ));
@@ -2186,9 +2206,45 @@ impl Engine {
         let summary = kodact_compact::extract_summary(&msg.to_message().text());
         if summary.is_empty() {
             self.record_compact_failure(trigger, "empty_summary", Some(&msg));
+            // All the output went to analysis, and the cap stopped it: keep that analysis.
+            if msg.stop_reason == Some(kodact_types::StopReason::MaxTokens) {
+                let reasoning: String = msg
+                    .to_message()
+                    .content
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Thinking { thinking, .. } => Some(thinking.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                if !reasoning.trim().is_empty() {
+                    self.cut_summary = Some(reasoning);
+                }
+            }
             return Err(EMPTY_SUMMARY.into());
         }
         Ok(self.install_summary(trigger, summary, continue_work, model))
+    }
+
+    /// The second summary attempt's conversation, after the first reached the output cap still
+    /// analyzing: not the conversation again, which was only analyzed again (2026-11-17,
+    /// quick-thinking, a 100k window: all 34 empty summaries were cut off this way, 20k to 32k
+    /// tokens of reasoning each, and most second tries the same, 10 to 15 minutes lost each
+    /// time), but the model's own analysis of it, sized to the window. The person's requests go
+    /// with the summary word for word in any case (`install_summary`).
+    fn summary_notes(&self, analysis: &str, model: &str) -> String {
+        let cap = u64::from(self.output_cap.unwrap_or_else(|| self.base_output_cap(model)));
+        // Half of what the reply leaves of the window: the system prompt and the tools take the rest.
+        let room = self.context_window(model).saturating_sub(cap) / 2;
+        let room = usize::try_from(room.saturating_mul(kodact_compact::BYTES_PER_TOKEN as u64)).unwrap_or(usize::MAX);
+        format!(
+            "Your previous attempt returned no summary: it reached the output limit while you were still \
+             analyzing the conversation. The conversation is not repeated here. This is your analysis of it, \
+             as far as it went:\n\n<earlier_analysis>\n{}\n</earlier_analysis>\n\nWrite the summary from it now, \
+             in the format below. Do not analyze the conversation again.",
+            handback::fitted(analysis, room.max(4_000))
+        )
     }
 
     /// The person's requests carried through compactions, oldest first.
@@ -2394,7 +2450,15 @@ impl Engine {
     /// itself knows (the person's requests, the files changed, the task list, the last thing the
     /// model said) stands in for the model's summary. Less detail, but the run goes on, instead of
     /// ending or paying for another attempt before every request.
-    fn compact_without_model(&mut self, trigger: &str, continue_work: bool, model: &str) -> CompactInfo {
+    /// `analysis`: a summary attempt's reasoning that the output cap cut off, the richest account
+    /// of the conversation left; kept as far as a twentieth of the window holds.
+    fn compact_without_model(
+        &mut self,
+        trigger: &str,
+        continue_work: bool,
+        model: &str,
+        analysis: Option<&str>,
+    ) -> CompactInfo {
         let clip = |t: &str, max: usize| {
             let t = t.trim();
             if t.chars().count() > max {
@@ -2441,6 +2505,16 @@ impl Engine {
         });
         if let Some(t) = last {
             note.push_str(&format!("\nThe last thing you wrote before this:\n{}\n", clip(&t, 2_000)));
+        }
+        if let Some(a) = analysis.filter(|a| !a.trim().is_empty()) {
+            let room = self.context_window(model) / 20;
+            let room = usize::try_from(room.saturating_mul(kodact_compact::BYTES_PER_TOKEN as u64))
+                .unwrap_or(usize::MAX)
+                .clamp(4_000, 40_000);
+            note.push_str(&format!(
+                "\nYour analysis of the conversation, from a summary attempt the output limit cut off:\n{}\n",
+                handback::fitted(a, room)
+            ));
         }
         self.system_event("compact_fallback", json!({"trigger": trigger}));
         self.install_summary(trigger, note, continue_work, model)

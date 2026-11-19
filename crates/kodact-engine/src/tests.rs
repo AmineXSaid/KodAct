@@ -841,6 +841,11 @@ async fn an_empty_summary_is_recorded_and_retried_when_the_conversation_no_longe
     assert!(t.contains(r#""stop_reason":"max_tokens""#) && t.contains(r#""reasoning_only":true"#), "with why");
     let retry = &h.provider.requests()[3];
     assert!(last_user_text(retry).contains("returned no summary"), "the second try says what went wrong");
+    // Cut off at the output cap still analyzing: the second try summarizes from that analysis,
+    // not the conversation again, which would only be analyzed again (2026-11-17: 34 of 34).
+    assert_eq!(retry.messages.len(), 1, "the conversation isn't sent again");
+    let asked = last_user_text(retry);
+    assert!(asked.contains("<earlier_analysis>\nthe ZIP has two fragments...\n</earlier_analysis>"), "{asked}");
     assert!(!t.contains("compact_fallback"));
 
     // Both attempts empty: compact without the model, and the run goes on.
@@ -865,6 +870,25 @@ async fn an_empty_summary_is_recorded_and_retried_when_the_conversation_no_longe
         "{note}"
     );
     assert!(note.contains("Continue the work"), "the model is told to go on");
+    // The analysis the cap cut off is the richest account left of the conversation: kept.
+    assert!(note.contains("Your analysis of the conversation") && note.contains("\nanalysis\n"), "{note}");
+
+    // Reasoning only, but not cut off by the cap: the second try sends the conversation again.
+    let h = Harness::new(vec![
+        MockTurn::text("ok").with_usage(usage(100)),
+        too_long(),
+        MockTurn::blocks(vec![thinking("analysis")], StopReason::EndTurn),
+        MockTurn::text("<summary>compressed</summary>"),
+        MockTurn::text("answered"),
+    ]);
+    let mut e = h.engine();
+    e.submit(prompt("one")).await;
+    e.submit(prompt("two")).await;
+    let retry = &h.provider.requests()[3];
+    assert!(
+        retry.messages.len() > 1 && !last_user_text(retry).contains("<earlier_analysis>"),
+        "the whole conversation"
+    );
 }
 
 /// A run (9ef0955): an automatic summary that came back empty was sent again, the

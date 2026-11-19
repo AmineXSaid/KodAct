@@ -2,6 +2,21 @@
 
 ## 0.1.0 (unreleased)
 
+### A summary cut off while reasoning is finished from its own analysis
+- **The second summary attempt gets the first one's analysis.** It no
+  longer gets the whole conversation again. On 2026-11-17, quick-thinking (a
+  100k window) returned no summary 34 times, in 10 trials: each time it
+  reasoned until the output limit (20k to 32k tokens) and never wrote one.
+  The second attempt, with the same conversation, mostly did the same. Each
+  pair cost 10 to 15 minutes of a timed run before KodAct's own note stood
+  in, and the trials it happened in ran out of time. Now, when an attempt
+  reaches the output cap still reasoning, the next one gets that reasoning
+  in place of the conversation, sized to the window, and is asked to write
+  the summary from it. If that fails too, KodAct's note keeps the analysis.
+  Task `summary-cutoff`, with a scripted model that reasons to the limit as
+  quick-thinking did: compactions done/failed/note went from 1/2/1 to 1/1/0,
+  so the model's own summary replaced KodAct's note in 3/3 runs.
+
 ### Harbor: each task's tests have a uv cache of their own
 - **A container gets only its own task's packages.** The cache of the
   tests' packages was one folder for every task, gigabytes, copied whole into

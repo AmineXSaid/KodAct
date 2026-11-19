@@ -295,11 +295,17 @@ what follows it.
   why it failed.
 - A summary that came back empty is never sent again unchanged. It is tried a
   second time at once, with a note that the first attempt returned no
-  summary. If that fails too, KodAct compacts without the model: the summary is
-  replaced by a note of what it knows itself (the files changed this session,
-  the task list, the last thing the model wrote), with
-  `system/compact_fallback`. The person's requests come with it, as with every
-  summary.
+  summary. When the first attempt reached the output cap while still
+  reasoning, the second gets that reasoning in place of the conversation
+  (`<earlier_analysis>`, sized to the window) and is asked to write the
+  summary from it. The conversation again was only analyzed again: on
+  2026-11-17, all 34 empty summaries from quick-thinking (a 100k window) were
+  cut off this way, 20k to 32k tokens of reasoning each, and most second
+  tries the same. If that fails too, KodAct compacts without the model: the
+  summary is replaced by a note of what it knows itself (the files changed
+  this session, the task list, the last thing the model wrote, and the
+  cut-off analysis when there is one), with `system/compact_fallback`. The
+  person's requests come with it, as with every summary.
 - A summary asks for the lowest reasoning level (`low`) wherever a level is sent, and always
   to an OpenAI-compatible endpoint: summarizing doesn't need depth, and at full depth a
   reasoning model could spend the whole budget thinking and return no summary.

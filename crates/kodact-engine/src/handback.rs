@@ -303,6 +303,20 @@ fn tagged<'a>(text: &'a str, open: &str, close: &str) -> Vec<&'a str> {
     out
 }
 
+/// `text` within `room` bytes: whole when it fits, else how it began and where it stopped (cut at
+/// line starts), with what was left out said between them. For reasoning given back where no
+/// reminder carries it: a summary attempt's analysis (`Engine::summary_notes`).
+pub(crate) fn fitted(text: &str, room: usize) -> String {
+    let text = text.trim();
+    if text.len() <= room {
+        return text.to_string();
+    }
+    let head_end = line_floor(text, room / HEAD_SHARE);
+    let tail_start = line_ceil(text, text.len().saturating_sub(room - room / HEAD_SHARE)).max(head_end);
+    let gap = text[head_end..tail_start].chars().count();
+    format!("{}\n\n[… {gap} characters left out …]\n\n{}", text[..head_end].trim_end(), text[tail_start..].trim_start())
+}
+
 /// Byte `i` of `s`, moved back to the start of its line when that is near, else to a char boundary.
 fn line_floor(s: &str, i: usize) -> usize {
     let mut i = i.min(s.len());
@@ -546,5 +560,16 @@ mod tests {
         let start = shown(&h, "reasoning_start");
         assert!(start.starts_with(opening), "{start:.200}");
         assert!(!h.text.contains("repeated below"));
+    }
+
+    #[test]
+    fn fitted_text_is_whole_or_its_start_and_end() {
+        assert_eq!(fitted("  short analysis \n", 100), "short analysis");
+        let lines: String = (0..200).map(|i| format!("step {i}: looked at the build\n")).collect();
+        let out = fitted(&lines, 2_000);
+        assert!(out.starts_with("step 0:") && out.trim_end().ends_with("step 199: looked at the build"), "{out}");
+        assert!(out.contains("characters left out") && out.len() < 2_200, "{}", out.len());
+        // Cut at line starts: no line is split.
+        assert!(out.lines().all(|l| l.is_empty() || l.starts_with("step ") || l.starts_with("[…")), "{out}");
     }
 }
