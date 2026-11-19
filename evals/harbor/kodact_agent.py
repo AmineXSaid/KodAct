@@ -11,7 +11,8 @@ Configuration comes from the environment of the `harbor` process:
 - Every `KODACT_*` variable (endpoint, key, context window, ...) is passed to
   `kodact` inside the container. The key is never put on the command line.
 - `KODACT_HARBOR_ARGS`: extra `kodact` flags for every task (for example
-  `--max-turns 100`).
+  `--max-turns 100`), split as bash would, `$'…'` (from `printf '%q'`) included
+  (`shell_args.py`).
 - `KODACT_HARBOR_AUTONOMOUS`: `kodact` runs with `--autonomous` (no question tools,
   attempt before giving up); `0` turns it off, for A/B runs.
 - `KODACT_HARBOR_TIME_LIMIT`: seconds for `--max-time`. By default the task's own
@@ -70,6 +71,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from endpoint_gate import wait_for_endpoint
+from shell_args import split as split_args
 from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
@@ -507,7 +509,7 @@ class KodAct(BaseInstalledAgent):
             flags.append("--autonomous")
         if model:
             flags += ["--model", model]
-        extra = shlex.split(os.environ.get("KODACT_HARBOR_ARGS", ""))
+        extra = split_args(os.environ.get("KODACT_HARBOR_ARGS", ""))
         limit = task_time_limit()
         if limit and "--max-time" not in extra:
             flags += ["--max-time", str(max(60, int(limit) - TIME_MARGIN))]

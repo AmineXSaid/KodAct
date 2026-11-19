@@ -42,6 +42,7 @@ from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_templat
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
+from shell_args import split as split_args
 from kodact_agent import REMOTE_CA, TRUST_CA, upload_uv_cache, upload_pip_cache, upload_apt_cache, pip_cache_env, container_url, pinned_hosts, record_run, settings, task_time_limit
 
 REMOTE_DIR = "/opt/pi-harbor"
@@ -131,7 +132,7 @@ class PiAgent(BaseInstalledAgent):
         thinking = os.environ.get("PI_HARBOR_THINKING", "off")
         if thinking != "off":
             flags += ["--thinking", thinking]
-        flags += shlex.split(os.environ.get("PI_HARBOR_ARGS", ""))
+        flags += split_args(os.environ.get("PI_HARBOR_ARGS", ""))
         config = models_json(container_url(url), model)
         meta = {
             "harness": "pi",

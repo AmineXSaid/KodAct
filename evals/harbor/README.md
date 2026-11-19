@@ -62,7 +62,7 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | `KODACT_HARBOR_MODEL` | `deep-thinking` | the model as the endpoint names it (a `provider/` prefix is dropped); the same variable sets it for `run-forgecode.sh`, `run-ante.sh` and `run-pi.sh` |
 | `KODACT_HARBOR_DATASET` | `terminal-bench@2.0` | Harbor dataset |
 | `KODACT_HARBOR_JOBS` | `2` | Tasks in parallel |
-| `KODACT_HARBOR_ARGS` | | Extra `kodact` flags, e.g. `--max-turns 100`; the job name gets `-args-max-turns-100` |
+| `KODACT_HARBOR_ARGS` | | Extra `kodact` flags, e.g. `--max-turns 100`; the job name gets `-args-max-turns-100`. Split as bash would (`shell_args.py`): `'…'`, `"…"`, backslashes and `$'…'`, so text quoted with `printf '%q'` or `shlex.quote` works, e.g. `--append-system-prompt $(printf '%q' "$(cat SKILL.md)")`. Nothing is expanded: a `$(…)` left in the setting (inside single quotes) is refused by `run.sh` before any trial |
 | `KODACT_HARBOR_GATE` | `1` | Before each trial's agent starts, asks the endpoint whether it answers (`endpoint_gate.py`, the same request as the probe below, so no tokens). While it doesn't, the trial waits in Harbor's setup, not in the agent's time, and holds its slot, so no trial starts into an outage (see below). `0` turns it off |
 | `KODACT_HARBOR_PROBE` | `1` | Asks the endpoint which model it serves behind `KODACT_HARBOR_MODEL`, and its window, at job start (`probe_model.py`): printed, kept in each trial's `run.json` and the report; the window becomes `KODACT_CONTEXT_WINDOW` when that is unset, and a different one set by hand is warned about. `0` skips it |
 | `KODACT_STATIC_BIN` | `target-static/release/kodact` | Binary copied into containers |
