@@ -219,6 +219,8 @@ pub struct Opts {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Interactive local setup wizard (provider, API key, and default model)
+    Setup,
     /// Check the health of the installation
     Doctor {
         /// Also contact the endpoint (its model list) and run the key helper, to check the URL and key

@@ -27,6 +27,7 @@ pub mod overlays;
 pub mod palette;
 pub mod render;
 pub mod session;
+pub mod setup;
 pub mod shellbox;
 pub mod sidebar;
 pub mod text;
@@ -1029,12 +1030,19 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
     let cols = crossterm::terminal::size().map(|(c, _)| c as usize).unwrap_or(80);
     let (driver, warnings) = match session::build(&o, ui_tx.clone()).await {
         Ok(built) => built,
-        // Nothing to talk to yet: the first-run card says how to set one up.
+        // Nothing to talk to yet: offer the interactive local BYOK wizard on a TTY,
+        // or print the static first-run card when non-interactive.
         Err(f) if f.first_run => {
-            for l in brand::first_run(&theme, kodact_core::VERSION, &f.message, cols) {
-                println!("{}", brand::ansi(&l));
+            let tty = std::io::IsTerminal::is_terminal(&std::io::stdin())
+                && std::io::IsTerminal::is_terminal(&std::io::stdout());
+            if tty && matches!(setup::run(&theme).await?, setup::SetupOutcome::Configured { .. }) {
+                session::build(&o, ui_tx.clone()).await?
+            } else {
+                for l in brand::first_run(&theme, kodact_core::VERSION, &f.message, cols) {
+                    println!("{}", brand::ansi(&l));
+                }
+                return Ok(f.code);
             }
-            return Ok(f.code);
         }
         Err(f) => return Err(f),
     };
