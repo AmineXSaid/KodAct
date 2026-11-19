@@ -528,7 +528,9 @@ class KodAct(BaseInstalledAgent):
         command = (
             f"mkdir -p {LOG_DIR}; "
             + record_run("KODACT_TASK", meta)
-            + f'{REMOTE_BIN} -p "$KODACT_TASK" {shlex.join(flags)} '
+            # The task last, after `--`: a task text that starts with a dash ("- You are given…",
+            # pytorch-model-recovery) is never read as a flag, whatever kodact's parser does.
+            + f'{REMOTE_BIN} -p {shlex.join(flags)} -- "$KODACT_TASK" '
             f"> {LOG_DIR}/{STREAM_LOG} 2> {LOG_DIR}/{STDERR_LOG}"
         )
         try:

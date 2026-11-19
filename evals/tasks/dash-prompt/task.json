@@ -1,0 +1,7 @@
+{
+  "instruction": "- Write the word ready, and nothing else, to ready.txt.\n- Then say done.",
+  "check": "test \"$(cat ready.txt)\" = ready",
+  "pillar": "compatibility",
+  "tags": ["quiet", "everyday", "cli"],
+  "timeout_secs": 120
+}

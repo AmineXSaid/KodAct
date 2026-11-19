@@ -713,6 +713,10 @@ fn main() {
     adopt_forgecli_env();
     // clap prints help and version and exits (0) or reports usage errors (2) before anything else starts.
     let cli = Cli::parse();
+    if let Some(word) = cli.mistyped_flag() {
+        let msg = format!("unexpected argument '{word}' found (text that starts with a dash needs a space in it)");
+        Cli::command().error(clap::error::ErrorKind::UnknownArgument, msg).exit();
+    }
     term::init(cli.opts.color);
     init_tracing(&cli.opts);
     let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {

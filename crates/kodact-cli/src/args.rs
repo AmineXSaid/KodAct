@@ -29,6 +29,8 @@ pub enum PermissionPrompts {
 #[command(name = "kodact", version = concat!(env!("CARGO_PKG_VERSION"), " (KodAct)"), disable_version_flag = true)]
 pub struct Cli {
     /// Your prompt
+    // A prompt may start with a dash ("- fix the tests", a pasted list): it is text, not a flag.
+    #[arg(allow_hyphen_values = true)]
     pub prompt: Option<String>,
 
     #[command(subcommand)]
@@ -141,13 +143,14 @@ pub struct Opts {
     pub strict_mcp_config: bool,
 
     /// System prompt for the session
-    #[arg(long = "system-prompt")]
+    // Text that may start with a dash: a skill file's `---` front matter, a list.
+    #[arg(long = "system-prompt", allow_hyphen_values = true)]
     pub system_prompt: Option<String>,
     /// Read the system prompt from a file
     #[arg(long = "system-prompt-file")]
     pub system_prompt_file: Option<PathBuf>,
     /// Append to the default system prompt
-    #[arg(long = "append-system-prompt")]
+    #[arg(long = "append-system-prompt", allow_hyphen_values = true)]
     pub append_system_prompt: Option<String>,
     /// Append the contents of a file to the system prompt
     #[arg(long = "append-system-prompt-file")]
@@ -348,4 +351,54 @@ pub fn parse_duration(raw: &str) -> Result<std::time::Duration, String> {
         return Err("the time limit must be more than 0".into());
     }
     Ok(std::time::Duration::from_secs(secs))
+}
+
+impl Cli {
+    /// A value taken as text although it may start with a dash (the prompt, a system prompt) that
+    /// is one dash word with no space in it, as a flag is: a mistyped flag (`--modle`), not text.
+    /// Text that starts with a dash has a space in it: "- fix the tests", a skill file's `---`
+    /// front matter.
+    pub fn mistyped_flag(&self) -> Option<&str> {
+        [self.prompt.as_deref(), self.opts.system_prompt.as_deref(), self.opts.append_system_prompt.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|v| v.len() > 1 && v.starts_with('-') && !v.contains(char::is_whitespace))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(argv: &[&str]) -> Cli {
+        Cli::try_parse_from(std::iter::once("kodact").chain(argv.iter().copied())).unwrap()
+    }
+
+    #[test]
+    fn text_that_starts_with_a_dash_is_text() {
+        // A task as Terminal-Bench gives it, flags after it (Harbor's and kodact-eval's command).
+        let cli = parse(&["-p", "- You are given a PyTorch state dictionary", "--output-format", "stream-json"]);
+        assert_eq!(cli.prompt.as_deref(), Some("- You are given a PyTorch state dictionary"));
+        assert!(cli.opts.print && cli.opts.output_format == OutputFormat::StreamJson);
+        // A skill file as a system prompt: its front matter starts with `---`.
+        let skill = "---\nname: i-have-adhd\n---\nLead with the next action.";
+        let cli = parse(&["--append-system-prompt", skill, "-p", "hi"]);
+        assert_eq!((cli.opts.append_system_prompt.as_deref(), cli.prompt.as_deref()), (Some(skill), Some("hi")));
+        assert_eq!(
+            parse(&["--system-prompt", "- be brief", "-p", "hi"]).opts.system_prompt.as_deref(),
+            Some("- be brief")
+        );
+        assert!(parse(&["-p", "- x"]).mistyped_flag().is_none());
+    }
+
+    #[test]
+    fn flags_and_mistyped_flags_stay_flags() {
+        let cli = parse(&["-p", "--model", "x", "hello"]);
+        assert_eq!((cli.opts.model.as_deref(), cli.prompt.as_deref()), (Some("x"), Some("hello")));
+        assert!(parse(&["--model", "m", "-p"]).prompt.is_none());
+        assert!(parse(&["mcp", "list"]).command.is_some());
+        // One dash word, no space: a flag clap doesn't know, reported as one (main.rs), not a prompt.
+        assert_eq!(parse(&["--bogus"]).mistyped_flag(), Some("--bogus"));
+        assert_eq!(parse(&["--append-system-prompt", "--verbose"]).mistyped_flag(), Some("--verbose"));
+    }
 }

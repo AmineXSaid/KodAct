@@ -87,3 +87,21 @@ A told the model "It names files that don't exist: `members.py`, `and/or`,
 `missing/duplicate`". The file is src/members.py, and the other two are words.
 A real model may then create the files it was told are missing; the task's
 check fails a run that does. A real-model comparison still needs an API key.
+
+## `openai_writes_ready.py`: the `dash-prompt` task
+
+A model that writes `ready` into ready.txt and ends. The task's instruction
+starts with "- ", so what is measured is whether kodact starts at all.
+
+```bash
+python3 evals/scripted/openai_writes_ready.py 8797 &
+export KODACT_OPENAI_BASE_URL=http://127.0.0.1:8797/v1 KODACT_OPENAI_API_KEY=sk-test0123456789
+kodact-eval run --only dash-prompt --kodact <kodact> --label <label> --repeat 3 -- --model m --permission-mode bypassPermissions
+```
+
+Measured on 2026-11-19. A is 0f69989, before the fix; B is the fix.
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate | 0/3 | 3/3 |
+| kodact started | 0/3: `error: unexpected argument '- ' found` (exit 2) | 3/3 |

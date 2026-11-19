@@ -2,6 +2,17 @@
 
 ## 0.1.0 (unreleased)
 
+### A prompt that starts with a dash is a prompt
+- **`kodact -p "- fix the tests"` runs.** A prompt, `--system-prompt` or
+  `--append-system-prompt` that starts with a dash is text when it has a
+  space in it: a pasted list, or a skill file's `---` front matter. Before,
+  kodact took it for an unknown flag and exited 2 without starting. In the
+  2026-11-17 Terminal-Bench run, pytorch-model-recovery ("- You are given…")
+  scored 0 that way, and `--append-system-prompt "--- name: …"` failed the
+  same way. One dash word with no space (`--modle`) is still a flag error,
+  not a prompt. The Harbor runner also passes the task after `--`. Task
+  `dash-prompt`, with the scripted model: 0/3 started before, 3/3 after.
+
 ### The terminal UI tested as a person uses it
 - `kodact_test_host::pty` runs the real binary in a pseudo-terminal: keys and
   bracketed pastes in, the screen read back through a terminal emulator. Until
