@@ -121,69 +121,16 @@ const RISKY: &[&str] = &[
     ":(){",
 ];
 
-const ROUTINE_PREFIXES: &[&str] = &[
-    "ls",
-    "cat",
-    "head",
-    "tail",
-    "wc",
-    "pwd",
-    "echo",
-    "grep",
-    "rg",
-    "find",
-    "which",
-    "file",
-    "stat",
-    "tree",
-    "diff",
-    "git status",
-    "git diff",
-    "git log",
-    "git show",
-    "git branch",
-    "git add",
-    "git commit",
-    "git checkout -b",
-    "git switch",
-    "git stash",
-    "cargo build",
-    "cargo test",
-    "cargo check",
-    "cargo clippy",
-    "cargo fmt",
-    "cargo run",
-    "npm test",
-    "npm run",
-    "npm install",
-    "pnpm ",
-    "yarn ",
-    "pytest",
-    "python -m pytest",
-    "go test",
-    "go build",
-    "make",
-    "mkdir",
-    "touch",
-    "cp ",
-    "mv ",
-    "jq",
-    "sort",
-    "uniq",
-    "sed -n",
-];
-
-/// The rule-based stand-in for auto mode's classifier: routine development
-/// commands pass, anything risky or unrecognised asks.
+/// In `Auto` mode, allow all commands except destructive/risky ones (removals,
+/// privilege escalation, force-pushes, raw device writes).
 pub(crate) fn auto_mode_allows(command: &str) -> bool {
     let parts = split_compound(command);
     !parts.is_empty()
         && parts.iter().all(|p| {
             let p = p.trim();
-            !RISKY.iter().any(|r| p.contains(r))
-                && ROUTINE_PREFIXES
-                    .iter()
-                    .any(|pre| p == pre.trim() || p.starts_with(&format!("{} ", pre.trim())) || p.starts_with(pre))
+            let first = p.split_whitespace().next().unwrap_or("");
+            !matches!(first, "rm" | "rmdir" | "unlink" | "shred" | "sudo" | "su" | "mkfs" | "dd")
+                && !RISKY.iter().any(|r| p.contains(r))
         })
 }
 
