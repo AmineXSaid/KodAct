@@ -18,13 +18,17 @@
 pub mod app;
 pub mod brand;
 pub mod editor;
+pub mod format;
 pub mod front;
 pub mod keys;
+pub mod layout;
 pub mod look;
+pub mod overlays;
 pub mod palette;
 pub mod render;
 pub mod session;
 pub mod shellbox;
+pub mod sidebar;
 pub mod text;
 
 use std::io::Write;
