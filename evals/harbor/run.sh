@@ -95,12 +95,12 @@ ca=""
 # As kodact reads it: set and not 0, false, no or off.
 case "${KODACT_CARRY_REASONING:-}" in ""|0|false|no|off) ;; *) ca="${ca}-carry" ;; esac
 [ -n "${KODACT_NUDGES:-}" ] && ca="${ca}-n-$(printf '%s' "$KODACT_NUDGES" | tr -c 'A-Za-z0-9' '.')"
-# The agent splits KODACT_HARBOR_ARGS as a shell would (shlex): an unclosed quote (an apostrophe in
-# text pasted between single quotes) crashed every trial at its start (2026-11-18, "No closing
-# quotation"). Say so now, before any container starts.
-if [ -n "${KODACT_HARBOR_ARGS:-}" ] && ! err=$(python3 -c 'import os, shlex; shlex.split(os.environ["KODACT_HARBOR_ARGS"])' 2>&1); then
-  echo "KODACT_HARBOR_ARGS can't be split into flags (${err##*: }). Quote text with shlex.quote, e.g." >&2
-  echo "  KODACT_HARBOR_ARGS=\"--append-system-prompt \$(python3 -c 'import shlex,sys;print(shlex.quote(open(sys.argv[1]).read()))' FILE)\"" >&2
+# The agent splits KODACT_HARBOR_ARGS as bash would (shell_args.py: '…', "…", $'…' from printf '%q',
+# backslashes). An unclosed quote crashed every trial at its start (2026-11-18, "No closing
+# quotation"), and a $(…) left unrun reached kodact as text. Say so now, before any container starts.
+if [ -n "${KODACT_HARBOR_ARGS:-}" ] && ! err=$(python3 "$repo/evals/harbor/shell_args.py" KODACT_HARBOR_ARGS 2>&1); then
+  echo "KODACT_HARBOR_ARGS can't be split into flags ($err). Quote text with printf '%q' or shlex.quote, e.g." >&2
+  echo "  KODACT_HARBOR_ARGS=\"--append-system-prompt \$(printf '%q' \"\$(cat FILE)\")\"" >&2
   exit 2
 fi
 [ -n "${KODACT_HARBOR_ARGS:-}" ] && ca="${ca}-args-$(printf '%s' "$KODACT_HARBOR_ARGS" | tr -cs 'A-Za-z0-9' '-' | sed 's/^-*//; s/-*$//' | cut -c1-40)"
