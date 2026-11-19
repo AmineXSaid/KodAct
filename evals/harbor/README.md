@@ -551,10 +551,15 @@ longer than the verifier limit (torch-tensor-parallelism's tests ran out of
 their 15 minutes on 2026-11-14). Before each run, `caches.py` finds the tasks
 whose tests, in a past job here (`jobs/`), judged nothing: they ran out of
 time, or failed to fetch what they need (`report.py`'s verifier error). It
-downloads those tests' packages once into `~/.kodact-harbor/uv-cache`. The
-cache's lists (`.kodact-tasks`, `.kodact-no-uvx`) keep each task to once, and
-the cache, gigabytes, goes only into the containers of the tasks it holds.
-`KODACT_HARBOR_UV_CACHE=off` turns it off. To add a task by hand:
+downloads those tests' packages once, into a folder of the task's own:
+`~/.kodact-harbor/uv-cache/tasks/<task>`, marked `.kodact-done` when complete.
+A container gets only its own task's folder. One cache shared by every task
+held gigabytes, and copying it into a container took 17–18 minutes; four
+tasks hit Harbor's setup limit on 2026-11-17. A shared cache made before is
+copied into no container. Its tasks (`.kodact-tasks`) get folders of their
+own, and each run says what of it can be deleted. `.kodact-no-uvx` lists the
+tasks that need nothing. `KODACT_HARBOR_UV_CACHE=off` turns it off. To add a
+task by hand:
 
 ```bash
 python3 evals/harbor/warm_uv_cache.py pytorch-model-cli torch-tensor-parallelism

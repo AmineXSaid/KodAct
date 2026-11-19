@@ -5,8 +5,8 @@
 The usual command (`evals/harbor/run.sh subset ...`) is enough. Missing download caches are made
 first, once, and what to make comes from what past jobs here showed: Torch for the agent, Python's
 apt packages, and the tests' packages for each task whose tests judged nothing (they ran out of
-time or failed to fetch). The uv cache, gigabytes, goes only into the containers of the tasks it
-was made for. Harbor's container start, agent setup and test limits get 3x; the agent's don't.
+time or failed to fetch). Each task's tests have a uv cache of their own, and a container gets its
+task's alone: one shared cache took 17-18 minutes to copy in. Harbor's container start, agent setup and test limits get 3x; the agent's don't.
 """
 
 import ast
@@ -58,11 +58,22 @@ def test_the_tests_packages_are_made_for_the_tasks_whose_tests_judged_nothing(tm
     trial(jobs, "fix-git__d4", reward="1", stdout=HF_BLOCKED)  # passed
     trial(jobs, "caffe-cifar-10__e5", exception="EnvironmentStartTimeoutError")  # the tests never started
     assert steps(home, jobs)["warm_uv_cache.py"] == ["reshard-c4-data", "torch-tensor-parallelism"]
-    # Each task once: made, or found to need nothing.
-    (home / "uv-cache").mkdir(parents=True)
-    (home / "uv-cache" / ".kodact-tasks").write_text("torch-tensor-parallelism\n")
+    # Each task once: its own cache complete, or found to need nothing. A folder a download left
+    # half made (no .kodact-done) is made again.
+    (home / "uv-cache" / "tasks" / "torch-tensor-parallelism").mkdir(parents=True)
+    assert steps(home, jobs)["warm_uv_cache.py"] == ["reshard-c4-data", "torch-tensor-parallelism"]
+    (home / "uv-cache" / "tasks" / "torch-tensor-parallelism" / ".kodact-done").write_text("")
     (home / "uv-cache" / ".kodact-no-uvx").write_text("reshard-c4-data\n")
     assert "warm_uv_cache.py" not in steps(home, jobs)
+
+
+def test_the_tasks_of_a_shared_uv_cache_get_their_own_and_the_rest_is_disk_to_free(tmp_path):
+    home, jobs = tmp_path / "home", tmp_path / "jobs"
+    uv = home / "uv-cache"
+    (uv / "archive-v0").mkdir(parents=True)  # what the shared cache holds, for every task
+    (uv / ".kodact-tasks").write_text("pytorch-model-cli\nwrite-compressor\n")
+    assert steps(home, jobs)["warm_uv_cache.py"] == ["pytorch-model-cli", "write-compressor"]
+    assert caches.shared_uv_leftovers(uv) == [uv / "archive-v0"]
 
 
 def test_a_release_a_trial_had_no_apt_cache_for_is_made_next(tmp_path):
@@ -84,26 +95,29 @@ def agent_function(name: str):
     return scope[name]
 
 
-def test_the_tests_packages_go_only_into_the_containers_of_their_tasks(tmp_path):
+def test_a_container_gets_its_tasks_own_uv_cache_and_no_other(tmp_path):
     uv_cache_for = agent_function("uv_cache_for")
-    assert uv_cache_for("anything", tmp_path), "a cache made before the list existed is for every task"
-    (tmp_path / ".kodact-tasks").write_text("pytorch-model-cli\ntorch-tensor-parallelism\n")
-    assert uv_cache_for("torch-tensor-parallelism", tmp_path)
-    assert not uv_cache_for("fix-git", tmp_path), "gigabytes a task's tests don't need stay out"
+    # The shared cache of before: gigabytes for every task, copied into none (17-18 minutes each).
+    (tmp_path / "archive-v0").mkdir()
+    (tmp_path / ".kodact-tasks").write_text("torch-tensor-parallelism\n")
+    assert uv_cache_for("torch-tensor-parallelism", tmp_path) is None
+    own = tmp_path / "tasks" / "torch-tensor-parallelism"
+    own.mkdir(parents=True)
+    assert uv_cache_for("torch-tensor-parallelism", tmp_path) is None, "an empty folder holds nothing"
+    (own / "archive-v0").mkdir()
+    assert uv_cache_for("torch-tensor-parallelism", tmp_path) == own
+    assert uv_cache_for("fix-git", tmp_path) is None and uv_cache_for("", tmp_path) is None
 
 
-def test_the_uv_warm_script_keeps_its_lists():
-    import warm_uv_cache
-
-    def kept(tmp: Path, *batches: list[str]) -> list[str]:
-        for batch in batches:
-            warm_uv_cache.record(tmp, warm_uv_cache.TASKS, batch)
-        return (tmp / warm_uv_cache.TASKS).read_text().split()
-
+def test_the_uv_warm_script_keeps_its_list_of_tasks_that_need_nothing():
     import tempfile
 
+    import warm_uv_cache
+
     with tempfile.TemporaryDirectory() as d:
-        assert kept(Path(d), ["b"], ["a", "b"], []) == ["a", "b"]
+        for batch in (["b"], ["a", "b"], []):
+            warm_uv_cache.record(Path(d), warm_uv_cache.NO_UVX, batch)
+        assert (Path(d) / warm_uv_cache.NO_UVX).read_text().split() == ["a", "b"]
 
 
 def harbor_args(**settings: str) -> list[str]:

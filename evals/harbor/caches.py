@@ -14,7 +14,8 @@ what is missing is made, once, and every run after reuses it:
 - apt: ubuntu:24.04 and debian:bookworm while no release is cached, then any Ubuntu or Debian
   release a past trial had none for (its agent/apt-cache.txt says so). Needs Docker, as Harbor does.
 - uv: the tests' packages of each task whose tests, in a past job here (jobs/), judged nothing:
-  they ran out of time, or failed to fetch what they need (report.py's "verifier error").
+  they ran out of time, or failed to fetch what they need (report.py's "verifier error"). Each
+  task gets a cache of its own, tasks/<task>, and its container gets that one alone.
 
 KODACT_HARBOR_WARM=0 makes nothing and uses only what is there. A step that fails leaves the run
 to go on without what it would have made.
@@ -132,11 +133,22 @@ def plan(environ, home: Path, jobs: Path, arch: str) -> tuple[list[Step], dict[s
             steps.append(("warm_apt_cache.py", images, "KODACT_HARBOR_APT_CACHE", apt))
     uv = where["KODACT_HARBOR_UV_CACHE"]
     if uv is not None:
-        done = listed(uv / ".kodact-tasks") | listed(uv / ".kodact-no-uvx")
-        tasks = sorted(unjudged_tasks(jobs) - done)
+        # Each task's tests have a cache of their own (tasks/<task>, complete once it holds
+        # .kodact-done). The tasks the shared cache was made for (.kodact-tasks) get theirs too.
+        done = {p.parent.name for p in (uv / "tasks").glob("*/.kodact-done")} | listed(uv / ".kodact-no-uvx")
+        tasks = sorted((unjudged_tasks(jobs) | listed(uv / ".kodact-tasks")) - done)
         if tasks:
             steps.append(("warm_uv_cache.py", tasks, "KODACT_HARBOR_UV_CACHE", uv))
     return steps, where
+
+
+def shared_uv_leftovers(uv: Path | None) -> list[Path]:
+    """What a uv cache shared by every task left at the cache's top level: no container gets it
+    any more (each task has its own folder), so it is only disk to free."""
+    if uv is None or not uv.is_dir():
+        return []
+    keep = {"tasks", ".kodact-no-uvx", ".kodact-tasks"}
+    return sorted(p for p in uv.iterdir() if p.name not in keep)
 
 
 def host_arch() -> str:
@@ -158,6 +170,10 @@ def main() -> None:
             cmd = [sys.executable, str(HERE / script), *args]
             if subprocess.run(cmd, env={**environ, var: str(folder)}, stdout=sys.stderr).returncode != 0:
                 say(f"  {script} failed: the run goes on without what it would have made")
+    leftovers = shared_uv_leftovers(where["KODACT_HARBOR_UV_CACHE"])
+    if leftovers:
+        say("note: the uv cache shared by every task is no longer copied into containers (each task has its own")
+        say("  folder, tasks/<task>); to free its space: rm -rf " + " ".join(shlex.quote(str(p)) for p in leftovers))
     for var, folder in where.items():
         given = environ.get(var, "").strip()
         # A folder given by hand is used as given; one by default only once it holds something.

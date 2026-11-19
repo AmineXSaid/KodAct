@@ -2,6 +2,17 @@
 
 ## 0.1.0 (unreleased)
 
+### Harbor: each task's tests have a uv cache of their own
+- **A container gets only its own task's packages.** The cache of the
+  tests' packages was one folder for every task, gigabytes, copied whole into
+  each task it served. On 2026-11-17 that copy took 17–18 minutes, and four
+  tasks hit Harbor's setup limit before the agent started; on 2026-11-16 the
+  same four lost 17 minutes each. Each task's tests now get a folder of their
+  own (`~/.kodact-harbor/uv-cache/tasks/<task>`), and the container gets that
+  one alone. A shared cache from before is copied into no container: its
+  tasks get folders of their own on the next run, and the run says what of it
+  can be deleted.
+
 ### A prompt that starts with a dash is a prompt
 - **`kodact -p "- fix the tests"` runs.** A prompt, `--system-prompt` or
   `--append-system-prompt` that starts with a dash is text when it has a

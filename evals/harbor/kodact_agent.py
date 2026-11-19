@@ -47,8 +47,8 @@ Configuration comes from the environment of the `harbor` process:
   downloads made once on this machine (warm_*.py), copied in before the agent
   starts: the tests' packages, what the agent pip-installs (Torch), and what it
   apt-installs when a task has no Python (upload_apt_cache). The run scripts make
-  what is missing and set each to its folder in ~/.kodact-harbor (caches.py). The
-  uv cache goes only into the containers of the tasks it was made for
+  what is missing and set each to its folder in ~/.kodact-harbor (caches.py). Each
+  task's tests have a uv cache of their own, and a container gets only its task's
   (uv_cache_for). Only the download speed changes; the task still withholds the
   packages.
 
@@ -204,27 +204,29 @@ def cache_dir(var: str, maker: str) -> Path | None:
     return path
 
 
-def uv_cache_for(task: str, cache: Path) -> bool:
-    """Is the uv cache for this task's tests? It is when warm_uv_cache.py put that task's packages
-    in it, as its list (.kodact-tasks) says: it holds gigabytes other tasks don't need. A cache
-    made before the list existed has none, and is for every task."""
-    listed = cache / ".kodact-tasks"
-    return not listed.is_file() or task in listed.read_text().split()
+def uv_cache_for(task: str, cache: Path) -> Path | None:
+    """The uv cache for this task's tests: its own folder, tasks/<task>, which warm_uv_cache.py
+    fills with only the packages those tests install. None for a task without one. A cache shared
+    by every task (made before the folders existed) is copied into no container: it held
+    gigabytes, and copying it took 17-18 minutes, past Harbor's setup limit for four tasks
+    (2026-11-17)."""
+    own = cache / "tasks" / task
+    return own if task and own.is_dir() and any(own.iterdir()) else None
 
 
 async def upload_uv_cache(agent: BaseInstalledAgent, environment: BaseEnvironment) -> None:
-    """Copy KODACT_HARBOR_UV_CACHE (made by warm_uv_cache.py) into the container for the task's tests.
-
-    The tests then take Torch and the like from disk instead of the network (see verifier-ca.sh).
+    """Copy this task's folder of KODACT_HARBOR_UV_CACHE (made by warm_uv_cache.py) into the
+    container for its tests, which then take Torch and the like from disk (see verifier-ca.sh).
     """
     path = cache_dir("KODACT_HARBOR_UV_CACHE", "warm_uv_cache.py")
     if path is None:
         return
     task = getattr(environment, "environment_name", None) or ""  # the task's short name in Harbor 0.24
-    if task and not uv_cache_for(task, path):
+    own = uv_cache_for(task, path)
+    if own is None:
         return
     await agent.exec_as_root(environment, command=f"mkdir -p {KEPT_UV_CACHE}")
-    await environment.upload_dir(path.resolve(), KEPT_UV_CACHE)
+    await environment.upload_dir(own.resolve(), KEPT_UV_CACHE)
     # Whatever user the tests run as, their uv takes locks and writes in its cache.
     await agent.exec_as_root(environment, command=f"chmod -R a+rwX {KEPT_UV_CACHE}")
 

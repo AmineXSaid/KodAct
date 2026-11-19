@@ -2,17 +2,17 @@
 """Fill a uv cache, once, with what a task's tests download, for runs on a slow network.
 
     python3 evals/harbor/warm_uv_cache.py pytorch-model-cli [more-tasks...]
-    export KODACT_HARBOR_UV_CACHE=~/.kodact-harbor/uv-cache
 
 Terminal-Bench tests install their tools with `uvx` (pytorch-model-cli: Torch,
 torchvision, OpenCV, numpy, pytest) every time they run. Through a slow company
 proxy that download alone can outlast the task's verifier limit, and the task
 scores 0 whatever the agent did. This script reads each task's own test script,
 runs its `uvx` line once on this machine (same uv version, same packages, with
-the tool's `--version` instead of the tests), and keeps what uv downloaded in
-KODACT_HARBOR_UV_CACHE (default ~/.kodact-harbor/uv-cache). With that variable set,
-the agent copies the cache into each task container and the run scripts point
-the tests' uv at it (UV_CACHE_DIR, see verifier-ca.sh), so the packages come
+the tool's `--version` instead of the tests), and keeps what uv downloaded in a
+folder of the task's own: KODACT_HARBOR_UV_CACHE/tasks/<task> (by default
+~/.kodact-harbor/uv-cache, which the run scripts use whenever it exists). The
+agent copies that folder alone into the task's container, and the run scripts
+point the tests' uv at it (UV_CACHE_DIR, see verifier-ca.sh), so the packages come
 from disk. uv still asks the index whether they changed, which is small.
 
 The task scripts come from the Terminal-Bench 2.0 repository at the commit the
@@ -77,12 +77,16 @@ def uv_version(script: str) -> str | None:
     return m.group(1) if m else None
 
 
-# The tasks whose tests' packages are in the cache, one per line: the agents copy the cache only
-# into their containers (kodact_agent.upload_uv_cache), as it holds gigabytes they don't need.
-# And the tasks found to need nothing, so caches.py doesn't ask again. A cache made before these
-# lists existed has none, and goes to every task.
-TASKS = ".kodact-tasks"
+# Each task's tests get a cache of their own, holding only what they install: TASKS/<task>, with
+# DONE in it once complete. The agents copy that folder alone into the task's container
+# (kodact_agent.uv_cache_for). One cache shared by every task held gigabytes: copying it into a
+# container took 17-18 minutes, past Harbor's setup limit for four tasks (2026-11-17).
+# NO_UVX lists the tasks found to need nothing, so caches.py doesn't ask again. LEGACY is the
+# shared cache's list: caches.py makes each of its tasks a folder of its own.
+TASKS = "tasks"
+DONE = ".kodact-done"
 NO_UVX = ".kodact-no-uvx"
+LEGACY = ".kodact-tasks"
 
 
 def record(cache: Path, name: str, tasks: list[str]) -> None:
@@ -140,7 +144,9 @@ def main() -> None:
         # The tests' own uv version, so the cache has the layout that version reads.
         # The outer uvx only fetches that uv; it keeps it in its usual cache, not this one.
         runner = ["uvx", "--from", f"uv=={version}", "uvx"] if version else ["uvx"]
-        cmd = runner + ["--cache-dir", str(cache)] + warm_args(words)
+        own = cache / TASKS / task
+        own.mkdir(parents=True, exist_ok=True)
+        cmd = runner + ["--cache-dir", str(own)] + warm_args(words)
         print(f"{task}: {shlex.join(cmd)}", flush=True)
         # A slow proxy can drop a download part way; what finished stays in the cache.
         for attempt in range(1, ATTEMPTS + 1):
@@ -149,13 +155,12 @@ def main() -> None:
             print(f"{task}: attempt {attempt} of {ATTEMPTS} failed" + ("; trying again" if attempt < ATTEMPTS else ""), flush=True)
         else:
             failed.append(task)
-    record(cache, TASKS, [t for t in tasks if t not in failed and t not in no_uvx])
+        dropped = prune_environments(own)
+        if task not in failed:
+            (own / DONE).write_text("")
+        size = sum(p.stat().st_size for p in own.rglob("*") if p.is_file() and not p.is_symlink())
+        print(f"{task}: {own} ({size / 1e9:.2f} GB)" + (f", {dropped} environments built here dropped" if dropped else ""))
     record(cache, NO_UVX, no_uvx)
-    dropped = prune_environments(cache)
-    size = sum(p.stat().st_size for p in cache.rglob("*") if p.is_file() and not p.is_symlink())
-    print(f"\ncache: {cache} ({size / 1e9:.1f} GB)")
-    if dropped:
-        print(f"dropped {dropped} environments built on this machine's Python (uv rebuilds them in the container)")
     if failed:
         sys.exit(f"failed: {' '.join(failed)}")
     print("the run scripts use it whenever it exists")
