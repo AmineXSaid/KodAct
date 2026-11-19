@@ -510,6 +510,7 @@ class Trial:
             out += ["", "**Instruction**", "", "```text", clip(self.instruction, INSTRUCTION), "```"]
         if self.final_text:
             out += ["", "**Last words of the agent**", "", "```text", clip(self.final_text, TEXT), "```"]
+        out += self.requirements_lines()
         v = self.verifier
         if v["summary"] or v["failed"]:
             s = v["summary"]
@@ -522,6 +523,19 @@ class Trial:
         out += self.conversation() if self.kodact else self.plain_logs()
         out.append("")
         return "\n".join(out)
+
+    def requirements_lines(self) -> list[str]:
+        """The requirements the Finish claim listed, each met or not, with its evidence: next to
+        the verifier's failures, what the agent checked shows against what the tests did."""
+        listed = [r for r in (self.finish or {}).get("requirements") or [] if isinstance(r, dict)]
+        if not listed:
+            return []
+        out = ["", "**Requirements the agent listed**", ""]
+        for r in listed:
+            mark = "met" if r.get("met") is True else "not met"
+            evidence = clip(r.get("evidence") or "none given", 300)
+            out.append(f"- {mark}: {clip(r.get('requirement') or '', 200)} (evidence: {evidence})")
+        return out
 
     def conversation(self) -> list[str]:
         out, step, names = ["```text"], 0, {}

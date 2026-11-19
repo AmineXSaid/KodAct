@@ -4540,7 +4540,7 @@ async fn finish_with_other_tools_is_refused_and_unchecked_changes_send_the_model
     let h = Harness::new(vec![
         MockTurn::tools(&[
             ("Bash", json!({"command": "echo ok"})),
-            ("Finish", json!({"summary": "too early", "verified": true})),
+            ("Finish", json!({"summary": "too early", "requirements": [], "verified": true})),
         ]),
         MockTurn::tool("Finish", json!({"summary": "done after reading", "verified": false})),
     ]);
@@ -4567,6 +4567,101 @@ async fn finish_with_other_tools_is_refused_and_unchecked_changes_send_the_model
     assert!(last_user_text(&reqs[2]).contains("a.py"), "the reminder names the unchecked file");
     assert_eq!(r.result.as_deref(), Some("checked"));
     assert_eq!(system_events(&h, "finish").len(), 1, "only the claim that ended the run is recorded");
+}
+
+/// A Finish whose claim lists a requirement it doesn't show met is answered with it, once a
+/// turn and while the run has time for another try: the claim is dropped, the model goes on,
+/// and its next Finish ends the run. A claim can't be stronger than its parts: `verified` true
+/// next to a requirement not met is recorded false.
+#[tokio::test]
+async fn a_finish_listing_a_requirement_not_met_is_answered_with_it_while_there_is_time() {
+    let finish = |summary: &str, list_met: bool| {
+        MockTurn::tool(
+            "Finish",
+            json!({"summary": summary, "verified": true, "requirements": [
+                {"requirement": "out.csv exists", "evidence": "`ls out.csv` listed it", "met": true},
+                {"requirement": "coords_x: a list of x coordinates", "evidence": "the column holds tuples", "met": list_met},
+            ]}),
+        )
+    };
+    // (claims recorded, answers with the requirements not met), from one read of the events.
+    let counts = |h: &Harness| {
+        let events = h.sink.take();
+        let of = |name: &str, kind: Option<&str>| {
+            events
+                .iter()
+                .filter(|ev| {
+                    matches!(ev, EngineEvent::System { subtype, data }
+                        if subtype == name && kind.is_none_or(|k| data["kind"] == k))
+                })
+                .count()
+        };
+        (of("finish", None), of("verification", Some("unmet_requirements")))
+    };
+    let unattended = |time_limit| EngineConfig { autonomous: true, time_limit, ..Default::default() };
+    let limit = |used: u64| TimeLimit {
+        started: std::time::Instant::now() - Duration::from_secs(used),
+        total: Duration::from_secs(1000),
+    };
+
+    // No time limit: answered, the model meets it, and the second Finish ends the run.
+    let h = Harness::new(vec![
+        MockTurn::tool("Bash", json!({"command": "echo ok"})),
+        finish("Wrote out.csv.", false),
+        MockTurn::tool("Bash", json!({"command": "echo fixed"})),
+        finish("Wrote out.csv with lists.", true),
+    ]);
+    let mut e = h.engine_with(unattended(None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("Write out.csv; coords_x is a list of x coordinates.")).await;
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 4, "the first Finish was answered");
+    let note = last_user_text(&reqs[2]);
+    assert!(note.contains("requirements not shown met"), "{note}");
+    assert!(note.contains("- coords_x: a list of x coordinates (evidence: the column holds tuples)"), "{note}");
+    assert!(!note.contains("out.csv exists"), "only what isn't met: {note}");
+    assert!(!note.contains("Time:"), "no limit, no clock: {note}");
+    assert_eq!(r.result.as_deref(), Some("Wrote out.csv with lists."));
+    assert_eq!(r.finish.as_ref().unwrap()["verified"], true);
+    assert_eq!(counts(&h), (1, 1), "only the claim that ended the run is recorded");
+
+    // Once a turn: a second Finish still listing it ends the run, and records verified false.
+    // With most of a time limit left, the answer gives the time used and left.
+    let h = Harness::new(vec![
+        MockTurn::tool("Bash", json!({"command": "echo ok"})),
+        finish("first", false),
+        finish("second", false),
+    ]);
+    let cfg = unattended(Some(limit(100)));
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!(h.provider.requests().len(), 3);
+    let note = last_user_text(&h.provider.requests()[2]);
+    assert!(note.contains("of 16m40s used") && note.contains("left."), "{note}");
+    assert_eq!(r.result.as_deref(), Some("second"));
+    assert_eq!(r.finish.as_ref().unwrap()["verified"], false, "the claim is no stronger than its parts");
+    assert_eq!(r.finish.as_ref().unwrap()["requirements"].as_array().unwrap().len(), 2);
+    assert_eq!(counts(&h), (1, 1));
+
+    // In the run's last fifth there is no time for another try: the first Finish ends the run.
+    // Reminders off: the same.
+    for (cfg, why) in [
+        (unattended(Some(limit(850))), "last fifth"),
+        (EngineConfig { reminders: false, ..unattended(None) }, "reminders off"),
+    ] {
+        let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "echo ok"})), finish("only", false)]);
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        let r = e.submit(prompt("task")).await;
+        assert_eq!(h.provider.requests().len(), 2, "{why}");
+        assert_eq!(r.finish.as_ref().unwrap()["verified"], false, "{why}");
+        assert_eq!(counts(&h), (1, 0), "{why}");
+    }
+
+    // Every requirement met: the Finish ends the run at once, as before the list.
+    let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "echo ok"})), finish("all met", true)]);
+    let mut e = h.engine_with(unattended(None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!(h.provider.requests().len(), 2);
+    assert_eq!(r.finish.as_ref().unwrap()["verified"], true);
 }
 
 /// Requests whose last user message holds the task-list reminder (`nudges.todoTracking`).

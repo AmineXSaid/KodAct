@@ -924,6 +924,8 @@ pub struct Engine {
     passing: Option<(String, String, usize)>,
     /// The model was told this turn where the passing version is.
     passing_told: bool,
+    /// A Finish that listed requirements it didn't show met was answered with them this turn.
+    unmet_told: bool,
     /// The limits this turn's request states (`nudges.limitVerdicts`, `nudges.staleDeliverables`).
     limits: crate::limits::Limits,
     /// A measurement that met every limit for its row, with the files the request asks for
@@ -1092,6 +1094,7 @@ impl Engine {
             constraints_told: false,
             passing: None,
             passing_told: false,
+            unmet_told: false,
             limits: Default::default(),
             unsaved: None,
             stale_told: 0,
@@ -3033,6 +3036,7 @@ impl Engine {
         self.ran_commands.clear();
         self.constraints_told = false;
         self.passing_told = false;
+        self.unmet_told = false;
         let n = &self.cfg.nudges;
         self.limits = if n.limit_verdicts || n.stale_deliverables {
             crate::limits::Limits::from_request(&prompt_text)
@@ -3821,6 +3825,11 @@ impl Engine {
                 if let Some(text) = self.verification_reminder().await {
                     notes.push(text);
                 }
+            }
+
+            // A Finish whose claim lists requirements it doesn't show met: answered with them.
+            if let Some(text) = self.unmet_note(refused) {
+                notes.push(text);
             }
 
             if !notes.is_empty() {
@@ -4898,6 +4907,38 @@ impl Engine {
                  `Checkpoint` with action `restore` and label `{label}` brings that version back."
             )
         })
+    }
+
+    /// The answer to a lone Finish whose claim lists requirements it doesn't show met (unattended
+    /// runs): once a turn, and, in a run with a time limit, only while more than its last fifth
+    /// is left (the share where the clock stops too), with the time used and left. Without a
+    /// limit there is time for another try. The claim is dropped like any sent back.
+    fn unmet_note(&mut self, refused: bool) -> Option<String> {
+        if !self.cfg.reminders || !self.cfg.autonomous || self.cfg.is_subagent || refused || self.unmet_told {
+            return None;
+        }
+        let unmet = crate::finish::unmet(self.pending_finish.as_ref()?);
+        if unmet.is_empty() {
+            return None;
+        }
+        let clock = match self.cfg.time_limit.as_ref() {
+            Some(t) if t.remaining() <= (t.total / 5).max(Duration::from_secs(60)) => return None,
+            Some(t) => {
+                let used = t.started.elapsed();
+                Some(format!(
+                    "Time: {} of {} used, {} left.",
+                    clock_time(used),
+                    clock_time(t.total),
+                    clock_time(Duration::from_secs(t.total.as_secs().saturating_sub(used.as_secs())))
+                ))
+            }
+            None => None,
+        };
+        self.unmet_told = true;
+        let listed: Vec<&str> = unmet.iter().map(|(r, _)| r.as_str()).collect();
+        self.system_event("verification", json!({"kind": "unmet_requirements", "unmet": listed}));
+        self.notice(NoticeLevel::Info, "The finish lists requirements not shown met: asking the model to meet them.");
+        Some(crate::finish::unmet_note(&unmet, clock.as_deref()))
     }
 
     /// The reminder to send before the turn may end, if one is due.

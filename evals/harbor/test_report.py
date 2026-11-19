@@ -106,6 +106,27 @@ def test_a_finish_that_says_not_verified_is_an_honest_failure(tmp_path):
     assert report.Trial(stream.parent.parent).verdict == "false success"
 
 
+def test_the_details_list_the_requirements_the_finish_claimed(tmp_path):
+    # Each requirement the Finish listed, met or not, with its evidence, next to the verifier's
+    # failures: what the agent checked shows against what the tests checked.
+    make_trial(tmp_path, "sam-cell-seg", "0.0", GPT2_REAL_FAIL, ran_tests=1)
+    stream = next(tmp_path.glob("sam-cell-seg__TEST/agent/kodact.jsonl"))
+    result = json.loads(stream.read_text())
+    result["finish"] = {"summary": "Done.", "verified": False, "requirements": [
+        {"requirement": "coords_x: a list of x coordinates", "evidence": "`python3 check.py` printed a tuple", "met": False},
+        {"requirement": "the CSV at output_path", "evidence": "", "met": True},
+    ]}
+    stream.write_text(json.dumps(result) + "\n")
+    details = report.Trial(stream.parent.parent).details()
+    assert "**Requirements the agent listed**" in details, details
+    assert "- not met: coords_x: a list of x coordinates (evidence: `python3 check.py` printed a tuple)" in details
+    assert "- met: the CSV at output_path (evidence: none given)" in details
+    # A claim without the list adds nothing.
+    result["finish"] = {"summary": "Done.", "verified": True}
+    stream.write_text(json.dumps(result) + "\n")
+    assert "Requirements the agent listed" not in report.Trial(stream.parent.parent).details()
+
+
 def test_the_details_say_what_kodacts_result_flagged(tmp_path):
     # gpt2-codegolf, 2026-11-15: 5,093 bytes for "<5000 bytes". The verdict stays a false success
     # (the result said success); the details show that KodAct's result said the limit was unmet.

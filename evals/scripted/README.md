@@ -136,3 +136,37 @@ instead of KodAct's note, and one attempt that reasons to the output limit
 instead of two. On the 2026-11-17 run each such attempt was 20k to 32k tokens
 of reasoning, minutes on that endpoint. A real-model comparison still needs
 an API key.
+
+## `openai_finish_unmet.py`: the `finish-unmet` task
+
+A model that does what 6 deep-thinking runs of 2026-11-16 and 17 did. It
+meets one requirement and checks it, then ends with Finish saying another
+isn't met, with most of its time left. Here its first report.py writes
+`count` and leaves out `total`, because the amounts are written as money
+("$1,000.00"). Told which requirements its Finish doesn't show met, it
+parses the amounts, runs report.py again and ends with each one met. With
+`met` after the port, its first Finish shows every requirement met.
+
+```bash
+python3 evals/scripted/openai_finish_unmet.py 8799 &
+export KODACT_OPENAI_BASE_URL=http://127.0.0.1:8799/v1 KODACT_OPENAI_API_KEY=sk-test0123456789
+kodact-eval run --only finish-unmet --kodact <kodact> --label <label> --repeat 3 -- --model m --permission-mode bypassPermissions
+```
+
+Measured on 2026-11-19. A is bb17595, before the change; B is the change
+that answers a Finish listing a requirement not met.
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate | 0/3 | 3/3 |
+| False-finish rate | 3/3 | 0/3 |
+| Turns per run | 3 | 6 |
+| Verification reminders per run | 0 | 1 |
+| Turns per run, `met` (every requirement met at the first Finish) | 3 | 3 |
+
+The answer costs one more round where the model's own list says a
+requirement isn't met, and nothing where it says all are. The Finish tool
+itself grows from about 262 to about 514 tokens in each request of an
+unattended run (1,046 → 2,056 characters). Whether real models list their
+requirements well, and meet more of them, still needs a real-model
+comparison.

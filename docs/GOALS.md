@@ -361,8 +361,14 @@ Each pillar lists what KodAct does about it and what shows that it works.
     check run after the last change would have failed had the work been
     wrong; a check that passes whatever was chosen verifies nothing, and the
     guess is named in the summary instead (7 of 8 pytorch-model-cli runs
-    claimed it after such checks; the 3 that were scored failed). A reply
-    without the tool ends as before;
+    claimed it after such checks; the 3 that were scored failed). The claim
+    lists the request's requirements, each with its evidence and `met`
+    (Codex's goal audit); `verified` is false while one isn't met, and the
+    first Finish of a turn that lists one, with more than the run's last
+    fifth left, is answered with them (task `finish-unmet`). In the
+    deep-thinking runs of 2026-11-16 and 17, 15 of 94 `verified` claims
+    failed their tests, most after checks of something other than what the
+    request states. A reply without the tool ends as before;
   - unattended finish checks (C21): a reply that announces a next step without
     a tool call, or ends with open todos, is sent back once or twice. In the
     quick-thinking run of 2026-10-09, gpt2-codegolf ended "success" on "Let me

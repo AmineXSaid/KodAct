@@ -2,6 +2,39 @@
 
 ## 0.1.0 (unreleased)
 
+### Finish lists each requirement with its evidence
+- **An unattended run ends by listing what the request asks for, each item
+  with the check that shows it met.** Before, its claim was one `verified`
+  flag. In the deep-thinking Terminal-Bench runs of 2026-11-16 and 17, 15 of
+  94 runs that claimed `verified` failed their tests. Most had checked
+  something other than what the request states:
+  - tuples where it asks for "a list";
+  - a function called differently from how the request describes it;
+  - a requirement it names ("satisfy NEB's requirements") that no check
+    looked at;
+  - an accuracy of 0.6219 for "at least 0.62" on a private test set.
+
+  Finish now asks, for each requirement, for a check run after the last
+  change that would have failed had the requirement not been met, run the
+  way the request describes it.
+- **`verified` can't claim more than the list shows.** It is false whenever
+  a requirement is listed as not met.
+- **A run that stops with a requirement not met gets one more try.** The
+  first Finish of a run that lists one is answered with those requirements
+  and the time used and left. This happens only while more than the last
+  fifth of `--max-time` remains, or always without a limit. 6 runs of those
+  days ended saying a requirement wasn't met; 2 still had 7 to 11 minutes
+  left.
+- **The result's `finish.requirements` carries the list,** so a script can
+  see what the model did not show met. The Harbor report shows it next to
+  the failing tests.
+
+Measured on the task `finish-unmet` with a scripted model that stops with
+one requirement not met: 0/3 before, 3/3 after, at 6 turns instead of 3. A
+run whose first Finish shows everything met costs the same 3 turns before
+and after; the Finish tool adds about 250 tokens to each request of an
+unattended run. A real-model comparison is still owed.
+
 ### A summary cut off while reasoning is finished from its own analysis
 - **The second summary attempt gets the first one's analysis.** It no
   longer gets the whole conversation again. On 2026-11-17, quick-thinking (a
