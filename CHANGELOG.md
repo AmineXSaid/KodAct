@@ -2,6 +2,20 @@
 
 ## 0.1.0 (unreleased)
 
+### Shift+Tab notes one mode; `kodact setup` is a card
+- **Cycling permission modes with Shift+Tab no longer prints a banner for
+  every mode it passes.** The status line names the mode at once; the
+  transcript gets one note, for the mode the cycle landed on, when the next
+  prompt goes out (or, mid-turn, once the cycling rests). Coming back to the
+  starting mode writes nothing.
+- **`kodact setup` is one centred card**: a stepper (Provider → Connect →
+  Model → Review), boxed fields with the cursor in them, a model list you
+  filter by typing (any other ID is offered as typed), a `/models` check that
+  no longer freezes the screen, a review before saving, and a key already in
+  the shell's environment accepted as is. Every row is cut to the card, so
+  nothing crosses its edges at any terminal size; pastes arrive as one paste,
+  and the terminal is restored however the wizard ends.
+
 ### Harbor: extra kodact flags that can't be split stop the run at once
 - **`KODACT_HARBOR_ARGS` with an unclosed quote is refused before any
   container starts.** Before, every trial crashed at its start ("No closing

@@ -103,3 +103,55 @@ async fn mouse_wheel_scrolls_the_discussion_without_changing_the_chatbox() {
         tui.wait_for("BOTTOM-OF-DISCUSSION", WAIT).unwrap_or_else(|s| panic!("did not scroll down:\n{s}"));
     assert!(bottom_screen.contains("keep-this-draft"), "draft in chatbox must stay untouched:\n{bottom_screen}");
 }
+
+/// Shift+Tab through several modes writes one note, for the mode it lands on, and only once a
+/// prompt goes out: not a banner per step of the cycle.
+#[tokio::test(flavor = "multi_thread")]
+async fn cycling_modes_leaves_one_note_in_the_transcript() {
+    let d = dirs();
+    let api = MockApi::start(vec![MockTurn::text("Noted")]).await;
+    let mut tui = Pty::spawn(&kodact_bin(), &d.cwd, &d.home, &api.url, &[], 120, 30);
+    tui.wait_for("What shall we build?", WAIT).unwrap_or_else(|s| panic!("no front page:\n{s}"));
+    for _ in 0..3 {
+        tui.keys("\x1b[Z");
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let screen = tui.screen();
+    assert_eq!(screen.matches("── ◆").count(), 0, "no banner while cycling:\n{screen}");
+    tui.keys("hi\r");
+    let screen = tui.wait_for("Noted", WAIT).unwrap_or_else(|s| panic!("no answer:\n{s}"));
+    assert_eq!(screen.matches("── ◆").count(), 1, "one note for where the cycle landed:\n{screen}");
+}
+
+/// `kodact setup` from the first key to the saved file: provider, key, model, review.
+#[tokio::test(flavor = "multi_thread")]
+async fn setup_walks_to_a_saved_settings_file() {
+    let d = dirs();
+    let mut tui = Pty::spawn(&kodact_bin(), &d.cwd, &d.home, "http://127.0.0.1:9", &["setup"], 100, 30);
+    tui.wait_for("Choose a provider", WAIT).unwrap_or_else(|s| panic!("no wizard:\n{s}"));
+    tui.keys("\r");
+    tui.wait_for("ANTHROPIC_API_KEY", WAIT).unwrap_or_else(|s| panic!("no key step:\n{s}"));
+    tui.keys("\r");
+    tui.wait_for("Paste your ANTHROPIC_API_KEY to continue", WAIT).unwrap_or_else(|s| panic!("no error:\n{s}"));
+    tui.paste("sk-ant-test-0000-1234\n");
+    let screen = tui.wait_for("21 chars", WAIT).unwrap_or_else(|s| panic!("key not taken:\n{s}"));
+    assert!(!screen.contains("sk-ant-test"), "the key is masked:\n{screen}");
+    tui.keys("\r");
+    tui.wait_for("Pick a default model", WAIT).unwrap_or_else(|s| panic!("no model step:\n{s}"));
+    tui.keys("opus");
+    tui.wait_for("Use “opus”", WAIT).unwrap_or_else(|s| panic!("no filter:\n{s}"));
+    tui.keys("\r");
+    let screen = tui.wait_for("Review & save", WAIT).unwrap_or_else(|s| panic!("no review:\n{s}"));
+    assert!(screen.contains("claude-opus-4-6") && screen.contains("••••1234"), "{screen}");
+    tui.keys("\r");
+    let end = std::time::Instant::now() + WAIT;
+    while !tui.exited() {
+        assert!(std::time::Instant::now() < end, "still running:\n{}", tui.screen());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(d.home.join(".kodact/settings.json")).unwrap()).unwrap();
+    assert_eq!(saved["model"], "claude-opus-4-6");
+    assert_eq!(saved["env"]["ANTHROPIC_API_KEY"], "sk-ant-test-0000-1234");
+}

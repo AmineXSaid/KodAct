@@ -336,6 +336,10 @@ pub struct App {
     last_ctrl_c: Option<Instant>,
     /// A short hint in the status line ("Press Ctrl-C again to exit").
     pub hint: Option<(String, Instant)>,
+    /// A mode change not yet noted in the transcript: the mode it left, and whether a turn
+    /// was running. Shift+Tab cycles through several modes; only where it lands is written,
+    /// once, when the next prompt goes out or the running turn prints again.
+    mode_note: Option<(PermissionMode, Instant, bool)>,
     /// Shift+Tab reached Dangerous and waits for `y` before turning it on.
     pub danger_armed: bool,
     /// Dangerous mode was confirmed this session (or the session was launched in it, or
@@ -453,6 +457,7 @@ impl App {
             last_esc: None,
             last_ctrl_c: None,
             hint: None,
+            mode_note: None,
             danger_armed: false,
             danger_confirmed: false,
             danger_blocked: false,
@@ -842,6 +847,10 @@ impl App {
 
     pub fn on_event(&mut self, ev: UiEvent) {
         self.dirty = true;
+        // A running turn prints again: note the mode it now runs under, once Shift+Tab rests.
+        if self.mode_note.is_some_and(|(_, at, _)| at.elapsed() >= super::render::HINT_FOR) {
+            self.note_mode();
+        }
         match ev {
             UiEvent::Engine(e) => self.on_engine(e),
             UiEvent::Ask { prompt, reply } => self.open_dialog(prompt, reply),
@@ -2202,22 +2211,13 @@ impl App {
     }
 
     fn set_mode(&mut self, mode: PermissionMode) -> Vec<Action> {
-        let m_str = mode.as_str();
-        self.status.mode = m_str.to_string();
-        self.gap();
-        let t = self.theme;
-        let mut spans = vec![
-            Span::styled("── ", t.hairline()),
-            Span::styled("◆ ", t.mode(m_str)),
-            Span::styled(format!("{} mode", mode.label()), t.mode(m_str).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" · {}", mode.short_rule()), t.subtle()),
-            Span::styled(format!(" — {}", mode.definition()), t.dim()),
-        ];
-        if self.busy {
-            spans.push(Span::styled(" (active immediately)", t.subtle()));
-        }
-        spans.push(Span::styled(" ──", t.hairline()));
-        self.pending.push(Line::from(spans));
+        let from = PermissionMode::parse(&self.status.mode).unwrap_or_default();
+        self.status.mode = mode.as_str().to_string();
+        // The status line names the mode at once; the transcript waits until the cycling stops.
+        let left = self.mode_note.map_or(from, |(left, _, _)| left);
+        let busy = self.busy || self.mode_note.is_some_and(|(_, _, b)| b);
+        self.mode_note = Some((left, Instant::now(), busy));
+        self.set_hint(&format!("{} mode · {}", mode.label(), mode.definition()));
 
         let auto_allow = match &self.dialog {
             Some(Dialog { kind: DialogKind::Permission { .. }, prompt: Some(p), .. }) => match mode {
@@ -2233,6 +2233,31 @@ impl App {
             self.answer(PermissionAnswer::Allow { updated_input: None, updated_permissions: vec![] });
         }
         vec![Action::SetMode(mode)]
+    }
+
+    /// Write the pending mode change into the transcript, once: nothing when Shift+Tab came
+    /// back to the mode it started from.
+    fn note_mode(&mut self) {
+        let Some((left, _, busy)) = self.mode_note.take() else { return };
+        let mode = PermissionMode::parse(&self.status.mode).unwrap_or_default();
+        if mode == left {
+            return;
+        }
+        let m_str = mode.as_str();
+        self.gap();
+        let t = self.theme;
+        let mut spans = vec![
+            Span::styled("── ", t.hairline()),
+            Span::styled("◆ ", t.mode(m_str)),
+            Span::styled(format!("{} mode", mode.label()), t.mode(m_str).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" · {}", mode.short_rule()), t.subtle()),
+            Span::styled(format!(" — {}", mode.definition()), t.dim()),
+        ];
+        if busy {
+            spans.push(Span::styled(" (active immediately)", t.subtle()));
+        }
+        spans.push(Span::styled(" ──", t.hairline()));
+        self.pending.push(Line::from(spans));
     }
 
     pub fn on_key(&mut self, key: KeyEvent) -> Vec<Action> {
@@ -2539,6 +2564,7 @@ impl App {
     }
 
     pub fn submit(&mut self, text: String) -> Vec<Action> {
+        self.note_mode();
         self.front = false;
         self.menu_selected = 0;
         self.menu_dismissed = false;
@@ -3478,6 +3504,9 @@ mod tests {
         a.status.mode = "default".into();
         let stab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
         assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::AcceptEdits)]);
+        assert!(a.take_pending().is_empty(), "nothing is written while Shift+Tab may still cycle");
+        assert!(a.hint.as_ref().is_some_and(|(h, _)| h.contains("Accept edits mode")));
+        a.note_mode();
         let note: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
         assert!(note.contains("── ◆ Accept edits mode"), "{note}");
         assert!(note.contains(PermissionMode::AcceptEdits.short_rule()), "{note}");
@@ -3494,9 +3523,52 @@ mod tests {
         assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::AcceptEdits)]);
         assert!(a.dialog.is_none(), "AcceptEdits auto-resolves pending Edit permission");
         assert!(matches!(rx.try_recv(), Ok(PermissionAnswer::Allow { .. })));
+        a.note_mode();
         let live_note: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
         assert!(live_note.contains("── ◆ Accept edits mode"), "{live_note}");
         assert!(live_note.contains("active immediately"), "{live_note}");
+    }
+
+    #[test]
+    fn cycling_modes_writes_only_where_it_lands() {
+        let mut a = app();
+        a.status.mode = "default".into();
+        let stab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        for _ in 0..3 {
+            a.on_key(stab);
+        }
+        assert!(a.take_pending().is_empty(), "no banner per step of the cycle");
+        let landed = PermissionMode::parse(&a.status.mode).unwrap();
+        a.submit("hi".into());
+        let text: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert_eq!(text.matches("── ◆").count(), 1, "{text}");
+        assert!(text.contains(&format!("{} mode", landed.label())), "{text}");
+
+        // Cycling all the way back to where it started writes nothing.
+        let mut b = app();
+        b.status.mode = "default".into();
+        b.on_key(stab);
+        b.set_mode(PermissionMode::Default);
+        b.note_mode();
+        assert!(b.take_pending().iter().all(|l| !l.to_string().contains("── ◆")));
+    }
+
+    #[test]
+    fn a_running_turn_notes_the_mode_once_cycling_rests() {
+        let mut a = app();
+        a.status.mode = "default".into();
+        a.busy = true;
+        a.set_mode(PermissionMode::AcceptEdits);
+        a.on_event(UiEvent::Engine(EngineEvent::Notice { level: NoticeLevel::Info, text: "x".into() }));
+        assert!(a.take_pending().iter().all(|l| !l.to_string().contains("── ◆")), "too soon: still cycling");
+        a.set_mode(PermissionMode::Plan);
+        a.mode_note.as_mut().unwrap().1 -= std::time::Duration::from_secs(3);
+        a.busy = false; // the turn may end before the note is written; the tag still says it was live
+        a.on_event(UiEvent::Engine(EngineEvent::Notice { level: NoticeLevel::Info, text: "y".into() }));
+        let text: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert_eq!(text.matches("── ◆").count(), 1, "{text}");
+        assert!(text.contains("Plan mode") && text.contains("active immediately"), "{text}");
+        assert!(a.mode_note.is_none());
     }
 
     fn prompt(tool: &str, input: Value) -> PermissionPrompt {
@@ -3926,6 +3998,7 @@ mod tests {
         let mut items = a.take_pending();
         a.busy = true;
         a.set_mode(kodact_permissions::PermissionMode::AcceptEdits);
+        a.note_mode();
         let banner = a.take_pending();
         items.push(shell);
         items.extend(diff);
