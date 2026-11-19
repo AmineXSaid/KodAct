@@ -118,6 +118,10 @@ pub enum UiEvent {
 #[derive(Debug, PartialEq)]
 pub enum Action {
     Send(String),
+    /// Send a prompt with attached images (`--image` or clipboard paste).
+    SendWithImages(String, Vec<super::clipboard::AttachedImage>),
+    /// Read an image from the system clipboard (`Ctrl+V` / `Alt+V`).
+    PasteImage,
     /// Ask the session for the picker of this command text (a second step).
     Picker(String),
     Interrupt,
@@ -404,6 +408,8 @@ pub struct App {
     pub has_code: bool,
     /// A screen or picker waiting for an open question to be answered.
     held: Option<Dialog>,
+    /// Images attached to the next prompt (`--image` or clipboard paste).
+    pub pending_images: Vec<super::clipboard::AttachedImage>,
     /// Last rendered inner text width of the input box (0 = unbounded).
     pub input_width: usize,
     /// The conversation on screen was replaced: the loop starts the screen over before it
@@ -483,6 +489,7 @@ impl App {
             has_collapsible: false,
             has_code: false,
             held: None,
+            pending_images: Vec::new(),
             input_width: 0,
             reset: None,
         }
@@ -2436,6 +2443,11 @@ impl App {
             KeyCode::Right => self.editor.right(),
             KeyCode::Home => self.editor.home(),
             KeyCode::End => self.editor.end(),
+            KeyCode::Char('v') if alt || ctrl => return vec![Action::PasteImage],
+            KeyCode::Backspace if self.editor.is_empty() && !self.pending_images.is_empty() => {
+                self.pending_images.pop();
+                self.flash_hint("Removed attached image");
+            }
             KeyCode::Backspace if alt || ctrl => self.editor.delete_word(),
             KeyCode::Backspace => self.editor.backspace(),
             KeyCode::Delete => self.editor.delete(),
@@ -2510,6 +2522,22 @@ impl App {
     }
 
     /// Send `text` as if typed (queued while a turn runs).
+    /// Show a transient status hint for `HINT_FOR` seconds.
+    pub fn flash_hint(&mut self, msg: impl Into<String>) {
+        self.hint = Some((msg.into(), Instant::now()));
+    }
+
+    /// Attach an image to the next prompt (enforcing `MAX_IMAGES`).
+    pub fn attach_image(&mut self, img: super::clipboard::AttachedImage) -> Result<(), String> {
+        if self.pending_images.len() >= super::clipboard::MAX_IMAGES {
+            return Err(format!("at most {} images can be attached per prompt", super::clipboard::MAX_IMAGES));
+        }
+        let label = img.pill_label(self.pending_images.len() + 1);
+        self.pending_images.push(img);
+        self.flash_hint(format!("Attached {label}"));
+        Ok(())
+    }
+
     pub fn submit(&mut self, text: String) -> Vec<Action> {
         self.front = false;
         self.menu_selected = 0;
@@ -2536,6 +2564,14 @@ impl App {
             }
             self.queued.push_back(text);
             return vec![];
+        }
+        if !self.pending_images.is_empty() {
+            let imgs = std::mem::take(&mut self.pending_images);
+            let badges: Vec<String> =
+                imgs.iter().enumerate().map(|(i, img)| format!("[{}]", img.pill_label(i + 1))).collect();
+            let sent = self.start(text);
+            self.pending.push(Line::from(Span::styled(format!("  {}", badges.join(" ")), self.theme.dim())));
+            return vec![Action::SendWithImages(sent, imgs)];
         }
         vec![Action::Send(self.start(text))]
     }

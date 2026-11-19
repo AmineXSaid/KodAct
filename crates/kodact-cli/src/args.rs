@@ -212,6 +212,9 @@ pub struct Opts {
     /// Minimal mode: no hooks or memory files
     #[arg(long)]
     pub bare: bool,
+    /// Attach an image file to the prompt (repeatable, up to 4 images, max 5 MB each)
+    #[arg(long = "image", value_name = "PATH")]
+    pub images: Vec<PathBuf>,
     /// Start with all customizations disabled
     #[arg(long = "safe-mode")]
     pub safe_mode: bool,

@@ -23,6 +23,8 @@ use super::app::{CommandInfo, StatusView, UiEvent};
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToSession {
     Input(String),
+    /// A prompt carrying attached images alongside text.
+    InputBlocks(kodact_types::MessageContent),
     /// The picker for a command's second step (`/rewind 2`).
     Picker(String),
     Exit,
@@ -576,6 +578,13 @@ pub async fn run(mut driver: Driver, mut rx: mpsc::UnboundedReceiver<ToSession>,
                         let _ = ui.send(UiEvent::Exit);
                         break;
                     }
+                }
+            }
+            Some(ToSession::InputBlocks(content)) => {
+                let input = driver.input(content, &mut report);
+                if while_busy(input, &view, &mut rx, &ui, &mut queue).await == Flow::Exit {
+                    let _ = ui.send(UiEvent::Exit);
+                    break;
                 }
             }
             Some(ToSession::Exit) | None => break,

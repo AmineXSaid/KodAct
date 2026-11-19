@@ -17,6 +17,7 @@
 
 pub mod app;
 pub mod brand;
+pub mod clipboard;
 pub mod editor;
 pub mod format;
 pub mod front;
@@ -1134,10 +1135,29 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
         let _ = append_history(&hist_path, &cwd, &text);
         let _ = to.send(ToSession::Input(text));
     };
+    let send_with_images =
+        |text: String, imgs: Vec<clipboard::AttachedImage>, to: &mpsc::UnboundedSender<ToSession>| {
+            let _ = append_history(&hist_path, &cwd, &text);
+            let mut blocks: Vec<kodact_types::ContentBlock> = imgs.iter().map(|i| i.to_content_block()).collect();
+            if !text.is_empty() {
+                blocks.push(kodact_types::ContentBlock::text(text));
+            }
+            let _ = to.send(ToSession::InputBlocks(kodact_types::MessageContent::Blocks(blocks)));
+        };
+    for p in o.images.iter().take(clipboard::MAX_IMAGES) {
+        match clipboard::AttachedImage::from_path(p) {
+            Ok(img) => {
+                let _ = app.attach_image(img);
+            }
+            Err(e) => app.flash_hint(e),
+        }
+    }
     if let Some(p) = prompt.filter(|p| !p.trim().is_empty()) {
         for a in app.submit(p) {
-            if let Action::Send(t) = a {
-                send(t, &to_session);
+            match a {
+                Action::Send(t) => send(t, &to_session),
+                Action::SendWithImages(t, imgs) => send_with_images(t, imgs, &to_session),
+                _ => {}
             }
         }
     }
@@ -1322,6 +1342,20 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                                     }
                                     send(t, &to_session)
                                 }
+                                Action::SendWithImages(t, imgs) => {
+                                    if let Display::Full(f) = &mut screen {
+                                        f.scroll = 0;
+                                    }
+                                    send_with_images(t, imgs, &to_session)
+                                }
+                                Action::PasteImage => match clipboard::read_clipboard_image() {
+                                    Ok(img) => {
+                                        if let Err(e) = app.attach_image(img) {
+                                            app.flash_hint(e);
+                                        }
+                                    }
+                                    Err(e) => app.flash_hint(e),
+                                },
                                 Action::Picker(t) => {
                                     let _ = to_session.send(ToSession::Picker(t));
                                 }
@@ -1369,6 +1403,20 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                                 }
                                 send(t, &to_session)
                             }
+                            Action::SendWithImages(t, imgs) => {
+                                if let Display::Full(f) = &mut screen {
+                                    f.scroll = 0;
+                                }
+                                send_with_images(t, imgs, &to_session)
+                            }
+                            Action::PasteImage => match clipboard::read_clipboard_image() {
+                                Ok(img) => {
+                                    if let Err(e) = app.attach_image(img) {
+                                        app.flash_hint(e);
+                                    }
+                                }
+                                Err(e) => app.flash_hint(e),
+                            },
                             Action::Picker(t) => {
                                 let _ = to_session.send(ToSession::Picker(t));
                             }

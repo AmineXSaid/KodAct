@@ -453,6 +453,23 @@ async fn run_print(cli_prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
             };
             match input {
                 Some(Input::User(content)) => {
+                    let content = if !o.images.is_empty() {
+                        if o.images.len() > tui::clipboard::MAX_IMAGES {
+                            return Err(Fail::usage(format!(
+                                "at most {} --image flags are allowed per prompt",
+                                tui::clipboard::MAX_IMAGES
+                            )));
+                        }
+                        let mut blocks = Vec::new();
+                        for p in &o.images {
+                            let img = tui::clipboard::AttachedImage::from_path(p).map_err(Fail::usage)?;
+                            blocks.push(img.to_content_block());
+                        }
+                        blocks.extend(content.into_blocks());
+                        kodact_types::MessageContent::Blocks(blocks)
+                    } else {
+                        content
+                    };
                     let mut flow = driver.input(content, &mut |r| rep.report(r)).await;
                     // Messages sent for the turn's next step that it ended before reaching: they
                     // run now, as one turn, in the order sent (the turn refuses new ones once over).

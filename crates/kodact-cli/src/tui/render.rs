@@ -817,7 +817,19 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
         }
     };
     let (top, bottom) = (edge('╭', '╮'), edge('╰', '╯'));
-    let (input_rows, cursor) = if app.dialog.is_none() { input(app, inner) } else { (vec![], (0, 0)) };
+    let (mut input_rows, mut cursor) = if app.dialog.is_none() { input(app, inner) } else { (vec![], (0, 0)) };
+    if app.dialog.is_none() && !app.pending_images.is_empty() {
+        let mut pills: Vec<Span<'static>> = vec![Span::raw("  ")];
+        for (i, img) in app.pending_images.iter().enumerate() {
+            if i > 0 {
+                pills.push(Span::raw(" "));
+            }
+            pills.push(Span::styled(format!("[{}]", img.pill_label(i + 1)), t.teal()));
+        }
+        pills.push(Span::styled("  (Backspace removes)", t.dim()));
+        input_rows.insert(0, Line::from(pills));
+        cursor.1 = cursor.1.saturating_add(1);
+    }
     let input_rows: Vec<Line<'static>> = input_rows
         .into_iter()
         .map(|row| {
