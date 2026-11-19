@@ -1,0 +1,7 @@
+kodact: warning: KodAct doesn't know the model quick-thinking: it assumes a 1,000,000-token context window and 32,000 output tokens, and has no price for it. Set its limits with "modelLimits" in settings (and its price with "modelPricing"), or KODACT_CONTEXT_WINDOW for every unknown model.
+quick-thinking's endpoint gives its context window as 100000 tokens: using it from now on.
+The reply was repeating itself: stopped, and the model was told.
+Automatic compaction failed: network error: error decoding response body
+Automatic compaction failed: network error: error decoding response body
+Automatic compaction failed: interrupted
+Reached the time limit (--max-time): the run stopped; the work done so far is left as it is.

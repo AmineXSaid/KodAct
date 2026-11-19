@@ -1,0 +1,141 @@
+{
+    "id": "05c2104a-edf1-43d1-bb24-5deec9fd94d0",
+    "task_name": "pypi-server",
+    "trial_name": "pypi-server__KNnT2kj",
+    "trial_uri": "file:///home/kodact/KodAct/jobs/kodact-full-deep-thinking-df0446d-hostca-uvcache-pipcache-aptcache-maxout65536-carry-n-constraints.clock-20261116-175934/pypi-server__KNnT2kj",
+    "task_id": {
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "path": "pypi-server"
+    },
+    "source": "terminal-bench",
+    "task_checksum": "5c5f465d60305289c69ece744afc1064deef83b0ae79743fbc6e74428ab51d63",
+    "config": {
+        "task": {
+            "path": "pypi-server",
+            "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+            "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": "terminal-bench"
+        },
+        "trial_name": "pypi-server__KNnT2kj",
+        "trials_dir": "jobs/kodact-full-deep-thinking-df0446d-hostca-uvcache-pipcache-aptcache-maxout65536-carry-n-constraints.clock-20261116-175934",
+        "install_only": false,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": null,
+        "verifier_timeout_multiplier": 3.0,
+        "agent_setup_timeout_multiplier": 3.0,
+        "environment_build_timeout_multiplier": 3.0,
+        "agent": {
+            "name": "kodact_agent:KodAct",
+            "import_path": null,
+            "model_name": "deep-thinking",
+            "base_url": null,
+            "model_api_key_name": null,
+            "model_api_format": null,
+            "skip_model_parsing": false,
+            "n_concurrent": null,
+            "concurrency_group": null,
+            "skills": [],
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "resume_trajectory": false,
+            "load_trajectory": null,
+            "extra_allowed_hosts": [],
+            "kwargs": {},
+            "mcp_servers": []
+        },
+        "user_agent": null,
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "stream": false,
+            "cpu_enforcement_policy": "auto",
+            "memory_enforcement_policy": "auto",
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "override_tpu": null,
+            "mounts": null,
+            "extra_docker_compose": [],
+            "kwargs": {},
+            "extra_allowed_hosts": []
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "env": {
+                "SSL_CERT_FILE": "/usr/local/share/kodact/ca-bundle.pem",
+                "REQUESTS_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+                "CURL_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+                "PIP_CERT": "/usr/local/share/kodact/ca-bundle.pem",
+                "GIT_SSL_CAINFO": "/usr/local/share/kodact/ca-bundle.pem",
+                "NODE_EXTRA_CA_CERTS": "/usr/local/share/kodact/ca-bundle.pem",
+                "UV_NATIVE_TLS": "1",
+                "UV_SYSTEM_CERTS": "1",
+                "UV_CACHE_DIR": "/usr/local/share/kodact/uv-cache",
+                "UV_HTTP_TIMEOUT": "600"
+            },
+            "disable": false
+        },
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "extra_instructions": [],
+        "job_id": "0ad64a2a-f7cc-48cc-9bf4-3f324d883d3d",
+        "source_trial": null
+    },
+    "agent_info": {
+        "name": "kodact",
+        "version": "kodact 0.1.0 (KodAct)",
+        "model_info": {
+            "name": "deep-thinking",
+            "provider": null
+        }
+    },
+    "agent_result": {
+        "n_input_tokens": 104927,
+        "n_cache_tokens": 100224,
+        "n_output_tokens": 3341,
+        "cost_usd": 0.0,
+        "model_usage": null,
+        "rollout_details": null,
+        "metadata": {
+            "num_turns": 10,
+            "subtype": "success",
+            "stop_reason": "tool_use"
+        }
+    },
+    "verifier_result": {
+        "rewards": {
+            "reward": 1.0
+        }
+    },
+    "verifier_environment_mode": "shared",
+    "exception_info": null,
+    "started_at": "2026-11-16T18:43:40.942867Z",
+    "finished_at": "2026-11-16T18:47:56.432787Z",
+    "environment_setup": {
+        "started_at": "2026-11-16T18:43:40.977041Z",
+        "finished_at": "2026-11-16T18:43:49.186026Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-11-16T18:43:49.186086Z",
+        "finished_at": "2026-11-16T18:44:18.743319Z"
+    },
+    "agent_execution": {
+        "started_at": "2026-11-16T18:44:18.743466Z",
+        "finished_at": "2026-11-16T18:46:39.911329Z"
+    },
+    "verifier": {
+        "started_at": "2026-11-16T18:46:43.464431Z",
+        "finished_at": "2026-11-16T18:47:43.153032Z"
+    },
+    "step_results": null
+}

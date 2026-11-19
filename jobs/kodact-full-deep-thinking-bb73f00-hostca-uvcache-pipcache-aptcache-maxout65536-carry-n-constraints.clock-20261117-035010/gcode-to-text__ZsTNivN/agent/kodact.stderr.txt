@@ -1,0 +1,1 @@
+Reached the time limit (--max-time): the run stopped; the work done so far is left as it is.

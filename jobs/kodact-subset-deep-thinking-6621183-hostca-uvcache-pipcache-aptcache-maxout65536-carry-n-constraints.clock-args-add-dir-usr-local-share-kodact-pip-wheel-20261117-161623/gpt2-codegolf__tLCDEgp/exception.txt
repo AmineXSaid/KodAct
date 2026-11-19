@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/trial/single_step.py", line 76, in _run_agent
+    await self._run_agent_phase(
+  File "/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/trial/trial.py", line 769, in _run_agent_phase
+    await asyncio.wait_for(
+  File "/home/kodact/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/agents/installed/base.py", line 194, in wrapper
+    return await fn(self, instruction, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kodact/KodAct/evals/harbor/kodact_agent.py", line 535, in run
+    await self.exec_as_agent(environment, command=command, env=env)
+  File "/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/agents/installed/base.py", line 1081, in exec_as_agent
+    return await self._exec(
+           ^^^^^^^^^^^^^^^^^
+  File "/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/agents/installed/base.py", line 1048, in _exec
+    raise self._classify_exec_error(command, result)
+harbor.agents.installed.base.NonZeroAgentExitCodeError: Command failed (exit 2): mkdir -p /logs/agent; printf "%s" "$KODACT_TASK" > /logs/agent/instruction.txt; printf '%s\n' '{"harness": "kodact", "model": "deep-thinking", "served_model": "deepseek-v4-flash", "served_window": "524288", "flags": ["--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", "--autonomous", "--model", "deep-thinking", "--max-time", "870", "--settings", "{\"modelLimits\": {\"deep-thinking\": {\"maxOutputTokens\": 65536}}}", "--add-dir", "/usr/local/share/kodact/pip-wheelhouse", "--add-dir", "/usr/local/share/kodact/pip-wheelhouse/pip-wheelhouse"], "time_limit_s": 900.0, "settings": {"KODACT_CARRY_REASONING": "1", "KODACT_CONTEXT_WINDOW": "524288", "KODACT_MODEL": "deep-thinking", "KODACT_NUDGES": "constraints,clock", "KODACT_OPENAI_API_KEY": "<set>", "KODACT_OPENAI_BASE_URL": "https://gpt.technica-engineering.net/api/v1", "PIP_DEFAULT_TIMEOUT": "600", "PIP_FIND_LINKS": "/usr/local/share/kodact/pip-wheelhouse", "PIP_RETRIES": "10"}}' > /logs/agent/run.json; /usr/local/bin/kodact -p "$KODACT_TASK" --dangerously-skip-permissions --output-format stream-json --verbose --autonomous --model deep-thinking --max-time 870 --settings '{"modelLimits": {"deep-thinking": {"maxOutputTokens": 65536}}}' --add-dir /usr/local/share/kodact/pip-wheelhouse --add-dir /usr/local/share/kodact/pip-wheelhouse/pip-wheelhouse > /logs/agent/kodact.jsonl 2> /logs/agent/kodact.stderr.txt
+stdout: None
+stderr: None

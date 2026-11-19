@@ -1,0 +1,65 @@
+{
+    "results": {
+        "tool": {
+            "name": "pytest",
+            "version": "8.4.1"
+        },
+        "summary": {
+            "tests": 5,
+            "passed": 5,
+            "failed": 0,
+            "skipped": 0,
+            "pending": 0,
+            "other": 0,
+            "start": 1794914607.533394,
+            "stop": 1794914611.8170376
+        },
+        "tests": [
+            {
+                "name": "test_outputs.py::test_example_video_exists",
+                "status": "passed",
+                "duration": 0.0005470929900184274,
+                "start": 1794914607.5878098,
+                "stop": 1794914607.588633,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_test_video_exists",
+                "status": "passed",
+                "duration": 0.00034551206044852734,
+                "start": 1794914607.5888386,
+                "stop": 1794914607.5893118,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_jump_analyzer_example_video",
+                "status": "passed",
+                "duration": 1.6468946819659323,
+                "start": 1794914607.589482,
+                "stop": 1794914609.236557,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_jump_analyzer_test_video",
+                "status": "passed",
+                "duration": 2.5749761560582556,
+                "start": 1794914609.2367716,
+                "stop": 1794914611.8120074,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_jump_analyzer_imports",
+                "status": "passed",
+                "duration": 0.004495368979405612,
+                "start": 1794914611.8121965,
+                "stop": 1794914611.81686,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            }
+        ]
+    }
+}

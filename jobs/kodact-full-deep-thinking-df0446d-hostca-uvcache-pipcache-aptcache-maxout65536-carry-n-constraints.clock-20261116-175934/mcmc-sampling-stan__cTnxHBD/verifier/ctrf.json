@@ -1,0 +1,77 @@
+{
+    "results": {
+        "tool": {
+            "name": "pytest",
+            "version": "8.3.4"
+        },
+        "summary": {
+            "tests": 6,
+            "passed": 5,
+            "failed": 1,
+            "skipped": 0,
+            "pending": 0,
+            "other": 0,
+            "start": 1794867067.2896755,
+            "stop": 1794868159.432105
+        },
+        "tests": [
+            {
+                "name": "test_outputs.py::test_rstan_package_installed",
+                "status": "passed",
+                "duration": 5.074404415034223,
+                "start": 1794867067.3973782,
+                "stop": 1794867072.4725196,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_hierarchical_model_implemented",
+                "status": "failed",
+                "raw_status": "call_failed",
+                "duration": 180.13140740105882,
+                "start": 1794867072.4730337,
+                "stop": 1794867252.9769375,
+                "retries": 0,
+                "file_path": "test_outputs.py",
+                "trace": "def test_hierarchical_model_implemented():\n        \"\"\"Test that hierarchical Bayesian model structure is implemented\"\"\"\n        stan_model_path = \"/app/hierarchical_model.stan\"\n        assert os.path.exists(stan_model_path), (\n            f\"Stan model file not found at {stan_model_path}\"\n        )\n        # Check that model can be parsed by Stan\n        try:\n            r_code = f\"\"\"\n            library(rstan)\n            model_code <- readLines('{stan_model_path}')\n            # Try to parse the model to validate syntax\n            model <- stan_model(model_code=paste(model_code, collapse='\\\\n'))\n            cat('Model structure valid')\n            \"\"\"\n    \n>           result = subprocess.run(\n                [\"R\", \"--slave\", \"-e\", r_code], capture_output=True, text=True, timeout=180\n            )\n\ntest_outputs.py:45: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n/root/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/subprocess.py:556: in run\n    stdout, stderr = process.communicate(input, timeout=timeout)\n/root/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/subprocess.py:1222: in communicate\n    stdout, stderr = self._communicate(input, endtime, timeout)\n/root/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/subprocess.py:2129: in _communicate\n    self._check_timeout(endtime, orig_timeout, stdout, stderr)\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <Popen: returncode: -9 args: ['R', '--slave', '-e', \"\\n        library(rstan...>\nendtime = 472252.278899712, orig_timeout = 180, stdout_seq = []\nstderr_seq = [b'Loading required package: StanHeaders\\n', b'\\nrstan version 2.32.7 (Stan version 2.39.0)\\n\\n', b'For execution on a..._sum()` or `map_rect()` Stan functions,\\nchange `threads_per_chain` option:\\nrstan_options(threads_per_chain = 1)\\n\\n']\nskip_check_and_raise = False\n\n    def _check_timeout(self, endtime, orig_timeout, stdout_seq, stderr_seq,\n                       skip_check_and_raise=False):\n        \"\"\"Convenience for checking if a timeout has expired.\"\"\"\n        if endtime is None:\n            return\n        if skip_check_and_raise or _time() > endtime:\n>           raise TimeoutExpired(\n                    self.args, orig_timeout,\n                    output=b''.join(stdout_seq) if stdout_seq else None,\n                    stderr=b''.join(stderr_seq) if stderr_seq else None)\nE           subprocess.TimeoutExpired: Command '['R', '--slave', '-e', \"\\n        library(rstan)\\n        model_code <- readLines('/app/hierarchical_model.stan')\\n        # Try to parse the model to validate syntax\\n        model <- stan_model(model_code=paste(model_code, collapse='\\\\n'))\\n        cat('Model structure valid')\\n        \"]' timed out after 180 seconds\n\n/root/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/subprocess.py:1269: TimeoutExpired\n\nDuring handling of the above exception, another exception occurred:\n\n    def test_hierarchical_model_implemented():\n        \"\"\"Test that hierarchical Bayesian model structure is implemented\"\"\"\n        stan_model_path = \"/app/hierarchical_model.stan\"\n        assert os.path.exists(stan_model_path), (\n            f\"Stan model file not found at {stan_model_path}\"\n        )\n        # Check that model can be parsed by Stan\n        try:\n            r_code = f\"\"\"\n            library(rstan)\n            model_code <- readLines('{stan_model_path}')\n            # Try to parse the model to validate syntax\n            model <- stan_model(model_code=paste(model_code, collapse='\\\\n'))\n            cat('Model structure valid')\n            \"\"\"\n    \n            result = subprocess.run(\n                [\"R\", \"--slave\", \"-e\", r_code], capture_output=True, text=True, timeout=180\n            )\n    \n            assert result.returncode == 0, (\n                f\"Stan model has syntax errors or invalid structure: {result.stderr}\"\n            )\n    \n        except subprocess.TimeoutExpired:\n>           assert False, \"Timeout while validating Stan model structure\"\nE           AssertionError: Timeout while validating Stan model structure\nE           assert False\n\ntest_outputs.py:54: AssertionError",
+                "message": "The test failed in the call phase due to an assertion error"
+            },
+            {
+                "name": "test_outputs.py::test_r_script_created_and_used_rstan",
+                "status": "passed",
+                "duration": 380.64104975992814,
+                "start": 1794867252.9778202,
+                "stop": 1794867633.6198967,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_posterior_alpha_estimation",
+                "status": "passed",
+                "duration": 0.002998827025294304,
+                "start": 1794867633.6212008,
+                "stop": 1794867633.6246028,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_posterior_beta_estimation",
+                "status": "passed",
+                "duration": 0.0015277790371328592,
+                "start": 1794867633.6249735,
+                "stop": 1794867633.6268623,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_stan_model_sampling",
+                "status": "passed",
+                "duration": 525.7419034860213,
+                "start": 1794867633.6272037,
+                "stop": 1794868159.424552,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            }
+        ]
+    }
+}

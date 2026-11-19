@@ -1,0 +1,146 @@
+{
+    "id": "d1c20857-ad85-4be5-ada7-c62479a6955e",
+    "task_name": "caffe-cifar-10",
+    "trial_name": "caffe-cifar-10__bHwydgq",
+    "trial_uri": "file:///home/kodact/KodAct/jobs/kodact-full-deep-thinking-bb73f00-hostca-uvcache-pipcache-aptcache-maxout65536-carry-n-constraints.clock-20261117-035010/caffe-cifar-10__bHwydgq",
+    "task_id": {
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "path": "caffe-cifar-10"
+    },
+    "source": "terminal-bench",
+    "task_checksum": "69e68a75ace210a7fdbce0d1605c0d530a7b5119791d91c6786f84313b30fc3a",
+    "config": {
+        "task": {
+            "path": "caffe-cifar-10",
+            "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+            "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": "terminal-bench"
+        },
+        "trial_name": "caffe-cifar-10__bHwydgq",
+        "trials_dir": "jobs/kodact-full-deep-thinking-bb73f00-hostca-uvcache-pipcache-aptcache-maxout65536-carry-n-constraints.clock-20261117-035010",
+        "install_only": false,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": null,
+        "verifier_timeout_multiplier": 3.0,
+        "agent_setup_timeout_multiplier": 3.0,
+        "environment_build_timeout_multiplier": 3.0,
+        "agent": {
+            "name": "kodact_agent:KodAct",
+            "import_path": null,
+            "model_name": "deep-thinking",
+            "base_url": null,
+            "model_api_key_name": null,
+            "model_api_format": null,
+            "skip_model_parsing": false,
+            "n_concurrent": null,
+            "concurrency_group": null,
+            "skills": [],
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "resume_trajectory": false,
+            "load_trajectory": null,
+            "extra_allowed_hosts": [],
+            "kwargs": {},
+            "mcp_servers": []
+        },
+        "user_agent": null,
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "stream": false,
+            "cpu_enforcement_policy": "auto",
+            "memory_enforcement_policy": "auto",
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "override_tpu": null,
+            "mounts": null,
+            "extra_docker_compose": [],
+            "kwargs": {},
+            "extra_allowed_hosts": []
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "env": {
+                "SSL_CERT_FILE": "/usr/local/share/kodact/ca-bundle.pem",
+                "REQUESTS_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+                "CURL_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+                "PIP_CERT": "/usr/local/share/kodact/ca-bundle.pem",
+                "GIT_SSL_CAINFO": "/usr/local/share/kodact/ca-bundle.pem",
+                "NODE_EXTRA_CA_CERTS": "/usr/local/share/kodact/ca-bundle.pem",
+                "UV_NATIVE_TLS": "1",
+                "UV_SYSTEM_CERTS": "1",
+                "UV_CACHE_DIR": "/usr/local/share/kodact/uv-cache",
+                "UV_HTTP_TIMEOUT": "600"
+            },
+            "disable": false
+        },
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "extra_instructions": [],
+        "job_id": "46a3c6fc-fed7-49f0-9291-dd1f2e75768d",
+        "source_trial": null
+    },
+    "agent_info": {
+        "name": "kodact",
+        "version": "kodact 0.1.0 (KodAct)",
+        "model_info": {
+            "name": "deep-thinking",
+            "provider": null
+        }
+    },
+    "agent_result": {
+        "n_input_tokens": 1493168,
+        "n_cache_tokens": 1468992,
+        "n_output_tokens": 30088,
+        "cost_usd": 0.0,
+        "model_usage": null,
+        "rollout_details": null,
+        "metadata": {
+            "num_turns": 47,
+            "subtype": "error_during_execution",
+            "stop_reason": "max_time"
+        }
+    },
+    "verifier_result": {
+        "rewards": {
+            "reward": 0.0
+        }
+    },
+    "verifier_environment_mode": "shared",
+    "exception_info": {
+        "exception_type": "NonZeroAgentExitCodeError",
+        "exception_message": "Command failed (exit 1): mkdir -p /logs/agent; printf \"%s\" \"$KODACT_TASK\" > /logs/agent/instruction.txt; printf '%s\\n' '{\"harness\": \"kodact\", \"model\": \"deep-thinking\", \"served_model\": \"deepseek-v4-flash\", \"served_window\": \"524288\", \"flags\": [\"--dangerously-skip-permissions\", \"--output-format\", \"stream-json\", \"--verbose\", \"--autonomous\", \"--model\", \"deep-thinking\", \"--max-time\", \"1170\", \"--settings\", \"{\\\"modelLimits\\\": {\\\"deep-thinking\\\": {\\\"maxOutputTokens\\\": 65536}}}\"], \"time_limit_s\": 1200.0, \"settings\": {\"KODACT_CARRY_REASONING\": \"1\", \"KODACT_CONTEXT_WINDOW\": \"524288\", \"KODACT_MODEL\": \"deep-thinking\", \"KODACT_NUDGES\": \"constraints,clock\", \"KODACT_OPENAI_API_KEY\": \"<set>\", \"KODACT_OPENAI_BASE_URL\": \"https://gpt.technica-engineering.net/api/v1\", \"PIP_DEFAULT_TIMEOUT\": \"600\", \"PIP_FIND_LINKS\": \"/usr/local/share/kodact/pip-wheelhouse\", \"PIP_RETRIES\": \"10\"}}' > /logs/agent/run.json; /usr/local/bin/kodact -p \"$KODACT_TASK\" --dangerously-skip-permissions --output-format stream-json --verbose --autonomous --model deep-thinking --max-time 1170 --settings '{\"modelLimits\": {\"deep-thinking\": {\"maxOutputTokens\": 65536}}}' > /logs/agent/kodact.jsonl 2> /logs/agent/kodact.stderr.txt\nstdout: None\nstderr: None",
+        "exception_traceback": "Traceback (most recent call last):\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/trial/single_step.py\", line 76, in _run_agent\n    await self._run_agent_phase(\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/trial/trial.py\", line 769, in _run_agent_phase\n    await asyncio.wait_for(\n  File \"/home/kodact/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/asyncio/tasks.py\", line 520, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/agents/installed/base.py\", line 194, in wrapper\n    return await fn(self, instruction, *args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/KodAct/evals/harbor/kodact_agent.py\", line 535, in run\n    await self.exec_as_agent(environment, command=command, env=env)\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/agents/installed/base.py\", line 1081, in exec_as_agent\n    return await self._exec(\n           ^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/agents/installed/base.py\", line 1048, in _exec\n    raise self._classify_exec_error(command, result)\nharbor.agents.installed.base.NonZeroAgentExitCodeError: Command failed (exit 1): mkdir -p /logs/agent; printf \"%s\" \"$KODACT_TASK\" > /logs/agent/instruction.txt; printf '%s\\n' '{\"harness\": \"kodact\", \"model\": \"deep-thinking\", \"served_model\": \"deepseek-v4-flash\", \"served_window\": \"524288\", \"flags\": [\"--dangerously-skip-permissions\", \"--output-format\", \"stream-json\", \"--verbose\", \"--autonomous\", \"--model\", \"deep-thinking\", \"--max-time\", \"1170\", \"--settings\", \"{\\\"modelLimits\\\": {\\\"deep-thinking\\\": {\\\"maxOutputTokens\\\": 65536}}}\"], \"time_limit_s\": 1200.0, \"settings\": {\"KODACT_CARRY_REASONING\": \"1\", \"KODACT_CONTEXT_WINDOW\": \"524288\", \"KODACT_MODEL\": \"deep-thinking\", \"KODACT_NUDGES\": \"constraints,clock\", \"KODACT_OPENAI_API_KEY\": \"<set>\", \"KODACT_OPENAI_BASE_URL\": \"https://gpt.technica-engineering.net/api/v1\", \"PIP_DEFAULT_TIMEOUT\": \"600\", \"PIP_FIND_LINKS\": \"/usr/local/share/kodact/pip-wheelhouse\", \"PIP_RETRIES\": \"10\"}}' > /logs/agent/run.json; /usr/local/bin/kodact -p \"$KODACT_TASK\" --dangerously-skip-permissions --output-format stream-json --verbose --autonomous --model deep-thinking --max-time 1170 --settings '{\"modelLimits\": {\"deep-thinking\": {\"maxOutputTokens\": 65536}}}' > /logs/agent/kodact.jsonl 2> /logs/agent/kodact.stderr.txt\nstdout: None\nstderr: None\n",
+        "occurred_at": "2026-11-17T05:59:54.377923Z"
+    },
+    "started_at": "2026-11-17T05:40:08.597970Z",
+    "finished_at": "2026-11-17T06:01:44.521796Z",
+    "environment_setup": {
+        "started_at": "2026-11-17T05:40:08.600681Z",
+        "finished_at": "2026-11-17T05:40:10.718920Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-11-17T05:40:10.718944Z",
+        "finished_at": "2026-11-17T05:40:21.766720Z"
+    },
+    "agent_execution": {
+        "started_at": "2026-11-17T05:40:21.766803Z",
+        "finished_at": "2026-11-17T05:59:54.318850Z"
+    },
+    "verifier": {
+        "started_at": "2026-11-17T05:59:55.941325Z",
+        "finished_at": "2026-11-17T06:01:31.673442Z"
+    },
+    "step_results": null
+}

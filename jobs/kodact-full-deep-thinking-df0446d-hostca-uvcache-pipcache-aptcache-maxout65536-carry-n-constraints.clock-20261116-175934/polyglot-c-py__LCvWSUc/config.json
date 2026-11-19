@@ -1,0 +1,32 @@
+{
+    "task": {
+        "path": "polyglot-c-py",
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "source": "terminal-bench"
+    },
+    "trial_name": "polyglot-c-py__LCvWSUc",
+    "trials_dir": "jobs/kodact-full-deep-thinking-df0446d-hostca-uvcache-pipcache-aptcache-maxout65536-carry-n-constraints.clock-20261116-175934",
+    "verifier_timeout_multiplier": 3.0,
+    "agent_setup_timeout_multiplier": 3.0,
+    "environment_build_timeout_multiplier": 3.0,
+    "agent": {
+        "name": "kodact_agent:KodAct",
+        "model_name": "deep-thinking"
+    },
+    "verifier": {
+        "env": {
+            "SSL_CERT_FILE": "/usr/local/share/kodact/ca-bundle.pem",
+            "REQUESTS_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+            "CURL_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+            "PIP_CERT": "/usr/local/share/kodact/ca-bundle.pem",
+            "GIT_SSL_CAINFO": "/usr/local/share/kodact/ca-bundle.pem",
+            "NODE_EXTRA_CA_CERTS": "/usr/local/share/kodact/ca-bundle.pem",
+            "UV_NATIVE_TLS": "1",
+            "UV_SYSTEM_CERTS": "1",
+            "UV_CACHE_DIR": "/usr/local/share/kodact/uv-cache",
+            "UV_HTTP_TIMEOUT": "600"
+        }
+    },
+    "job_id": "0ad64a2a-f7cc-48cc-9bf4-3f324d883d3d"
+}

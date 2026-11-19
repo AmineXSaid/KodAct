@@ -1,0 +1,2 @@
+The endpoint is limiting requests (HTTP 429). KodAct now sends at most 1 at a time and retries in 2s.
+Reached the time limit (--max-time): the run stopped; the work done so far is left as it is.

@@ -1,0 +1,43 @@
+{
+    "id": "d007b0f2-a80b-4cd8-8a30-f95b03baa0e5",
+    "started_at": "2026-11-16T17:44:45.349875",
+    "updated_at": "2026-11-16T18:08:50.733403",
+    "finished_at": "2026-11-16T18:08:50.733403",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 1,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "kodact__deep-thinking__terminal-bench": {
+                "n_trials": 1,
+                "n_errors": 1,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "0.0": [
+                            "gpt2-codegolf__W9RMZRM"
+                        ]
+                    }
+                },
+                "exception_stats": {
+                    "NonZeroAgentExitCodeError": [
+                        "gpt2-codegolf__W9RMZRM"
+                    ]
+                }
+            }
+        },
+        "n_input_tokens": 369815,
+        "n_cache_tokens": 349120,
+        "n_output_tokens": 29734,
+        "cost_usd": 0.0
+    }
+}

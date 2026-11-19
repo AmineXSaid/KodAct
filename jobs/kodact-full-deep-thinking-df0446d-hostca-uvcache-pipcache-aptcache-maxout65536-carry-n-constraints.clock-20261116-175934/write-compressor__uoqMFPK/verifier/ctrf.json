@@ -1,0 +1,50 @@
+{
+    "results": {
+        "tool": {
+            "name": "pytest",
+            "version": "8.4.1"
+        },
+        "summary": {
+            "tests": 3,
+            "passed": 2,
+            "failed": 1,
+            "skipped": 0,
+            "pending": 0,
+            "other": 0,
+            "start": 1794850859.4471266,
+            "stop": 1794850860.2772565
+        },
+        "tests": [
+            {
+                "name": "test_outputs.py::test_compressed_file_exists",
+                "status": "passed",
+                "duration": 0.5175244420534,
+                "start": 1794850859.5343874,
+                "stop": 1794850860.052487,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_decompression_produces_original",
+                "status": "passed",
+                "duration": 0.1040497429203242,
+                "start": 1794850860.0529912,
+                "stop": 1794850860.1574876,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_compression_size",
+                "status": "failed",
+                "raw_status": "call_failed",
+                "duration": 0.093189035076648,
+                "start": 1794850860.1578896,
+                "stop": 1794850860.2767794,
+                "retries": 0,
+                "file_path": "test_outputs.py",
+                "trace": "def test_compression_size():\n        \"\"\"Test that the compressed file size meets requirements.\"\"\"\n        setup()\n        max_size_bytes = 2500  # As specified in task.yaml\n    \n        compressed_path = Path(\"/app/data.comp\")\n        assert compressed_path.exists(), f\"Compressed file {compressed_path} does not exist\"\n    \n        # Check file size\n        file_size = compressed_path.stat().st_size\n>       assert file_size <= max_size_bytes, (\n            f\"Compressed file size ({file_size} bytes) exceeds \"\n            f\"maximum allowed size ({max_size_bytes} bytes)\"\n        )\nE       AssertionError: Compressed file size (2697 bytes) exceeds maximum allowed size (2500 bytes)\nE       assert 2697 <= 2500\n\n/tests/test_outputs.py:70: AssertionError",
+                "message": "The test failed in the call phase due to an assertion error"
+            }
+        ]
+    }
+}

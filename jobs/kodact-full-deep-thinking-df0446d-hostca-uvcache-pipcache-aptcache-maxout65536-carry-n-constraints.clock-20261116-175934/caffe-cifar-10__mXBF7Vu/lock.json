@@ -1,0 +1,56 @@
+{
+    "schema_version": 2,
+    "task": {
+        "name": "caffe-cifar-10",
+        "type": "git",
+        "digest": "sha256:60e3b6306739b6c91128013a5fc17b913b5348f0995fff5da209c7348394ab36",
+        "source": "terminal-bench",
+        "path": "caffe-cifar-10",
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c"
+    },
+    "install_only": false,
+    "timeout_multiplier": 1.0,
+    "verifier_timeout_multiplier": 3.0,
+    "agent_setup_timeout_multiplier": 3.0,
+    "environment_build_timeout_multiplier": 3.0,
+    "agent": {
+        "name": "kodact_agent:KodAct",
+        "model_name": "deep-thinking",
+        "skip_model_parsing": false,
+        "skills": [],
+        "resume_trajectory": false,
+        "extra_allowed_hosts": [],
+        "kwargs": {},
+        "mcp_servers": []
+    },
+    "bridge_inputs": {},
+    "skills": [],
+    "environment": {
+        "type": "docker",
+        "force_build": false,
+        "delete": true,
+        "stream": false,
+        "cpu_enforcement_policy": "auto",
+        "memory_enforcement_policy": "auto",
+        "extra_docker_compose": [],
+        "kwargs": {},
+        "extra_allowed_hosts": []
+    },
+    "verifier": {
+        "env": {
+            "SSL_CERT_FILE": "/usr/local/share/kodact/ca-bundle.pem",
+            "REQUESTS_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+            "CURL_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+            "PIP_CERT": "/usr/local/share/kodact/ca-bundle.pem",
+            "GIT_SSL_CAINFO": "/usr/local/share/kodact/ca-bundle.pem",
+            "NODE_EXTRA_CA_CERTS": "/usr/local/share/kodact/ca-bundle.pem",
+            "UV_NATIVE_TLS": "1",
+            "UV_SYSTEM_CERTS": "1",
+            "UV_CACHE_DIR": "/usr/local/share/kodact/uv-cache",
+            "UV_HTTP_TIMEOUT": "600"
+        },
+        "disable": false,
+        "environment_mode": "shared"
+    }
+}
