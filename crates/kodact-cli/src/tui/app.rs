@@ -404,6 +404,8 @@ pub struct App {
     pub has_code: bool,
     /// A screen or picker waiting for an open question to be answered.
     held: Option<Dialog>,
+    /// Last rendered inner text width of the input box (0 = unbounded).
+    pub input_width: usize,
     /// The conversation on screen was replaced: the loop starts the screen over before it
     /// writes [`App::pending`]. Holds the newest other conversations, for the front page.
     pub reset: Option<Vec<(String, String)>>,
@@ -481,6 +483,7 @@ impl App {
             has_collapsible: false,
             has_code: false,
             held: None,
+            input_width: 0,
             reset: None,
         }
     }
@@ -2412,16 +2415,20 @@ impl App {
                 }
             }
             KeyCode::Up => {
-                self.editor.up();
+                let w = if self.input_width > 0 { self.input_width } else { usize::MAX };
+                self.editor.up_wrapped(w);
             }
             KeyCode::Down => {
-                self.editor.down();
+                let w = if self.input_width > 0 { self.input_width } else { usize::MAX };
+                self.editor.down_wrapped(w);
             }
             KeyCode::Char('p') if ctrl => {
-                self.editor.up();
+                let w = if self.input_width > 0 { self.input_width } else { usize::MAX };
+                self.editor.up_wrapped(w);
             }
             KeyCode::Char('n') if ctrl => {
-                self.editor.down();
+                let w = if self.input_width > 0 { self.input_width } else { usize::MAX };
+                self.editor.down_wrapped(w);
             }
             KeyCode::Left if ctrl => self.editor.word_left(),
             KeyCode::Right if ctrl => self.editor.word_right(),

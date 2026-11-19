@@ -1,7 +1,29 @@
 //! The prompt's text editor: a multiline buffer with a cursor, word moves,
 //! kill commands and prompt history.
 
+use unicode_width::UnicodeWidthChar;
+
 const MAX_UNDO: usize = 200;
+
+/// Split one logical line of displayed characters into visual rows of at most `w`
+/// display columns. Returns each row's `(start, end)` character index range.
+pub fn char_rows(chars: &[char], w: usize) -> Vec<(usize, usize)> {
+    let w = w.max(1);
+    let mut rows = vec![];
+    let mut start = 0;
+    let mut used = 0;
+    for (i, c) in chars.iter().enumerate() {
+        let cw = c.width().unwrap_or(0);
+        if used + cw > w && i > start {
+            rows.push((start, i));
+            start = i;
+            used = 0;
+        }
+        used += cw;
+    }
+    rows.push((start, chars.len()));
+    rows
+}
 
 /// Text being typed, as characters, with the cursor between two of them.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -18,6 +40,8 @@ pub struct Editor {
     redo_stack: Vec<(Vec<char>, usize)>,
     /// Last killed text (`Ctrl+K`, `Ctrl+U`, `Ctrl+W`) for `Ctrl+Y` yank.
     kill_ring: String,
+    /// Preserved visual display column across consecutive `up_wrapped` / `down_wrapped` moves.
+    preferred_col: Option<usize>,
 }
 
 fn is_word(c: char) -> bool {
@@ -30,6 +54,7 @@ impl Editor {
     }
 
     fn save_undo(&mut self) {
+        self.preferred_col = None;
         if self.undo_stack.last().is_some_and(|(t, c)| t == &self.text && *c == self.cursor) {
             return;
         }
@@ -175,10 +200,12 @@ impl Editor {
     }
 
     pub fn left(&mut self) {
+        self.preferred_col = None;
         self.cursor = self.cursor.saturating_sub(1);
     }
 
     pub fn right(&mut self) {
+        self.preferred_col = None;
         self.cursor = (self.cursor + 1).min(self.text.len());
     }
 
@@ -191,10 +218,12 @@ impl Editor {
     }
 
     pub fn home(&mut self) {
+        self.preferred_col = None;
         self.cursor = self.line_start();
     }
 
     pub fn end(&mut self) {
+        self.preferred_col = None;
         self.cursor = self.line_end();
     }
 
@@ -210,10 +239,12 @@ impl Editor {
     }
 
     pub fn word_left(&mut self) {
+        self.preferred_col = None;
         self.cursor = self.word_left_index();
     }
 
     pub fn word_right(&mut self) {
+        self.preferred_col = None;
         let n = self.text.len();
         let mut i = self.cursor;
         while i < n && !is_word(self.text[i]) {
@@ -277,17 +308,84 @@ impl Editor {
         self.position().0 + 1 < self.lines()
     }
 
-    /// Up: the line above, or the previous prompt from the first line.
-    /// Returns false when nothing changed.
-    pub fn up(&mut self) -> bool {
-        let (row, col) = self.position();
-        if row > 0 {
-            let start = self.line_start();
-            let prev_start = self.text[..start - 1].iter().rposition(|c| *c == '\n').map(|i| i + 1).unwrap_or(0);
-            let prev_len = start - 1 - prev_start;
-            self.cursor = prev_start + col.min(prev_len);
+    /// Visual row slices `(start_char_idx, end_char_idx)` into `self.text` for a given
+    /// inner display column width. Each `\n`-delimited logical line is wrapped using
+    /// [`char_rows`] on `super::text::shown` characters so navigation matches rendering.
+    pub fn visual_rows(&self, width: usize) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        let mut line_start = 0;
+        while line_start <= self.text.len() {
+            let line_end = self.text[line_start..]
+                .iter()
+                .position(|c| *c == '\n')
+                .map(|i| line_start + i)
+                .unwrap_or(self.text.len());
+            let shown: Vec<char> = self.text[line_start..line_end].iter().map(|c| super::text::shown(*c)).collect();
+            for (a, b) in char_rows(&shown, width) {
+                out.push((line_start + a, line_start + b));
+            }
+            if line_end == self.text.len() {
+                break;
+            }
+            line_start = line_end + 1;
+        }
+        out
+    }
+
+    /// Display width of `self.text[start..end]` as drawn in the input box.
+    fn display_width(&self, start: usize, end: usize) -> usize {
+        self.text[start..end].iter().map(|c| super::text::shown(*c).width().unwrap_or(0)).sum()
+    }
+
+    /// The cursor's `(visual_row, display_col)` at `width`.
+    #[cfg(test)]
+    pub fn visual_position(&self, width: usize) -> (usize, usize) {
+        let rows = self.visual_rows(width);
+        let row_idx = self.visual_row_index(&rows);
+        let (a, _) = rows[row_idx];
+        (row_idx, self.display_width(a, self.cursor))
+    }
+
+    fn visual_row_index(&self, rows: &[(usize, usize)]) -> usize {
+        for (i, (a, b)) in rows.iter().enumerate() {
+            let next_same_line = rows.get(i + 1).is_some_and(|(na, _)| *na == *b);
+            if self.cursor >= *a && (self.cursor < *b || (self.cursor == *b && !next_same_line)) {
+                return i;
+            }
+        }
+        rows.len().saturating_sub(1)
+    }
+
+    /// Place `self.cursor` on visual row `(a, b)` at the character closest to `target_col`
+    /// without exceeding it.
+    fn cursor_at_col(&self, a: usize, b: usize, target_col: usize, is_last_in_line: bool) -> usize {
+        let mut col = 0;
+        let limit = if is_last_in_line { b } else { b.saturating_sub(1).max(a) };
+        for (offset, &ch) in self.text[a..limit].iter().enumerate() {
+            let cw = super::text::shown(ch).width().unwrap_or(0);
+            if col + cw > target_col {
+                return a + offset;
+            }
+            col += cw;
+        }
+        limit
+    }
+
+    /// Up: move to the visual row above (at `width` columns), or the previous prompt
+    /// from history when already on the first visual row.
+    pub fn up_wrapped(&mut self, width: usize) -> bool {
+        let rows = self.visual_rows(width);
+        let row_idx = self.visual_row_index(&rows);
+        if row_idx > 0 {
+            let (cur_a, _) = rows[row_idx];
+            let target_col = self.preferred_col.unwrap_or_else(|| self.display_width(cur_a, self.cursor));
+            self.preferred_col = Some(target_col);
+            let (prev_a, prev_b) = rows[row_idx - 1];
+            let prev_is_last_in_line = rows[row_idx].0 != prev_b;
+            self.cursor = self.cursor_at_col(prev_a, prev_b, target_col, prev_is_last_in_line);
             return true;
         }
+        self.preferred_col = None;
         let next = match &self.browsing {
             Some((i, _)) if *i > 0 => i - 1,
             Some(_) => return false,
@@ -301,20 +399,21 @@ impl Editor {
         true
     }
 
-    /// Down: the line below, or the next prompt from history (then what was being typed).
-    pub fn down(&mut self) -> bool {
-        let (row, col) = self.position();
-        if row + 1 < self.lines() {
-            let end = self.line_end();
-            let next_start = end + 1;
-            let next_end = self.text[next_start..]
-                .iter()
-                .position(|c| *c == '\n')
-                .map(|i| next_start + i)
-                .unwrap_or(self.text.len());
-            self.cursor = next_start + col.min(next_end - next_start);
+    /// Down: move to the visual row below (at `width` columns), or the next prompt
+    /// from history when already on the last visual row.
+    pub fn down_wrapped(&mut self, width: usize) -> bool {
+        let rows = self.visual_rows(width);
+        let row_idx = self.visual_row_index(&rows);
+        if row_idx + 1 < rows.len() {
+            let (cur_a, _) = rows[row_idx];
+            let target_col = self.preferred_col.unwrap_or_else(|| self.display_width(cur_a, self.cursor));
+            self.preferred_col = Some(target_col);
+            let (next_a, next_b) = rows[row_idx + 1];
+            let next_is_last_in_line = rows.get(row_idx + 2).is_none_or(|(na, _)| *na != next_b);
+            self.cursor = self.cursor_at_col(next_a, next_b, target_col, next_is_last_in_line);
             return true;
         }
+        self.preferred_col = None;
         let Some((i, draft)) = self.browsing.take() else { return false };
         let shown = if i + 1 < self.history.len() {
             self.browsing = Some((i + 1, draft));
@@ -325,6 +424,19 @@ impl Editor {
         self.text = shown.chars().collect();
         self.cursor = self.text.len();
         true
+    }
+
+    /// Up: the line above, or the previous prompt from the first line.
+    /// Returns false when nothing changed.
+    #[cfg(test)]
+    pub fn up(&mut self) -> bool {
+        self.up_wrapped(usize::MAX)
+    }
+
+    /// Down: the line below, or the next prompt from history (then what was being typed).
+    #[cfg(test)]
+    pub fn down(&mut self) -> bool {
+        self.down_wrapped(usize::MAX)
     }
 }
 
@@ -422,5 +534,40 @@ mod tests {
 
         e.set("line1\n/sim");
         assert!(!e.word_is_sole_prompt());
+    }
+
+    #[test]
+    fn wrapped_up_down_traverses_visual_rows_before_history() {
+        let mut e = Editor::with_history(vec!["older prompt".into()]);
+        // 15 chars at width 5 -> 3 visual rows: "01234", "56789", "abcde"
+        e.set("0123456789abcde");
+        assert_eq!(e.visual_rows(5), vec![(0, 5), (5, 10), (10, 15)]);
+        assert_eq!(e.visual_position(5), (2, 5));
+
+        // Up from end of row 2 moves to row 1, NOT history.
+        assert!(e.up_wrapped(5));
+        assert_eq!(e.text(), "0123456789abcde");
+        assert_eq!(e.visual_position(5).0, 1);
+
+        // Up again moves to row 0.
+        assert!(e.up_wrapped(5));
+        assert_eq!(e.visual_position(5).0, 0);
+
+        // Up from row 0 now falls back to history.
+        assert!(e.up_wrapped(5));
+        assert_eq!(e.text(), "older prompt");
+
+        // Down restores draft.
+        assert!(e.down_wrapped(5));
+        assert_eq!(e.text(), "0123456789abcde");
+
+        // Preferred column is preserved across a short line.
+        e.set("0123456789\nx\nabcdefghij");
+        e.cursor = 21; // col 8 on "abcdefghij"
+        assert_eq!(e.visual_position(20), (2, 8));
+        assert!(e.up_wrapped(20)); // lands on "x" (col 1)
+        assert_eq!(e.visual_position(20), (1, 1));
+        assert!(e.up_wrapped(20)); // snaps back to col 8 on "0123456789"
+        assert_eq!(e.visual_position(20), (0, 8));
     }
 }

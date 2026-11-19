@@ -82,25 +82,7 @@ pub fn fit(s: &str, w: usize) -> String {
     out
 }
 
-/// Split one line of text into rows of at most `w` columns, by character.
-/// Returns the rows' character ranges.
-fn char_rows(chars: &[char], w: usize) -> Vec<(usize, usize)> {
-    let w = w.max(1);
-    let mut rows = vec![];
-    let mut start = 0;
-    let mut used = 0;
-    for (i, c) in chars.iter().enumerate() {
-        let cw = c.width().unwrap_or(0);
-        if used + cw > w && i > start {
-            rows.push((start, i));
-            start = i;
-            used = 0;
-        }
-        used += cw;
-    }
-    rows.push((start, chars.len()));
-    rows
-}
+use super::editor::char_rows;
 
 fn status_left(app: &App, now: Instant) -> (String, Style) {
     if app.danger_armed {

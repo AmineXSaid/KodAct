@@ -1192,6 +1192,7 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
         if pending_ev.is_none() && app.dirty && now.duration_since(last_draw) >= FRAME {
             match &mut screen {
                 Display::Inline(screen) => {
+                    app.input_width = (screen.width() as usize).saturating_sub(2).max(1);
                     let max = screen.rows().saturating_sub(1).max(1);
                     let view = render::live_view(&app, screen.width(), max);
                     let want = (view.lines.len() as u16).min(max);
@@ -1201,7 +1202,10 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                     }
                     screen.draw(&view).map_err(io_fail)?;
                 }
-                Display::Full(f) => f.draw(&app).map_err(io_fail)?,
+                Display::Full(f) => {
+                    f.draw(&app).map_err(io_fail)?;
+                    app.input_width = (f.wrapped_w as usize).saturating_sub(2).max(1);
+                }
             }
             had_dialog = app.dialog.is_some();
             app.dirty = false;
