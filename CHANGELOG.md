@@ -2,6 +2,13 @@
 
 ## 0.1.0 (unreleased)
 
+### Harbor: extra kodact flags that can't be split stop the run at once
+- **`KODACT_HARBOR_ARGS` with an unclosed quote is refused before any
+  container starts.** Before, every trial crashed at its start ("No closing
+  quotation", 2026-11-18), as when a skill file with an apostrophe is pasted
+  between single quotes. run.sh now says so and shows how to quote the
+  text with `shlex.quote`.
+
 ### Finish lists each requirement with its evidence
 - **An unattended run ends by listing what the request asks for, each item
   with the check that shows it met.** Before, its claim was one `verified`
