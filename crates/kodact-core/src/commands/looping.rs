@@ -95,11 +95,15 @@ pub(super) async fn run(d: &mut Driver, args: &str) -> Exec {
             let input = args.trim().to_string();
             // `run_due` marks the iteration that a fallback wakeup started.
             d.self_paced = Some(SelfPaced { input: input.clone(), mark, fallback: false });
-            let body = match scheduled_prompt(d, &prompt).await {
-                MessageContent::Text(t) => t,
-                other => return Exec::Submit(other),
-            };
-            Exec::Submit(MessageContent::Text(format!("{}\n\n{body}", self_paced_note(&input))))
+            match scheduled_prompt(d, &prompt).await {
+                MessageContent::Text(body) => {
+                    Exec::Submit(MessageContent::Text(format!("{}\n\n{body}", self_paced_note(&input))))
+                }
+                MessageContent::Blocks(mut blocks) => {
+                    blocks.insert(0, kodact_types::ContentBlock::text(self_paced_note(&input)));
+                    Exec::Submit(MessageContent::Blocks(blocks))
+                }
+            }
         }
     }
 }
@@ -108,21 +112,38 @@ pub(super) async fn run(d: &mut Driver, args: &str) -> Exec {
 /// use expands as usual; anything else (built-in commands, user-only skills,
 /// MCP prompts) reaches the model as plain text.
 pub(crate) async fn scheduled_prompt(d: &Driver, prompt: &str) -> MessageContent {
+    let with_inline = |primary: String, note: Option<String>| match note {
+        Some(n) => {
+            MessageContent::Blocks(vec![kodact_types::ContentBlock::text(primary), kodact_types::ContentBlock::text(n)])
+        }
+        None => MessageContent::Text(primary),
+    };
     match parse(prompt, &d.catalog) {
         Invocation::Custom { def, args } => {
             match kodact_agents::commands::expand(def, args, &d.info.cwd, &d.engine.tool_ctx().shell).await {
-                Ok(p) => MessageContent::Text(p),
+                Ok(p) => {
+                    let note = super::expand_inline(d, args, &[def.name.as_str()], true).await.ok().flatten();
+                    with_inline(p, note)
+                }
                 Err(_) => MessageContent::Text(prompt.to_string()),
             }
         }
         Invocation::Skills { chain, args } if chain.iter().all(|s| s.model_invocable) => {
+            let skip: Vec<String> = chain.iter().map(|s| s.name.clone()).collect();
             let chain: Vec<kodact_agents::SkillDef> = chain.into_iter().cloned().collect();
             let args = args.to_string();
             match super::run::invoke_skills(d, &chain, &args).await {
-                Ok(text) => MessageContent::Text(text),
+                Ok(text) => {
+                    let skip_refs: Vec<&str> = skip.iter().map(String::as_str).collect();
+                    let note = super::expand_inline(d, &args, &skip_refs, true).await.ok().flatten();
+                    with_inline(text, note)
+                }
                 Err(_) => MessageContent::Text(prompt.to_string()),
             }
         }
-        _ => MessageContent::Text(prompt.to_string()),
+        _ => {
+            let note = super::expand_inline(d, prompt, &[], true).await.ok().flatten();
+            with_inline(prompt.to_string(), note)
+        }
     }
 }

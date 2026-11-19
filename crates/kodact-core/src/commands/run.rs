@@ -37,14 +37,25 @@ pub(crate) async fn invoke_skills(d: &Driver, chain: &[kodact_agents::SkillDef],
     let session = Session { handle: Some(&handle), hooks: Some(&d.agent_rt.hooks) };
     let mut parts = vec![];
     for s in chain {
-        match invoke(s, args, &ctx, session).await? {
+        let invoked = match invoke(s, args, &ctx, session).await {
+            Ok(v) => v,
+            Err(e) => {
+                handle.end_turn_overrides();
+                return Err(e);
+            }
+        };
+        match invoked {
             Invoked::Text(t) => parts.push(t),
             Invoked::Fork { agent, prompt } => {
                 let task = kodact_agents::TaskTool { rt: d.agent_rt.clone() };
                 let input = serde_json::json!({"description": format!("/{}", s.name), "prompt": prompt, "subagent_type": agent});
-                task.validate(&input, &ctx).map_err(|e| format!("/{}: {e}", s.name))?;
+                if let Err(e) = task.validate(&input, &ctx) {
+                    handle.end_turn_overrides();
+                    return Err(format!("/{}: {e}", s.name));
+                }
                 let out = task.call(input, &ctx).await;
                 if out.is_error {
+                    handle.end_turn_overrides();
                     return Err(format!("/{}: {}", s.name, out.text_content()));
                 }
                 parts.push(format!(
@@ -58,6 +69,108 @@ pub(crate) async fn invoke_skills(d: &Driver, chain: &[kodact_agents::SkillDef],
     Ok(parts.join("\n\n"))
 }
 
+enum InlineOwned {
+    Custom(kodact_agents::CommandDef),
+    Skill(Box<kodact_agents::SkillDef>),
+    McpPrompt,
+}
+
+/// Expand any mid-prompt `/skill`, `/custom-command`, or `/mcp__*` invocations in `text`
+/// into a single `<system-reminder>` block while leaving the user's original prompt intact.
+pub(crate) async fn expand_inline(
+    d: &Driver,
+    text: &str,
+    skip: &[&str],
+    only_model_invocable: bool,
+) -> Result<Option<String>, String> {
+    use super::{inline_invocations, InlineTarget};
+    let (invocations, stripped) = inline_invocations(text, &d.catalog, skip);
+    let items: Vec<(String, InlineOwned, String)> = invocations
+        .into_iter()
+        .filter_map(|inv| {
+            let owned = match inv.target {
+                InlineTarget::Custom(def) => InlineOwned::Custom(def.clone()),
+                InlineTarget::Skill(s) => {
+                    if only_model_invocable && !s.model_invocable {
+                        return None;
+                    }
+                    InlineOwned::Skill(Box::new(s.clone()))
+                }
+                InlineTarget::McpPrompt => {
+                    if only_model_invocable {
+                        return None;
+                    }
+                    InlineOwned::McpPrompt
+                }
+            };
+            Some((inv.name, owned, inv.after.to_string()))
+        })
+        .collect();
+    if items.is_empty() {
+        return Ok(None);
+    }
+
+    let cwd = d.info.cwd.clone();
+    let shell = d.engine.tool_ctx().shell.clone();
+    let mut sections = Vec::with_capacity(items.len());
+    for (name, target, after) in items {
+        let body = match target {
+            InlineOwned::Custom(def) => {
+                let args = if after.is_empty() && kodact_agents::commands::uses_arguments(&def.body) {
+                    stripped.as_str()
+                } else {
+                    after.as_str()
+                };
+                match kodact_agents::commands::expand(&def, args, &cwd, &shell).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        d.engine.handle().end_turn_overrides();
+                        return Err(e);
+                    }
+                }
+            }
+            InlineOwned::Skill(s) => {
+                let args = if !s.fork && !kodact_agents::substitute::uses_arguments(&s.body, &s.arguments) {
+                    ""
+                } else if after.is_empty() {
+                    stripped.as_str()
+                } else {
+                    after.as_str()
+                };
+                invoke_skills(d, &[*s], args).await?
+            }
+            InlineOwned::McpPrompt => {
+                let Some(m) = d.catalog.mcp.clone() else { continue };
+                match m.get_prompt(&name, &after).await {
+                    Some(Ok(p)) => p,
+                    Some(Err(e)) => {
+                        d.engine.handle().end_turn_overrides();
+                        return Err(format!("/{name}: {e}"));
+                    }
+                    None => continue,
+                }
+            }
+        };
+        if !body.trim().is_empty() {
+            sections.push(format!("### /{name}\n{body}"));
+        }
+    }
+    if sections.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!("<system-reminder>\n{}\n</system-reminder>", sections.join("\n\n"))))
+}
+
+fn with_inline_note(primary: String, note: Option<String>) -> Exec {
+    match note {
+        Some(n) => Exec::Submit(MessageContent::Blocks(vec![
+            kodact_types::ContentBlock::text(primary),
+            kodact_types::ContentBlock::text(n),
+        ])),
+        None => Exec::Submit(MessageContent::Text(primary)),
+    }
+}
+
 /// Run the slash command in `text` (a message starting with `/`).
 pub async fn execute(d: &mut Driver, text: &str) -> Exec {
     let cwd = d.info.cwd.clone();
@@ -65,27 +178,43 @@ pub async fn execute(d: &mut Driver, text: &str) -> Exec {
         Invocation::NotACommand => return Exec::Submit(MessageContent::Text(text.to_string())),
         Invocation::Unknown(name) => return err(format!("Unknown command: /{name}")),
         Invocation::Custom { def, args } => {
+            let def = def.clone();
+            let args = args.to_string();
             let shell = d.engine.tool_ctx().shell.clone();
-            return match kodact_agents::commands::expand(def, args, &cwd, &shell).await {
-                Ok(p) => Exec::Submit(MessageContent::Text(p)),
+            let primary = match kodact_agents::commands::expand(&def, &args, &cwd, &shell).await {
+                Ok(p) => p,
+                Err(e) => return err(e),
+            };
+            return match expand_inline(d, &args, &[def.name.as_str()], false).await {
+                Ok(note) => with_inline_note(primary, note),
                 Err(e) => err(e),
             };
         }
         Invocation::Skills { chain, args } => {
             let chain: Vec<kodact_agents::SkillDef> = chain.into_iter().cloned().collect();
             let args = args.to_string();
-            return match invoke_skills(d, &chain, &args).await {
-                Ok(text) => Exec::Submit(MessageContent::Text(text)),
+            let primary = match invoke_skills(d, &chain, &args).await {
+                Ok(text) => text,
+                Err(e) => return err(e),
+            };
+            let skip: Vec<&str> = chain.iter().map(|s| s.name.as_str()).collect();
+            return match expand_inline(d, &args, &skip, false).await {
+                Ok(note) => with_inline_note(primary, note),
                 Err(e) => err(e),
             };
         }
         Invocation::McpPrompt { name, args } => {
             let name = name.to_string();
+            let args = args.to_string();
             let Some(m) = d.catalog.mcp.clone() else { return err(format!("Unknown command: /{name}")) };
-            return match m.get_prompt(&name, args).await {
-                Some(Ok(p)) => Exec::Submit(MessageContent::Text(p)),
-                Some(Err(e)) => err(format!("/{name}: {e}")),
-                None => err(format!("Unknown command: /{name}")),
+            let primary = match m.get_prompt(&name, &args).await {
+                Some(Ok(p)) => p,
+                Some(Err(e)) => return err(format!("/{name}: {e}")),
+                None => return err(format!("Unknown command: /{name}")),
+            };
+            return match expand_inline(d, &args, &[name.as_str()], false).await {
+                Ok(note) => with_inline_note(primary, note),
+                Err(e) => err(e),
             };
         }
         Invocation::Builtin { spec, args } => (spec.id, args.to_string()),

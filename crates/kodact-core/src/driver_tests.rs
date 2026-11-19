@@ -2125,3 +2125,87 @@ async fn added_folders_and_overrides_shape_the_skills() {
     t.p.push(MockTurn::text("ok"));
     assert!(!run(&mut t.d, "/mine").await.is_error);
 }
+
+#[tokio::test]
+async fn mid_prompt_skills_apply_frontmatter_and_keep_prompt_text_for_hooks_and_rewind() {
+    let mut t = driver_with(|dir, o| {
+        o.setting_sources = Some(vec![SettingSource::Project, SettingSource::Local]);
+        let hook = format!("cat > {}", dir.join("hook-input.json").display());
+        let settings = serde_json::json!({
+            "verification": {"enabled": false},
+            "hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": hook}]}]},
+        });
+        std::fs::write(dir.join("proj/.kodact/settings.json"), settings.to_string()).unwrap();
+    });
+    ship_skill(&t.proj);
+    std::fs::write(t.proj.join("notes.md"), "release checklist").unwrap();
+    local(&mut t.d, "/reload-skills").await;
+
+    // Mid-prompt skill + @mention: applies frontmatter (model, effort, allowed-tools, disallowed-tools, hooks)
+    // while keeping original user prompt intact for hooks and /rewind.
+    t.p.push(MockTurn::tool("Bash", serde_json::json!({"command": "touch mid-shipped.txt"})));
+    t.p.push(MockTurn::text("Done."));
+    let r = run(&mut t.d, "check @notes.md and /ship v2").await;
+    assert!(!r.is_error, "{:?}", r.result);
+    let reqs = t.p.requests();
+    let first = &reqs[0];
+    assert_eq!(first.model, kodact_api::resolve_model("sonnet"));
+    assert_eq!(first.output_config.as_ref().unwrap()["effort"], "low");
+    assert!(!tool_names(first).contains(&"Glob".to_string()), "disallowed-tools hides Glob");
+    let sent = texts(first);
+    assert!(sent.contains("Branch: main"), "bang command ran: {sent}");
+    assert!(sent.contains("Ship v2 from"), "skill args filled: {sent}");
+    assert!(sent.contains("release checklist"), "@mention attached: {sent}");
+    assert!(t.proj.join("mid-shipped.txt").exists(), "allowed-tools grant active for turn");
+
+    let hook: Value =
+        serde_json::from_str(&std::fs::read_to_string(t._dir.path().join("hook-input.json")).unwrap()).unwrap();
+    assert_eq!(hook["prompt"], "check @notes.md and /ship v2");
+    let list = local(&mut t.d, "/rewind").await;
+    assert!(list.contains("1. check @notes.md and /ship v2"), "{list}");
+
+    // Next turn: overrides are restored; mid-prompt built-ins/paths/unknowns are untouched.
+    t.p.push(MockTurn::text("Plain."));
+    let r = run(&mut t.d, "explain /clear and /tmp and /no-such-skill").await;
+    assert!(!r.is_error);
+    let next = t.p.requests().last().unwrap().clone();
+    assert_eq!(next.model, "claude-opus-5-5");
+    assert!(tool_names(&next).contains(&"Glob".to_string()));
+    assert!(texts(&next).contains("explain /clear and /tmp and /no-such-skill"));
+}
+
+#[tokio::test]
+async fn mid_prompt_fork_skill_and_chained_start_plus_mid_skill() {
+    let mut t = driver();
+    let survey = t.proj.join(".claude/skills/survey");
+    std::fs::create_dir_all(&survey).unwrap();
+    std::fs::write(
+        survey.join("SKILL.md"),
+        "---\ndescription: Survey the API\ncontext: fork\nagent: Explore\n---\nList the endpoints in $ARGUMENTS.",
+    )
+    .unwrap();
+    let pdf = t.proj.join(".claude/skills/pdf");
+    std::fs::create_dir_all(&pdf).unwrap();
+    std::fs::write(pdf.join("SKILL.md"), "---\ndescription: PDF helper\n---\nHandle PDF.").unwrap();
+    local(&mut t.d, "/reload-skills").await;
+
+    // 1. Mid-prompt fork skill at end of sentence falls back to stripped prompt for context.
+    t.p.push(MockTurn::text("Endpoints: /a, /b."));
+    t.p.push(MockTurn::text("Reported."));
+    let r = run(&mut t.d, "inspect src/api with /survey").await;
+    assert!(!r.is_error, "{:?}", r.result);
+    let reqs = t.p.requests();
+    assert!(texts(&reqs[0]).contains("List the endpoints in inspect src/api with."), "{}", texts(&reqs[0]));
+    assert!(texts(&reqs[1]).contains("Endpoints: /a, /b."), "{}", texts(&reqs[1]));
+
+    // 2. Start skill + mid-prompt skill in one message both execute.
+    t.p.push(MockTurn::text("Sub-agent result."));
+    t.p.push(MockTurn::text("Both done."));
+    let r = run(&mut t.d, "/pdf check docs and /survey src/v2").await;
+    assert!(!r.is_error, "{:?}", r.result);
+    let reqs = t.p.requests();
+    let sub = &reqs[reqs.len() - 2];
+    let main = &reqs[reqs.len() - 1];
+    assert!(texts(sub).contains("List the endpoints in src/v2."), "{}", texts(sub));
+    assert!(texts(main).contains("Handle PDF.") && texts(main).contains("Sub-agent result."), "{}", texts(main));
+}

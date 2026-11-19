@@ -112,6 +112,52 @@ fn ident_len(s: &str) -> usize {
     s.char_indices().find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_')).map_or(s.len(), |(i, _)| i)
 }
 
+/// Whether `body` has any placeholder that consumes `$ARGUMENTS`, `$N`, or a named argument.
+pub fn uses_arguments(body: &str, names: &[String]) -> bool {
+    let mut rest = body;
+    while let Some(at) = rest.find(['$', '\\']) {
+        let tail = &rest[at..];
+        if let Some(after) = tail.strip_prefix("\\$") {
+            let n = ident_len(after);
+            let fills = after.starts_with(|c: char| c.is_ascii_digit())
+                || after.starts_with("ARGUMENTS")
+                || after.starts_with('{')
+                || (n > 0 && names.iter().any(|x| x == &after[..n]));
+            if fills {
+                rest = after;
+                continue;
+            }
+        }
+        if let Some(after) = tail.strip_prefix('\\') {
+            rest = after;
+            continue;
+        }
+        let after = &tail[1..];
+        if let Some(inner) = after.strip_prefix('{').and_then(|s| s.find('}').map(|e| &s[..e])) {
+            if inner
+                .strip_prefix("KODACT_")
+                .or_else(|| inner.strip_prefix("FORGE_"))
+                .or_else(|| inner.strip_prefix("CLAUDE_"))
+                .is_some_and(|k| {
+                    matches!(k, "SKILL_DIR" | "PROJECT_DIR" | "SESSION_ID" | "EFFORT" | "PLUGIN_ROOT" | "PLUGIN_DATA")
+                })
+            {
+                rest = &after[inner.len() + 2..];
+                continue;
+            }
+        }
+        let n = ident_len(after);
+        if after.starts_with("ARGUMENTS")
+            || after.starts_with(|c: char| c.is_ascii_digit())
+            || (n > 0 && names.iter().any(|x| x == &after[..n]))
+        {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
 /// `body` with its placeholders filled in (see the module docs).
 pub fn fill(body: &str, args: &str, names: &[String], vars: &SkillVars) -> String {
     let args = args.trim();
@@ -222,6 +268,17 @@ mod tests {
         assert_eq!(fill("[$issue][$branch]", "$0", &names, &none), "[$0][]");
         // Plain dollars and backslashes stay.
         assert_eq!(fill("cost $ 5, $HOME, a\\b, \\n", "", &[], &none), "cost $ 5, $HOME, a\\b, \\n");
+    }
+
+    #[test]
+    fn uses_arguments_detects_placeholders() {
+        let names = vec!["issue".to_string(), "branch".to_string()];
+        assert!(uses_arguments("Ship $ARGUMENTS.", &names));
+        assert!(uses_arguments("Migrate $ARGUMENTS[0]", &names));
+        assert!(uses_arguments("Step $0 and $1", &names));
+        assert!(uses_arguments("Fix $issue", &names));
+        assert!(!uses_arguments("Costs \\$1.00 and \\$ARGUMENTS and \\$issue", &names));
+        assert!(!uses_arguments("Use ${CLAUDE_SKILL_DIR} and $HOME and $other", &names));
     }
 
     #[test]

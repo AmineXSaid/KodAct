@@ -147,6 +147,18 @@ impl Editor {
         (start, self.text[start..self.cursor].iter().collect())
     }
 
+    /// The character immediately after the cursor, if any.
+    pub fn char_after_cursor(&self) -> Option<char> {
+        self.text.get(self.cursor).copied()
+    }
+
+    /// Whether the word before the cursor is the only non-whitespace token in the buffer.
+    pub fn word_is_sole_prompt(&self) -> bool {
+        let (start, _) = self.word_before_cursor();
+        self.text[..start].iter().all(|c| c.is_whitespace())
+            && self.text[self.cursor..].iter().all(|c| c.is_whitespace())
+    }
+
     pub fn backspace(&mut self) {
         if self.cursor > 0 {
             self.save_undo();
@@ -394,5 +406,21 @@ mod tests {
         assert_eq!(e.text(), "hello ");
         assert!(e.yank());
         assert_eq!(e.text(), "hello world");
+    }
+
+    #[test]
+    fn sole_prompt_and_char_after_cursor_helpers() {
+        let mut e = Editor::default();
+        e.insert("  /stat");
+        assert!(e.word_is_sole_prompt());
+        assert_eq!(e.char_after_cursor(), None);
+
+        e.set("check /sim and more");
+        e.cursor = 10; // right after `/sim`
+        assert!(!e.word_is_sole_prompt());
+        assert_eq!(e.char_after_cursor(), Some(' '));
+
+        e.set("line1\n/sim");
+        assert!(!e.word_is_sole_prompt());
     }
 }

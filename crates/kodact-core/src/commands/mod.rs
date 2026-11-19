@@ -30,7 +30,7 @@ mod switching;
 
 pub use immediate::{context_usage, execute_immediate, immediate};
 pub(crate) use looping::scheduled_prompt;
-pub(crate) use run::duration;
+pub(crate) use run::{duration, expand_inline};
 pub use run::{execute, Exec};
 pub use session::{clean_title, render_conversation};
 pub(crate) use session::{goal_model, side_request_on};
@@ -492,6 +492,195 @@ pub fn parse<'a>(text: &'a str, cat: &'a Catalog) -> Invocation<'a> {
     Invocation::Unknown(name)
 }
 
+/// A resolved mid-prompt `/name` target.
+#[derive(Debug, PartialEq)]
+pub enum InlineTarget<'a> {
+    Custom(&'a CommandDef),
+    Skill(&'a SkillDef),
+    McpPrompt,
+}
+
+/// One `/name` invocation found anywhere in a prompt.
+#[derive(Debug, PartialEq)]
+pub struct InlineInvocation<'a> {
+    pub name: String,
+    pub range: std::ops::Range<usize>,
+    pub target: InlineTarget<'a>,
+    /// Text after this `/name` up to the next matched `/name` (or end of prompt), trimmed.
+    pub after: &'a str,
+}
+
+/// Scan `text` for candidate `/token` occurrences at start-of-text or after whitespace,
+/// skipping fenced code blocks (`` ``` `` / `~~~`) and inline `` `...` `` spans.
+/// Returns `(byte_range_of_slash_and_token, token_after_slash)` pairs in order.
+pub fn inline_tokens(text: &str) -> Vec<(std::ops::Range<usize>, &str)> {
+    let mut out = Vec::new();
+    let mut fence: Option<(char, usize)> = None;
+    let mut line_start = 0;
+
+    for raw_line in text.split_inclusive('\n') {
+        let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let trimmed = line.trim_start();
+
+        if let Some((ch, run)) = fence {
+            let close_run = trimmed.chars().take_while(|c| *c == ch).count();
+            if close_run >= run && trimmed[close_run * ch.len_utf8()..].trim().is_empty() {
+                fence = None;
+            }
+            line_start += raw_line.len();
+            continue;
+        }
+
+        for marker_ch in ['`', '~'] {
+            let run = trimmed.chars().take_while(|c| *c == marker_ch).count();
+            if run >= 3 {
+                fence = Some((marker_ch, run));
+                break;
+            }
+        }
+        if fence.is_some() {
+            line_start += raw_line.len();
+            continue;
+        }
+
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        let mut in_code = false;
+        while i < bytes.len() {
+            let ch = line[i..].chars().next().unwrap();
+            let ch_len = ch.len_utf8();
+            if ch == '`' {
+                in_code = !in_code;
+                i += ch_len;
+                continue;
+            }
+            if !in_code && ch == '/' {
+                let prev_is_ws = i == 0 || line[..i].chars().next_back().is_some_and(char::is_whitespace);
+                if prev_is_ws {
+                    let tok_start = i + 1;
+                    let mut tok_end = tok_start;
+                    while tok_end < bytes.len() {
+                        let c = line[tok_end..].chars().next().unwrap();
+                        if c.is_whitespace() {
+                            break;
+                        }
+                        tok_end += c.len_utf8();
+                    }
+                    if tok_end > tok_start {
+                        let token = &line[tok_start..tok_end];
+                        if !token.contains('/') && !token.contains('\\') {
+                            out.push((line_start + i..line_start + tok_end, token));
+                        }
+                    }
+                    i = tok_end;
+                    continue;
+                }
+            }
+            i += ch_len;
+        }
+
+        line_start += raw_line.len();
+    }
+
+    out
+}
+
+const TRAILING_PUNCT: &[char] = &['.', ',', ':', ';', ')', ']', '!', '?', '"', '\''];
+
+fn resolve_inline<'a>(name: &str, cat: &'a Catalog) -> Option<InlineTarget<'a>> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') {
+        return None;
+    }
+    let skill =
+        |n: &str| cat.skills.iter().find(|s| s.user_invocable && (s.name == n || s.name.eq_ignore_ascii_case(n)));
+    let own_skill = skill(name).filter(|s| s.source != "bundled");
+    match lookup(name) {
+        Some(spec) if own_skill.is_none() || spec.name != name => return None,
+        _ => {}
+    }
+    if own_skill.is_none() {
+        if let Some(def) = cat.commands.iter().find(|c| c.name == name) {
+            return Some(InlineTarget::Custom(def));
+        }
+    }
+    if let Some(s) = skill(name) {
+        return Some(InlineTarget::Skill(s));
+    }
+    if cat.mcp_prompts().iter().any(|p| p == name) {
+        return Some(InlineTarget::McpPrompt);
+    }
+    None
+}
+
+/// Find all mid-prompt `/skill`, `/custom-command`, and `/mcp__*` invocations in `text`.
+/// Built-in commands, unknown `/words`, file paths, code blocks, and anything in `skip` are ignored.
+/// Returns `(invocations, stripped_prompt)`.
+pub fn inline_invocations<'a>(text: &'a str, cat: &'a Catalog, skip: &[&str]) -> (Vec<InlineInvocation<'a>>, String) {
+    let candidates = inline_tokens(text);
+    let mut matched: Vec<(std::ops::Range<usize>, String, InlineTarget<'a>)> = Vec::new();
+    let mut seen: Vec<String> = skip.iter().map(|s| s.to_ascii_lowercase()).collect();
+
+    for (range, raw) in candidates {
+        let (trimmed_range, name, target) = if let Some(t) = resolve_inline(raw, cat) {
+            (range, raw, t)
+        } else {
+            let trimmed = raw.trim_end_matches(TRAILING_PUNCT);
+            if trimmed.is_empty() || trimmed.len() == raw.len() {
+                continue;
+            }
+            let Some(t) = resolve_inline(trimmed, cat) else {
+                continue;
+            };
+            let new_end = range.start + 1 + trimmed.len();
+            (range.start..new_end, trimmed, t)
+        };
+
+        let canonical = match &target {
+            InlineTarget::Custom(def) => def.name.as_str(),
+            InlineTarget::Skill(s) => s.name.as_str(),
+            InlineTarget::McpPrompt => name,
+        };
+        let key = canonical.to_ascii_lowercase();
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        matched.push((trimmed_range, canonical.to_string(), target));
+    }
+
+    if matched.is_empty() {
+        return (Vec::new(), text.trim().to_string());
+    }
+
+    let mut stripped = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for (r, _, _) in &matched {
+        stripped.push_str(&text[cursor..r.start]);
+        cursor = r.end;
+    }
+    stripped.push_str(&text[cursor..]);
+    let stripped = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    let mut out = Vec::with_capacity(matched.len());
+    for i in 0..matched.len() {
+        let end_of_after = matched.get(i + 1).map_or(text.len(), |(r, _, _)| r.start);
+        let after = text[matched[i].0.end..end_of_after].trim();
+        out.push(InlineInvocation {
+            name: matched[i].1.clone(),
+            range: matched[i].0.clone(),
+            target: match &matched[i].2 {
+                InlineTarget::Custom(d) => InlineTarget::Custom(d),
+                InlineTarget::Skill(s) => InlineTarget::Skill(s),
+                InlineTarget::McpPrompt => InlineTarget::McpPrompt,
+            },
+            after,
+        });
+    }
+
+    (out, stripped)
+}
+
 /// The text of a prompt that may be a slash command (a plain text prompt starting with `/`).
 pub fn command_text(content: &kodact_types::MessageContent) -> Option<String> {
     command_text_any(content).filter(|t| t.trim_start().starts_with('/'))
@@ -626,5 +815,46 @@ mod tests {
         assert!(names.contains(&"compact".to_string()) && names.contains(&"pdf".to_string()));
         let json = cat.catalog_json(Surface::Stream);
         assert!(json.iter().any(|c| c["name"] == "compact" && c["argumentHint"] == "[instructions]"));
+    }
+
+    #[test]
+    fn inline_invocations_match_mid_prompt_and_ignore_noise() {
+        let d = tempfile::tempdir().unwrap();
+        let mut cat = catalog(d.path());
+        // Mid-prompt skill, trailing punctuation, multiline, deduplication, and custom command.
+        let (found, stripped) =
+            inline_invocations("Please check this with /pdf, then /review-pr 42\nand finally /PDF.", &cat, &[]);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].name, "pdf");
+        assert_eq!(found[0].after, ", then");
+        assert!(matches!(found[0].target, InlineTarget::Skill(_)));
+        assert_eq!(found[1].name, "review-pr");
+        assert_eq!(found[1].after, "42\nand finally /PDF.");
+        assert!(matches!(found[1].target, InlineTarget::Custom(_)));
+        assert_eq!(stripped, "Please check this with , then 42 and finally /PDF.");
+
+        // Built-ins, unknowns, paths, URLs, inline code, and fenced code blocks are ignored.
+        let noise = "Use /clear or /help or /unknown, see /tmp/a, /usr/bin/env, a/b, https://x.com/pdf, `/pdf`.\n```sh\n/pdf\n```\n~~~\n/xlsx\n~~~";
+        let (found, _) = inline_invocations(noise, &cat, &[]);
+        assert!(found.is_empty(), "expected no matches, got {found:?}");
+
+        // Skip list suppresses already-invoked start commands.
+        let (found, _) = inline_invocations("summarize docs and also /xlsx", &cat, &["pdf"]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "xlsx");
+        let (found, _) = inline_invocations("and /pdf", &cat, &["pdf"]);
+        assert!(found.is_empty());
+
+        // Own non-bundled skill overrides a built-in of the same name mid-prompt too.
+        let own_usage = kodact_agents::skills::parse_skill(
+            d.path(),
+            "---\nname: usage\ndescription: custom usage\n---\nCustom usage.",
+            "project",
+        )
+        .unwrap();
+        cat.skills.push(own_usage);
+        let (found, _) = inline_invocations("check /usage please", &cat, &[]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "usage");
     }
 }

@@ -1485,10 +1485,16 @@ impl App {
         if self.title.is_empty() {
             self.title = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
         }
-        // A skill typed as a command (`/simplify the parser`).
-        if let Some(word) = text.trim_start().strip_prefix('/').and_then(|r| r.split_whitespace().next()) {
-            if self.skills.iter().any(|s| s == word) {
-                self.used_skill(word);
+        // Skills typed anywhere in the prompt (`/simplify the parser` or `check /simplify`).
+        for (_, token) in kodact_core::commands::inline_tokens(text) {
+            let trimmed = token.trim_end_matches(['.', ',', ':', ';', ')', ']', '!', '?', '"', '\'']);
+            if let Some(skill) = self
+                .skills
+                .iter()
+                .find(|s| s.eq_ignore_ascii_case(token) || (!trimmed.is_empty() && s.eq_ignore_ascii_case(trimmed)))
+                .cloned()
+            {
+                self.used_skill(&skill);
             }
         }
         use super::look::Look;
@@ -2814,21 +2820,42 @@ impl App {
 
     // ---- the `/` menu ----
 
-    /// Commands matching what is typed, while it is a bare `/word`.
+    /// Commands matching the `/word` before the cursor. At the start of the prompt, all
+    /// commands are offered; mid-prompt, only skills, custom commands, and MCP prompts.
     pub fn menu(&self) -> Vec<&CommandInfo> {
-        if self.menu_dismissed || self.dialog.is_some() {
+        if self.menu_dismissed || self.dialog.is_some() || self.search.is_some() || self.find.is_some() {
             return vec![];
         }
-        let text = self.editor.text();
-        let Some(word) = text.strip_prefix('/') else { return vec![] };
-        if word.contains(char::is_whitespace) {
+        let (_, word) = self.editor.word_before_cursor();
+        let Some(q) = word.strip_prefix('/') else { return vec![] };
+        if q.contains('/') || q.contains('\\') {
             return vec![];
         }
-        let word = word.to_lowercase();
-        let mut starts: Vec<&CommandInfo> = self.commands.iter().filter(|c| c.name.starts_with(&word)).collect();
-        let contains = self.commands.iter().filter(|c| !c.name.starts_with(&word) && c.name.contains(&word));
+        let q = q.to_lowercase();
+        let sole = self.editor.word_is_sole_prompt();
+        let eligible = |c: &&CommandInfo| {
+            sole || self.skills.iter().any(|s| s.eq_ignore_ascii_case(&c.name))
+                || kodact_core::commands::lookup(&c.name).is_none()
+        };
+        let mut starts: Vec<&CommandInfo> =
+            self.commands.iter().filter(eligible).filter(|c| c.name.to_lowercase().starts_with(&q)).collect();
+        let contains = self
+            .commands
+            .iter()
+            .filter(eligible)
+            .filter(|c| !c.name.to_lowercase().starts_with(&q) && c.name.to_lowercase().contains(&q));
         starts.extend(contains);
         starts
+    }
+
+    fn complete_command(&mut self, name: &str, trailing_space: bool) {
+        let (_, word) = self.editor.word_before_cursor();
+        let has_h_space = matches!(self.editor.char_after_cursor(), Some(' ' | '\t'));
+        let replacement = if trailing_space && !has_h_space { format!("/{name} ") } else { format!("/{name}") };
+        self.editor.replace_back(word.chars().count(), &replacement);
+        if trailing_space && has_h_space {
+            self.editor.right();
+        }
     }
 
     /// Files matching the `@word` before the cursor: name matches first, then shorter paths.
@@ -3195,12 +3222,19 @@ impl App {
             KeyCode::Enter => {
                 if menu_len > 0 {
                     let c = self.menu()[self.menu_selected.min(menu_len - 1)].clone();
-                    // A command that takes arguments waits for them; one that doesn't runs now.
-                    let typed = self.editor.text();
-                    if c.args.is_empty() || typed == format!("/{}", c.name) && c.args.starts_with('[') {
-                        self.editor.set(&format!("/{}", c.name));
-                    } else {
-                        self.editor.set(&format!("/{} ", c.name));
+                    let (_, word) = self.editor.word_before_cursor();
+                    let typed = word.strip_prefix('/').unwrap_or(&word);
+                    if self.editor.word_is_sole_prompt() {
+                        // A command that takes arguments waits for them; one that doesn't runs now.
+                        if c.args.is_empty() || (typed == c.name && c.args.starts_with('[')) {
+                            self.complete_command(&c.name, false);
+                        } else {
+                            self.complete_command(&c.name, true);
+                            return vec![];
+                        }
+                    } else if !typed.eq_ignore_ascii_case(&c.name) {
+                        self.complete_command(&c.name, true);
+                        self.menu_selected = 0;
                         return vec![];
                     }
                 }
@@ -3217,7 +3251,7 @@ impl App {
             }
             KeyCode::Tab if menu_len > 0 => {
                 let c = self.menu()[self.menu_selected.min(menu_len - 1)].clone();
-                self.editor.set(&format!("/{} ", c.name));
+                self.complete_command(&c.name, true);
             }
             KeyCode::Up if menu_len > 0 => {
                 self.menu_selected = self.menu_selected.checked_sub(1).unwrap_or(menu_len - 1);
@@ -4142,6 +4176,69 @@ mod tests {
         typed(&mut a, "/cl");
         a.on_key(key(KeyCode::Esc));
         assert!(a.menu().is_empty(), "Esc hides the menu");
+    }
+
+    #[test]
+    fn slash_menu_works_mid_prompt_and_preserves_surrounding_text() {
+        let mut a = app();
+        a.commands.extend([
+            CommandInfo { name: "simplify".into(), args: String::new(), description: "Simplify code".into() },
+            CommandInfo { name: "ship".into(), args: String::new(), description: "Ship release".into() },
+            CommandInfo { name: "review-pr".into(), args: "<n>".into(), description: "Review PR".into() },
+            CommandInfo { name: "mcp__notes__daily".into(), args: String::new(), description: "MCP prompt".into() },
+        ]);
+        a.skills = vec!["simplify".into(), "ship".into()];
+
+        // 1. Mid-prompt shows skills, custom commands, MCP prompts; omits built-ins.
+        typed(&mut a, "check ");
+        typed(&mut a, "/");
+        let names: Vec<&str> = a.menu().iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["simplify", "ship", "review-pr", "mcp__notes__daily"]);
+
+        // 2. Typing a partial prefix and pressing Enter completes in-place instead of sending.
+        typed(&mut a, "sim");
+        assert_eq!(a.menu().iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["simplify"]);
+        assert!(a.on_key(key(KeyCode::Enter)).is_empty(), "partial mid-prompt Enter completes");
+        assert_eq!(a.editor.text(), "check /simplify ");
+        assert!(a.menu().is_empty());
+
+        // 3. Chaining another skill after text/skill works; Tab completes; exact Enter submits.
+        typed(&mut a, "and /sh");
+        assert_eq!(a.menu().iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["ship"]);
+        a.on_key(key(KeyCode::Tab));
+        assert_eq!(a.editor.text(), "check /simplify and /ship ");
+        assert_eq!(a.on_key(key(KeyCode::Enter)), vec![Action::Send("check /simplify and /ship ".into())]);
+        assert_eq!(a.skills_used, [("ship".into(), 1), ("simplify".into(), 1)]);
+        a.on_event(UiEvent::Idle);
+
+        // 4. Exact match typed mid-prompt submits directly on Enter.
+        typed(&mut a, "run /ship");
+        assert_eq!(a.menu().len(), 1);
+        assert_eq!(a.on_key(key(KeyCode::Enter)), vec![Action::Send("run /ship".into())]);
+        a.on_event(UiEvent::Idle);
+
+        // 5. Multiline after Shift+Enter opens the menu on line 2 and preserves line 1.
+        typed(&mut a, "first line");
+        a.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        typed(&mut a, "/rev");
+        assert_eq!(a.menu().iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["review-pr"]);
+        a.on_key(key(KeyCode::Tab));
+        assert_eq!(a.editor.text(), "first line\n/review-pr ");
+        a.editor.clear();
+
+        // 6. Paths like src/main.rs or /usr/bin do not open the menu.
+        typed(&mut a, "open src/main.rs and /usr/bin");
+        assert!(a.menu().is_empty());
+        a.editor.clear();
+
+        // 7. Completing in the middle of a sentence reuses existing space (no double space).
+        a.editor.set("please /sim this file");
+        for _ in 0.." this file".len() {
+            a.on_key(key(KeyCode::Left));
+        }
+        assert_eq!(a.menu().iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["simplify"]);
+        a.on_key(key(KeyCode::Tab));
+        assert_eq!(a.editor.text(), "please /simplify this file");
     }
 
     #[test]

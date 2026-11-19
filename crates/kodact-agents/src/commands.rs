@@ -139,6 +139,11 @@ pub fn bang_allowed(allowed_tools: &[String], cmd: &str, cwd: &Path) -> bool {
     allowed_tools.iter().filter_map(|r| Rule::parse(r).ok()).any(|rule| rule.matches(&req, cwd, MatchMode::All))
 }
 
+/// Whether `body` has `$ARGUMENTS` or `$1`..`$9` placeholders.
+pub fn uses_arguments(body: &str) -> bool {
+    body.contains("$ARGUMENTS") || POSITIONAL.is_match(body)
+}
+
 /// The prompt `/name args` sends.
 pub async fn expand(
     cmd: &CommandDef,
@@ -149,7 +154,7 @@ pub async fn expand(
     let args = args.trim();
     let mut text = cmd.body.clone();
     let positional = shlex::split(args).unwrap_or_else(|| args.split_whitespace().map(str::to_string).collect());
-    let uses_args = text.contains("$ARGUMENTS") || POSITIONAL.is_match(&text);
+    let uses_args = uses_arguments(&text);
     text = text.replace("$ARGUMENTS", args);
     text = POSITIONAL
         .replace_all(&text, |c: &regex::Captures| {
