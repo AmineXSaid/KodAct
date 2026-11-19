@@ -1,0 +1,146 @@
+{
+    "id": "dff092ce-551b-43a2-99e2-e4f4833225ae",
+    "task_name": "regex-chess",
+    "trial_name": "regex-chess__3ZmG5Uh",
+    "trial_uri": "file:///home/kodact/KodAct/jobs/kodact-full-quick-thinking-6621183-hostca-uvcache-pipcache-aptcache-carry-n-constraints.clock-args-plugin-dir-usr-local-share-kodact-pip-wh-20261117-175325/regex-chess__3ZmG5Uh",
+    "task_id": {
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "path": "regex-chess"
+    },
+    "source": "terminal-bench",
+    "task_checksum": "166af5ebdc4a297de26bf4390f3c9a222238ac47218a665fcb1fb3110a1ac0f1",
+    "config": {
+        "task": {
+            "path": "regex-chess",
+            "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+            "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": "terminal-bench"
+        },
+        "trial_name": "regex-chess__3ZmG5Uh",
+        "trials_dir": "jobs/kodact-full-quick-thinking-6621183-hostca-uvcache-pipcache-aptcache-carry-n-constraints.clock-args-plugin-dir-usr-local-share-kodact-pip-wh-20261117-175325",
+        "install_only": false,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": null,
+        "verifier_timeout_multiplier": 3.0,
+        "agent_setup_timeout_multiplier": 3.0,
+        "environment_build_timeout_multiplier": 3.0,
+        "agent": {
+            "name": "kodact_agent:KodAct",
+            "import_path": null,
+            "model_name": "quick-thinking",
+            "base_url": null,
+            "model_api_key_name": null,
+            "model_api_format": null,
+            "skip_model_parsing": false,
+            "n_concurrent": null,
+            "concurrency_group": null,
+            "skills": [],
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "resume_trajectory": false,
+            "load_trajectory": null,
+            "extra_allowed_hosts": [],
+            "kwargs": {},
+            "mcp_servers": []
+        },
+        "user_agent": null,
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "stream": false,
+            "cpu_enforcement_policy": "auto",
+            "memory_enforcement_policy": "auto",
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "override_tpu": null,
+            "mounts": null,
+            "extra_docker_compose": [],
+            "kwargs": {},
+            "extra_allowed_hosts": []
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "env": {
+                "SSL_CERT_FILE": "/usr/local/share/kodact/ca-bundle.pem",
+                "REQUESTS_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+                "CURL_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+                "PIP_CERT": "/usr/local/share/kodact/ca-bundle.pem",
+                "GIT_SSL_CAINFO": "/usr/local/share/kodact/ca-bundle.pem",
+                "NODE_EXTRA_CA_CERTS": "/usr/local/share/kodact/ca-bundle.pem",
+                "UV_NATIVE_TLS": "1",
+                "UV_SYSTEM_CERTS": "1",
+                "UV_CACHE_DIR": "/usr/local/share/kodact/uv-cache",
+                "UV_HTTP_TIMEOUT": "600"
+            },
+            "disable": false
+        },
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "extra_instructions": [],
+        "job_id": "a184a670-f89a-4476-8924-17e211747684",
+        "source_trial": null
+    },
+    "agent_info": {
+        "name": "kodact",
+        "version": "kodact 0.1.0 (KodAct)",
+        "model_info": {
+            "name": "quick-thinking",
+            "provider": null
+        }
+    },
+    "agent_result": {
+        "n_input_tokens": 367913,
+        "n_cache_tokens": 232000,
+        "n_output_tokens": 378913,
+        "cost_usd": 0.0,
+        "model_usage": null,
+        "rollout_details": null,
+        "metadata": {
+            "num_turns": 15,
+            "subtype": "error_during_execution",
+            "stop_reason": "max_time"
+        }
+    },
+    "verifier_result": {
+        "rewards": {
+            "reward": 0.0
+        }
+    },
+    "verifier_environment_mode": "shared",
+    "exception_info": {
+        "exception_type": "AgentTimeoutError",
+        "exception_message": "Agent execution timed out after 3600.0 seconds",
+        "exception_traceback": "Traceback (most recent call last):\n  File \"/home/kodact/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/asyncio/tasks.py\", line 520, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/agents/installed/base.py\", line 194, in wrapper\n    return await fn(self, instruction, *args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/KodAct/evals/harbor/kodact_agent.py\", line 535, in run\n    await self.exec_as_agent(environment, command=command, env=env)\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/agents/installed/base.py\", line 1081, in exec_as_agent\n    return await self._exec(\n           ^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/agents/installed/base.py\", line 1032, in _exec\n    result = await environment.exec(\n             ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/environments/docker/docker.py\", line 1363, in exec\n    return await self._compose_exec(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/environments/docker/docker.py\", line 1440, in _compose_exec\n    return await self._run_docker_compose_command(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/environments/docker/docker.py\", line 758, in _run_docker_compose_command\n    result = await self._collect_buffered_output(\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/environments/docker/docker.py\", line 788, in _collect_buffered_output\n    stdout_bytes, stderr_bytes = await process.communicate(input=stdin_data)\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/asyncio/subprocess.py\", line 201, in communicate\n    stdin, stdout, stderr = await tasks.gather(stdin, stdout, stderr)\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/asyncio/subprocess.py\", line 181, in _read_stream\n    output = await stream.read()\n             ^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/asyncio/streams.py\", line 706, in read\n    block = await self.read(self._limit)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/asyncio/streams.py\", line 713, in read\n    await self._wait_for_data('read')\n  File \"/home/kodact/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/asyncio/streams.py\", line 545, in _wait_for_data\n    await self._waiter\nasyncio.exceptions.CancelledError\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/trial/trial.py\", line 769, in _run_agent_phase\n    await asyncio.wait_for(\n  File \"/home/kodact/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/asyncio/tasks.py\", line 519, in wait_for\n    async with timeouts.timeout(timeout):\n               ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/kodact/.local/share/uv/python/cpython-3.12.16-linux-x86_64-gnu/lib/python3.12/asyncio/timeouts.py\", line 115, in __aexit__\n    raise TimeoutError from exc_val\nTimeoutError\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/trial/single_step.py\", line 76, in _run_agent\n    await self._run_agent_phase(\n  File \"/home/kodact/.local/share/uv/tools/harbor/lib/python3.12/site-packages/harbor/trial/trial.py\", line 778, in _run_agent_phase\n    raise AgentTimeoutError(\nharbor.trial.errors.AgentTimeoutError: Agent execution timed out after 3600.0 seconds\n",
+        "occurred_at": "2026-11-17T19:10:39.345413Z"
+    },
+    "started_at": "2026-11-17T18:09:51.778351Z",
+    "finished_at": "2026-11-17T19:15:09.013071Z",
+    "environment_setup": {
+        "started_at": "2026-11-17T18:09:51.781768Z",
+        "finished_at": "2026-11-17T18:09:53.617777Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-11-17T18:09:53.617806Z",
+        "finished_at": "2026-11-17T18:10:01.837635Z"
+    },
+    "agent_execution": {
+        "started_at": "2026-11-17T18:10:01.837722Z",
+        "finished_at": "2026-11-17T19:10:39.331020Z"
+    },
+    "verifier": {
+        "started_at": "2026-11-17T19:10:45.375637Z",
+        "finished_at": "2026-11-17T19:14:51.847730Z"
+    },
+    "step_results": null
+}

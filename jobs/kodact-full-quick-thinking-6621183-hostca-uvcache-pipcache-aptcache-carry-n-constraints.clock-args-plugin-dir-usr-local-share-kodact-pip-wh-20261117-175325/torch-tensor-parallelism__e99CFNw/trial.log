@@ -1,0 +1,92 @@
+Running command: chmod 755 /usr/local/bin/kodact && /usr/local/bin/kodact --version
+Command outputs captured
+Running command: printf '%s\n' '10.21.3.57 gpt.technica-engineering.net' >> /etc/hosts
+Command outputs captured
+Running command: mkdir -p /usr/local/share/kodact/uv-cache
+Command outputs captured
+Running command: chmod -R a+rwX /usr/local/share/kodact/uv-cache
+Command outputs captured
+Running command: mkdir -p /usr/local/share/kodact/pip-wheelhouse
+Command outputs captured
+Running command: chmod -R a+rX /usr/local/share/kodact/pip-wheelhouse
+Command outputs captured
+Running command: 
+command -v apt-get >/dev/null 2>&1 || exit 0
+. /etc/os-release 2>/dev/null || exit 0
+printf '%s-%s-%s\n' "${ID:-}" "${VERSION_CODENAME:-}" "$(dpkg --print-architecture 2>/dev/null)"
+
+Command outputs captured
+Running command: mkdir -p /usr/local/share/kodact/apt-archives /usr/local/share/kodact/apt-lists
+Command outputs captured
+Running command: mkdir -p /logs/agent; { 
+archives=/usr/local/share/kodact/apt-archives
+lists=/usr/local/share/kodact/apt-lists
+mkdir -p "$archives/partial"
+chown _apt:root "$archives/partial" 2>/dev/null || true
+chmod 700 "$archives/partial"
+printf 'Dir::Cache::Archives "%s/";\n' "$archives" > /etc/apt/apt.conf.d/00kodact-apt-cache
+seeded=""
+set -- /var/lib/apt/lists/*_Packages*
+if [ ! -e "$1" ] && [ -d "$lists" ]; then
+  mkdir -p /var/lib/apt/lists && cp -a "$lists/." /var/lib/apt/lists/ && seeded=" and its package lists"
+fi
+rm -rf "$lists"
+n=0
+for f in "$archives"/*.deb; do [ -e "$f" ] && n=$((n + 1)); done
+echo "apt cache: $n packages for ubuntu-noble-amd64$seeded"
+ } > /logs/agent/apt-cache.txt 2>&1
+Command outputs captured
+Running command: 
+src=/tmp/kodact-extra-ca.pem
+[ -s "$src" ] || { echo "KODACT_HARBOR_CA_BUNDLE did not arrive in the container: $src is missing or empty" >&2; exit 1; }
+mkdir -p /usr/local/share/ca-certificates
+if command -v awk >/dev/null 2>&1; then
+  awk '/-----BEGIN CERTIFICATE-----/{n++; f=sprintf("/usr/local/share/ca-certificates/kodact-extra-%03d.crt", n)} n>0{print > f}' "$src"
+else
+  cp "$src" /usr/local/share/ca-certificates/kodact-extra.crt
+fi
+if command -v update-ca-certificates >/dev/null 2>&1; then update-ca-certificates >/dev/null 2>&1 || true; fi
+if [ -d /etc/pki/ca-trust/source/anchors ]; then
+  cp "$src" /etc/pki/ca-trust/source/anchors/kodact-extra.pem
+  command -v update-ca-trust >/dev/null 2>&1 && update-ca-trust >/dev/null 2>&1 || true
+fi
+for b in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+  if [ -f "$b" ]; then cat "$src" >> "$b"; fi
+done
+mkdir -p /etc/uv && printf 'native-tls = true\n' > /etc/uv/uv.toml
+# The copy the tests are pointed at (verifier-ca.sh) replaces each tool's own roots, so it holds the
+# container's roots and the extra ones: a bundle of only a proxy's certificates would leave every
+# host the proxy lets through untouched (download.pytorch.org behind Zscaler) untrusted.
+kept=/usr/local/share/kodact/ca-bundle.pem
+mkdir -p "$(dirname "$kept")"
+base=""
+for b in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+  if [ -s "$b" ]; then base="$b"; break; fi
+done
+if [ -z "$base" ] && command -v python3 >/dev/null 2>&1; then
+  base=$(python3 -c 'import certifi; print(certifi.where())' 2>/dev/null || true)
+fi
+if [ -n "$base" ] && [ -s "$base" ]; then cat "$base" "$src" > "$kept"; else cp "$src" "$kept"; fi
+chmod 644 "$kept"
+
+Command outputs captured
+Running command: mkdir -p /logs/agent; printf "%s" "$KODACT_TASK" > /logs/agent/instruction.txt; printf '%s\n' '{"harness": "kodact", "model": "quick-thinking", "served_model": null, "served_window": null, "flags": ["--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose", "--autonomous", "--model", "quick-thinking", "--max-time", "870", "--plugin-dir", "/usr/local/share/kodact/pip-wheelhouse/i-have-adhd-plugin"], "time_limit_s": 900.0, "settings": {"KODACT_CARRY_REASONING": "1", "KODACT_MODEL": "deep-thinking", "KODACT_NUDGES": "constraints,clock", "KODACT_OPENAI_API_KEY": "<set>", "KODACT_OPENAI_BASE_URL": "https://gpt.technica-engineering.net/api/v1", "PIP_DEFAULT_TIMEOUT": "600", "PIP_FIND_LINKS": "/usr/local/share/kodact/pip-wheelhouse", "PIP_RETRIES": "10"}}' > /logs/agent/run.json; /usr/local/bin/kodact -p "$KODACT_TASK" --dangerously-skip-permissions --output-format stream-json --verbose --autonomous --model quick-thinking --max-time 870 --plugin-dir /usr/local/share/kodact/pip-wheelhouse/i-have-adhd-plugin > /logs/agent/kodact.jsonl 2> /logs/agent/kodact.stderr.txt
+Command outputs captured
+Running command: mkdir -p /logs/agent; { 
+src=/tmp/kodact-uv-for-tests
+bin="$HOME/.local/bin"
+if [ -x "$bin/uv" ] || command -v uvx >/dev/null 2>&1; then
+  rm -f "$src"; echo "uv for the tests: one is there already"; exit 0
+fi
+mkdir -p "$bin" && cp "$src" "$bin/uv.kodact" && chmod 755 "$bin/uv.kodact" && rm -f "$src" || exit 0
+if ! version=$("$bin/uv.kodact" --version 2>/dev/null); then
+  rm -f "$bin/uv.kodact"; echo "uv for the tests: the uv of the machine running Harbor doesn't run here"; exit 0
+fi
+mv "$bin/uv.kodact" "$bin/uv"
+[ -e "$bin/uvx" ] || { printf '#!/bin/sh\n[ "$1" = --version ] && exec "$(dirname "$0")/uv" --version\nexec "$(dirname "$0")/uv" tool run "$@"\n' > "$bin/uvx"; chmod 755 "$bin/uvx"; }
+[ -e "$bin/env" ] || printf '%s\n' '#!/bin/sh' 'case ":${PATH}:" in' '  *:"$HOME/.local/bin":*) ;;' \
+  '  *) export PATH="$HOME/.local/bin:$PATH" ;;' 'esac' > "$bin/env"
+echo "uv for the tests: $version, from the machine running Harbor"
+ } > /logs/agent/uv-for-tests.txt 2>&1
+Command outputs captured
+Collecting main service artifacts

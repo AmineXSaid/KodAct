@@ -1,0 +1,7 @@
+Running command: chmod 755 /usr/local/bin/kodact && /usr/local/bin/kodact --version
+Command outputs captured
+Running command: printf '%s\n' '10.21.3.57 gpt.technica-engineering.net' >> /etc/hosts
+Command outputs captured
+Running command: mkdir -p /usr/local/share/kodact/uv-cache
+Command outputs captured
+Trial break-filter-js-from-html__EzU7mP7 cancelled

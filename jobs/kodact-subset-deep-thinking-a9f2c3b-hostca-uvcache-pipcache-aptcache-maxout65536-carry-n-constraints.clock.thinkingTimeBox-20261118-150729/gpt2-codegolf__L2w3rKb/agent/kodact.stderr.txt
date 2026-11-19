@@ -1,0 +1,3 @@
+A reply reasoned for 87 s without acting: stopped, and its notes handed back.
+A reply reasoned for 65 s without acting: stopped, and its notes handed back.
+Reached the time limit (--max-time): the run stopped; the work done so far is left as it is.

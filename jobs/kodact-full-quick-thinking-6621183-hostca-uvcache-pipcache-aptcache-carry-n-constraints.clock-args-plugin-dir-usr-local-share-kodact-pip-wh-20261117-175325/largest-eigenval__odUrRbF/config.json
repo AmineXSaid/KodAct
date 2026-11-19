@@ -1,0 +1,32 @@
+{
+    "task": {
+        "path": "largest-eigenval",
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "source": "terminal-bench"
+    },
+    "trial_name": "largest-eigenval__odUrRbF",
+    "trials_dir": "jobs/kodact-full-quick-thinking-6621183-hostca-uvcache-pipcache-aptcache-carry-n-constraints.clock-args-plugin-dir-usr-local-share-kodact-pip-wh-20261117-175325",
+    "verifier_timeout_multiplier": 3.0,
+    "agent_setup_timeout_multiplier": 3.0,
+    "environment_build_timeout_multiplier": 3.0,
+    "agent": {
+        "name": "kodact_agent:KodAct",
+        "model_name": "quick-thinking"
+    },
+    "verifier": {
+        "env": {
+            "SSL_CERT_FILE": "/usr/local/share/kodact/ca-bundle.pem",
+            "REQUESTS_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+            "CURL_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+            "PIP_CERT": "/usr/local/share/kodact/ca-bundle.pem",
+            "GIT_SSL_CAINFO": "/usr/local/share/kodact/ca-bundle.pem",
+            "NODE_EXTRA_CA_CERTS": "/usr/local/share/kodact/ca-bundle.pem",
+            "UV_NATIVE_TLS": "1",
+            "UV_SYSTEM_CERTS": "1",
+            "UV_CACHE_DIR": "/usr/local/share/kodact/uv-cache",
+            "UV_HTTP_TIMEOUT": "600"
+        }
+    },
+    "job_id": "a184a670-f89a-4476-8924-17e211747684"
+}

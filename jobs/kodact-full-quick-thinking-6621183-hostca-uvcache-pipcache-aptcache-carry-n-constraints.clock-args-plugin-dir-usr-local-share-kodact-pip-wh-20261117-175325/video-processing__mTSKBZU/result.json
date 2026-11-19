@@ -1,0 +1,141 @@
+{
+    "id": "737f521d-f257-4fad-91c9-3eca0e4dd7de",
+    "task_name": "video-processing",
+    "trial_name": "video-processing__mTSKBZU",
+    "trial_uri": "file:///home/kodact/KodAct/jobs/kodact-full-quick-thinking-6621183-hostca-uvcache-pipcache-aptcache-carry-n-constraints.clock-args-plugin-dir-usr-local-share-kodact-pip-wh-20261117-175325/video-processing__mTSKBZU",
+    "task_id": {
+        "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+        "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "path": "video-processing"
+    },
+    "source": "terminal-bench",
+    "task_checksum": "b62eef3fb5c016796ec8b1eda72f2be68fcb44844d2dbe12776412e1580a33b3",
+    "config": {
+        "task": {
+            "path": "video-processing",
+            "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+            "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": "terminal-bench"
+        },
+        "trial_name": "video-processing__mTSKBZU",
+        "trials_dir": "jobs/kodact-full-quick-thinking-6621183-hostca-uvcache-pipcache-aptcache-carry-n-constraints.clock-args-plugin-dir-usr-local-share-kodact-pip-wh-20261117-175325",
+        "install_only": false,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": null,
+        "verifier_timeout_multiplier": 3.0,
+        "agent_setup_timeout_multiplier": 3.0,
+        "environment_build_timeout_multiplier": 3.0,
+        "agent": {
+            "name": "kodact_agent:KodAct",
+            "import_path": null,
+            "model_name": "quick-thinking",
+            "base_url": null,
+            "model_api_key_name": null,
+            "model_api_format": null,
+            "skip_model_parsing": false,
+            "n_concurrent": null,
+            "concurrency_group": null,
+            "skills": [],
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "resume_trajectory": false,
+            "load_trajectory": null,
+            "extra_allowed_hosts": [],
+            "kwargs": {},
+            "mcp_servers": []
+        },
+        "user_agent": null,
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "stream": false,
+            "cpu_enforcement_policy": "auto",
+            "memory_enforcement_policy": "auto",
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "override_tpu": null,
+            "mounts": null,
+            "extra_docker_compose": [],
+            "kwargs": {},
+            "extra_allowed_hosts": []
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "env": {
+                "SSL_CERT_FILE": "/usr/local/share/kodact/ca-bundle.pem",
+                "REQUESTS_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+                "CURL_CA_BUNDLE": "/usr/local/share/kodact/ca-bundle.pem",
+                "PIP_CERT": "/usr/local/share/kodact/ca-bundle.pem",
+                "GIT_SSL_CAINFO": "/usr/local/share/kodact/ca-bundle.pem",
+                "NODE_EXTRA_CA_CERTS": "/usr/local/share/kodact/ca-bundle.pem",
+                "UV_NATIVE_TLS": "1",
+                "UV_SYSTEM_CERTS": "1",
+                "UV_CACHE_DIR": "/usr/local/share/kodact/uv-cache",
+                "UV_HTTP_TIMEOUT": "600"
+            },
+            "disable": false
+        },
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "extra_instructions": [],
+        "job_id": "a184a670-f89a-4476-8924-17e211747684",
+        "source_trial": null
+    },
+    "agent_info": {
+        "name": "kodact",
+        "version": "kodact 0.1.0 (KodAct)",
+        "model_info": {
+            "name": "quick-thinking",
+            "provider": null
+        }
+    },
+    "agent_result": {
+        "n_input_tokens": 1665761,
+        "n_cache_tokens": 1505600,
+        "n_output_tokens": 66202,
+        "cost_usd": 0.0,
+        "model_usage": null,
+        "rollout_details": null,
+        "metadata": {
+            "num_turns": 46,
+            "subtype": "success",
+            "stop_reason": "end_turn"
+        }
+    },
+    "verifier_result": {
+        "rewards": {
+            "reward": 0.0
+        }
+    },
+    "verifier_environment_mode": "shared",
+    "exception_info": null,
+    "started_at": "2026-11-17T20:09:54.686509Z",
+    "finished_at": "2026-11-17T20:24:32.070911Z",
+    "environment_setup": {
+        "started_at": "2026-11-17T20:09:54.692505Z",
+        "finished_at": "2026-11-17T20:09:59.317794Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-11-17T20:09:59.317846Z",
+        "finished_at": "2026-11-17T20:10:11.753976Z"
+    },
+    "agent_execution": {
+        "started_at": "2026-11-17T20:10:11.754077Z",
+        "finished_at": "2026-11-17T20:23:42.174058Z"
+    },
+    "verifier": {
+        "started_at": "2026-11-17T20:23:43.680799Z",
+        "finished_at": "2026-11-17T20:24:20.856583Z"
+    },
+    "step_results": null
+}

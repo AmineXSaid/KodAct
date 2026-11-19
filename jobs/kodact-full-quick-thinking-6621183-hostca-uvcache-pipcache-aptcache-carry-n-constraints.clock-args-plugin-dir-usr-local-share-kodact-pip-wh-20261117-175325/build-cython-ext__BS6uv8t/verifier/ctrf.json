@@ -1,0 +1,122 @@
+{
+    "results": {
+        "tool": {
+            "name": "pytest",
+            "version": "8.4.1"
+        },
+        "summary": {
+            "tests": 11,
+            "passed": 10,
+            "failed": 1,
+            "skipped": 0,
+            "pending": 0,
+            "other": 0,
+            "start": 1794956155.4730787,
+            "stop": 1794956169.0000682
+        },
+        "tests": [
+            {
+                "name": "test_outputs.py::test_numpy_version",
+                "status": "passed",
+                "duration": 0.417538286998024,
+                "start": 1794956155.5693264,
+                "stop": 1794956155.9874356,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_repo_cloned",
+                "status": "passed",
+                "duration": 0.0009540360006212723,
+                "start": 1794956155.987905,
+                "stop": 1794956155.989169,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_pyknotid_core_import",
+                "status": "passed",
+                "duration": 0.0011053070047637448,
+                "start": 1794956155.9895837,
+                "stop": 1794956155.9910524,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_chelpers_cython_extension",
+                "status": "passed",
+                "duration": 1.286853923000308,
+                "start": 1794956155.991383,
+                "stop": 1794956157.2787573,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_ccomplexity_cython_extension",
+                "status": "passed",
+                "duration": 0.0010008030003518797,
+                "start": 1794956157.2793102,
+                "stop": 1794956157.2806442,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_cinvariants_cython_extension",
+                "status": "passed",
+                "duration": 0.0007910839995020069,
+                "start": 1794956157.2810054,
+                "stop": 1794956157.2820308,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_chelpers",
+                "status": "passed",
+                "duration": 0.0008748120017116889,
+                "start": 1794956157.282397,
+                "stop": 1794956157.2835586,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_ccomplexity",
+                "status": "passed",
+                "duration": 0.0028256580044399016,
+                "start": 1794956157.2841609,
+                "stop": 1794956157.2873607,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_cinvariants_python_vs_cython",
+                "status": "passed",
+                "duration": 0.004877243994997116,
+                "start": 1794956157.287957,
+                "stop": 1794956157.2932892,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_example_usage",
+                "status": "passed",
+                "duration": 0.007562471000710502,
+                "start": 1794956157.2939818,
+                "stop": 1794956157.3020308,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_pyknotid_repository_tests",
+                "status": "failed",
+                "raw_status": "call_failed",
+                "duration": 11.647461961998488,
+                "start": 1794956157.3025694,
+                "stop": 1794956168.9973042,
+                "retries": 0,
+                "file_path": "test_outputs.py",
+                "trace": "def test_pyknotid_repository_tests():\n        \"\"\"Download and run the original pyknotid test suite.\"\"\"\n        with tempfile.TemporaryDirectory() as temp_dir:\n            git_cmd = [\n                \"git\",\n                \"clone\",\n                \"--depth\",\n                \"1\",\n                \"--branch\",\n                \"0.5.3\",\n                \"https://github.com/SPOCKnots/pyknotid.git\",\n                temp_dir,\n            ]\n            result = subprocess.run(git_cmd, capture_output=True, text=True)\n            tests_dir = os.path.join(temp_dir, \"tests\")\n    \n            # Run pytest excluding the problematic test files\n            pytest_cmd = [\n                \"python\",\n                \"-m\",\n                \"pytest\",\n                tests_dir,\n                \"--ignore\",\n                os.path.join(tests_dir, \"test_random_curves.py\"),\n                \"--ignore\",\n                os.path.join(tests_dir, \"test_catalogue.py\"),\n                \"-v\",\n            ]\n    \n            original_cwd = os.getcwd()\n            try:\n                os.chdir(\"/app/pyknotid\")\n                result = subprocess.run(pytest_cmd, capture_output=True, text=True)\n>               assert result.returncode == 0, (\n                    f\"Repository tests failed with return code {result.returncode}\"\n                )\nE               AssertionError: Repository tests failed with return code 1\nE               assert 1 == 0\nE                +  where 1 = CompletedProcess(args=['python', '-m', 'pytest', '/tmp/tmp1thv31un/tests', '--ignore', '/tmp/tmp1thv31un/tests/test_ra...onstructed_space_curve\\n========================= 1 failed, 17 passed in 7.08s =========================\\n\", stderr='').returncode\n\n/tests/test_outputs.py:173: AssertionError",
+                "message": "The test failed in the call phase due to an assertion error"
+            }
+        ]
+    }
+}

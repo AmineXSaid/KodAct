@@ -1,0 +1,144 @@
+Hit:1 http://archive.ubuntu.com/ubuntu noble InRelease
+Get:2 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Hit:3 http://archive.ubuntu.com/ubuntu noble-updates InRelease
+Hit:4 http://archive.ubuntu.com/ubuntu noble-backports InRelease
+Get:5 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1472 kB]
+Fetched 1598 kB in 1s (1673 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libcurl4t64
+The following packages will be upgraded:
+  curl libcurl4t64
+2 upgraded, 0 newly installed, 0 to remove and 92 not upgraded.
+Need to get 571 kB of archives.
+After this operation, 6144 B of additional disk space will be used.
+Get:1 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 curl amd64 8.5.0-2ubuntu10.16 [226 kB]
+Get:2 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libcurl4t64 amd64 8.5.0-2ubuntu10.16 [344 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 571 kB in 0s (1668 kB/s)
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 20212 files and directories currently installed.)
+Preparing to unpack .../curl_8.5.0-2ubuntu10.16_amd64.deb ...
+Unpacking curl (8.5.0-2ubuntu10.16) over (8.5.0-2ubuntu10.6) ...
+Preparing to unpack .../libcurl4t64_8.5.0-2ubuntu10.16_amd64.deb ...
+Unpacking libcurl4t64:amd64 (8.5.0-2ubuntu10.16) over (8.5.0-2ubuntu10.6) ...
+Setting up libcurl4t64:amd64 (8.5.0-2ubuntu10.16) ...
+Setting up curl (8.5.0-2ubuntu10.16) ...
+Processing triggers for libc-bin (2.39-0ubuntu8.6) ...
+downloading uv 0.9.5 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Downloading cpython-3.13.9-linux-x86_64-gnu (download) (32.0MiB)
+ Downloading cpython-3.13.9-linux-x86_64-gnu (download)
+Installed 5 packages in 44ms
+============================= test session starts ==============================
+platform linux -- Python 3.13.9, pytest-8.3.4, pluggy-1.7.0
+rootdir: /tests
+plugins: json-ctrf-0.3.5
+collected 6 items
+
+test_outputs.py .F....                                                   [100%]
+
+=================================== FAILURES ===================================
+_____________________ test_hierarchical_model_implemented ______________________
+
+    def test_hierarchical_model_implemented():
+        """Test that hierarchical Bayesian model structure is implemented"""
+        stan_model_path = "/app/hierarchical_model.stan"
+        assert os.path.exists(stan_model_path), (
+            f"Stan model file not found at {stan_model_path}"
+        )
+        # Check that model can be parsed by Stan
+        try:
+            r_code = f"""
+            library(rstan)
+            model_code <- readLines('{stan_model_path}')
+            # Try to parse the model to validate syntax
+            model <- stan_model(model_code=paste(model_code, collapse='\\n'))
+            cat('Model structure valid')
+            """
+    
+>           result = subprocess.run(
+                ["R", "--slave", "-e", r_code], capture_output=True, text=True, timeout=180
+            )
+
+test_outputs.py:45: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/root/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/subprocess.py:556: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+/root/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/subprocess.py:1222: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+/root/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/subprocess.py:2129: in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: -9 args: ['R', '--slave', '-e', "\n        library(rstan...>
+endtime = 24244.541476404, orig_timeout = 180, stdout_seq = []
+stderr_seq = [b'Loading required package: StanHeaders\n', b'\nrstan version 2.32.7 (Stan version 2.39.0)\n\n', b'For execution on a..._sum()` or `map_rect()` Stan functions,\nchange `threads_per_chain` option:\nrstan_options(threads_per_chain = 1)\n\n']
+skip_check_and_raise = False
+
+    def _check_timeout(self, endtime, orig_timeout, stdout_seq, stderr_seq,
+                       skip_check_and_raise=False):
+        """Convenience for checking if a timeout has expired."""
+        if endtime is None:
+            return
+        if skip_check_and_raise or _time() > endtime:
+>           raise TimeoutExpired(
+                    self.args, orig_timeout,
+                    output=b''.join(stdout_seq) if stdout_seq else None,
+                    stderr=b''.join(stderr_seq) if stderr_seq else None)
+E           subprocess.TimeoutExpired: Command '['R', '--slave', '-e', "\n        library(rstan)\n        model_code <- readLines('/app/hierarchical_model.stan')\n        # Try to parse the model to validate syntax\n        model <- stan_model(model_code=paste(model_code, collapse='\\n'))\n        cat('Model structure valid')\n        "]' timed out after 180 seconds
+
+/root/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/subprocess.py:1269: TimeoutExpired
+
+During handling of the above exception, another exception occurred:
+
+    def test_hierarchical_model_implemented():
+        """Test that hierarchical Bayesian model structure is implemented"""
+        stan_model_path = "/app/hierarchical_model.stan"
+        assert os.path.exists(stan_model_path), (
+            f"Stan model file not found at {stan_model_path}"
+        )
+        # Check that model can be parsed by Stan
+        try:
+            r_code = f"""
+            library(rstan)
+            model_code <- readLines('{stan_model_path}')
+            # Try to parse the model to validate syntax
+            model <- stan_model(model_code=paste(model_code, collapse='\\n'))
+            cat('Model structure valid')
+            """
+    
+            result = subprocess.run(
+                ["R", "--slave", "-e", r_code], capture_output=True, text=True, timeout=180
+            )
+    
+            assert result.returncode == 0, (
+                f"Stan model has syntax errors or invalid structure: {result.stderr}"
+            )
+    
+        except subprocess.TimeoutExpired:
+>           assert False, "Timeout while validating Stan model structure"
+E           AssertionError: Timeout while validating Stan model structure
+E           assert False
+
+test_outputs.py:54: AssertionError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED test_outputs.py::test_rstan_package_installed
+PASSED test_outputs.py::test_r_script_created_and_used_rstan
+PASSED test_outputs.py::test_posterior_alpha_estimation
+PASSED test_outputs.py::test_posterior_beta_estimation
+PASSED test_outputs.py::test_stan_model_sampling
+FAILED test_outputs.py::test_hierarchical_model_implemented - AssertionError:...
+=================== 1 failed, 5 passed in 407.61s (0:06:47) ====================

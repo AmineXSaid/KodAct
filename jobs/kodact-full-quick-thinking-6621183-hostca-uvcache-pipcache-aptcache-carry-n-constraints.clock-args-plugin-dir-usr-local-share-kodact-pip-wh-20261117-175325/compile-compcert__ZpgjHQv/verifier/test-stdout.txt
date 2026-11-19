@@ -1,0 +1,37 @@
+Hit:1 http://security.ubuntu.com/ubuntu noble-security InRelease
+Hit:2 http://archive.ubuntu.com/ubuntu noble InRelease
+Hit:3 http://archive.ubuntu.com/ubuntu noble-updates InRelease
+Hit:4 http://archive.ubuntu.com/ubuntu noble-backports InRelease
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+binutils is already the newest version (2.42-4ubuntu2.10).
+binutils set to manually installed.
+You might want to run 'apt --fix-broken install' to correct these.
+The following packages have unmet dependencies:
+ coq : Depends: python3:any
+       Depends: ocaml-nox but it is not going to be installed
+ curl : Depends: libcurl4t64 (= 8.5.0-2ubuntu10.16) but it is not going to be installed
+E: Unmet dependencies. Try 'apt --fix-broken install' with no packages (or specify a solution).
+/tests/test.sh: line 8: curl: command not found
+warning: The `native-tls` setting is deprecated and will be removed in a future release. Use `system-certs` instead.
+Downloading cpython-3.13.18-linux-x86_64-gnu (download) (33.8MiB)
+ Downloaded cpython-3.13.18-linux-x86_64-gnu (download)
+Downloading pygments (1.2MiB)
+ Downloaded pygments
+Installed 6 packages in 14ms
+============================= test session starts ==============================
+platform linux -- Python 3.13.18, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+plugins: json-ctrf-0.3.5
+collected 3 items
+
+../tests/test_outputs.py ...                                             [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_compcert_exists_and_executable
+PASSED ../tests/test_outputs.py::test_compcert_valid_and_functional
+PASSED ../tests/test_outputs.py::test_compcert_rejects_unsupported_feature
+============================== 3 passed in 0.20s ===============================
