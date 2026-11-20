@@ -358,7 +358,7 @@ Measures the harness; see `evals/README.md`. `run` writes `report.json` and
  "permission_denials": [{"tool_name": "Bash", "tool_use_id": "…", "tool_input": {}}],
  "errors": [], "structured_output": null,
  "verification": {"missing": ["out/report.txt"], "over_limit": [{"file": "tiny.py", "size": 150, "limit": 99}]},
- "finish": {"summary": "…", "requirements": [{"requirement": "…", "evidence": "…", "met": true}], "verified": true},
+ "finish": {"summary": "…", "requirements": [{"requirement": "…", "scope": "…", "evidence": "…", "met": true}], "verified": true},
  "uuid": "uuid", "exit_code": 0}
 ```
 
@@ -408,11 +408,14 @@ after `kodact` exits.
 
 An unattended run (`--autonomous`) ends with the Finish tool, and the
 result says so in `finish`: the model's summary, the requirements it read in
-the request, each with its evidence and whether it is met, and its claim of
+the request, each with what it covers (`scope`: every size, input, file or
+output it names, and whether a limit counts them one by one or together),
+its evidence and whether it is met, and its claim of
 whether this run's tool output showed them met. Evidence is a check run
 after the last change that would have failed had the requirement not been
 met, run in the form the request describes; a guess no check could tell
-apart is named in the summary. `verified` is false whenever a requirement is
+apart is named in the summary, and a check of some of the cases a requirement
+covers shows only those. `verified` is false whenever a requirement is
 listed as not met. The first Finish of a run that lists one, while more than
 the last fifth of its `--max-time` is left (or with no limit), is answered
 with those requirements and the time left, and the run goes on. `verified`
@@ -420,8 +423,8 @@ is still the model's word, not a check KodAct ran:
 
 ```json
 "finish": {"summary": "Fixed both bugs; the tests pass.", "verified": true, "requirements": [
-  {"requirement": "word_count ignores empty words", "evidence": "`python3 -m pytest -q` passed test_spaces", "met": true},
-  {"requirement": "average_word_length returns the exact mean", "evidence": "`python3 -c ...` printed 1.5 for \"a ab\"", "met": true}]}
+  {"requirement": "word_count ignores empty words", "scope": "leading, trailing and repeated spaces", "evidence": "`python3 -m pytest -q` passed test_spaces, which tries all three", "met": true},
+  {"requirement": "average_word_length returns the exact mean", "scope": "any text", "evidence": "`python3 -c ...` printed 1.5 for \"a ab\"", "met": true}]}
 ```
 
 To see what the model did not show met:

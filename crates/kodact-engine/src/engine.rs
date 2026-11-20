@@ -4935,7 +4935,7 @@ impl Engine {
             None => None,
         };
         self.unmet_told = true;
-        let listed: Vec<&str> = unmet.iter().map(|(r, _)| r.as_str()).collect();
+        let listed: Vec<&str> = unmet.iter().map(|(r, _, _)| r.as_str()).collect();
         self.system_event("verification", json!({"kind": "unmet_requirements", "unmet": listed}));
         self.notice(NoticeLevel::Info, "The finish lists requirements not shown met: asking the model to meet them.");
         Some(crate::finish::unmet_note(&unmet, clock.as_deref()))
