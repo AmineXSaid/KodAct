@@ -2006,10 +2006,9 @@ impl App {
         }
         let q = q.to_lowercase();
         let sole = self.editor.word_is_sole_prompt();
-        let eligible = |c: &&CommandInfo| {
-            sole || self.skills.iter().any(|s| s.eq_ignore_ascii_case(&c.name))
-                || kodact_core::commands::lookup(&c.name).is_none()
-        };
+        let is_skill = |name: &str| self.skills.iter().any(|s| s.eq_ignore_ascii_case(name));
+        let eligible = |c: &&CommandInfo| sole || is_skill(&c.name) || kodact_core::commands::lookup(&c.name).is_none();
+        let skill_kw = q.len() >= 2 && ("skill".starts_with(&q) || q == "skills");
         let mut starts: Vec<&CommandInfo> =
             self.commands.iter().filter(eligible).filter(|c| c.name.to_lowercase().starts_with(&q)).collect();
         let contains = self
@@ -2018,6 +2017,12 @@ impl App {
             .filter(eligible)
             .filter(|c| !c.name.to_lowercase().starts_with(&q) && c.name.to_lowercase().contains(&q));
         starts.extend(contains);
+        if skill_kw {
+            let by_skill = self.commands.iter().filter(eligible).filter(|c| {
+                is_skill(&c.name) && !c.name.to_lowercase().starts_with(&q) && !c.name.to_lowercase().contains(&q)
+            });
+            starts.extend(by_skill);
+        }
         starts
     }
 
@@ -4247,5 +4252,25 @@ mod tests {
             parent_tool_use_id: None,
         }));
         assert!(a.has_code, "non-streamed assistant fence sets has_code");
+    }
+
+    #[test]
+    fn slash_skill_surfaces_loaded_skills_in_menu() {
+        let mut a = app();
+        a.on_event(UiEvent::Commands(vec![
+            CommandInfo { name: "skills".into(), args: "".into(), description: "List available skills".into() },
+            CommandInfo { name: "clear".into(), args: "".into(), description: "Clear".into() },
+            CommandInfo { name: "i-have-adhd".into(), args: "".into(), description: "Focus helper".into() },
+        ]));
+        a.on_event(UiEvent::Skills(vec!["i-have-adhd".into()]));
+
+        a.editor.set("/skill");
+        let names: Vec<&str> = a.menu().into_iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["skills", "i-have-adhd"]);
+
+        // Mid-prompt `/skill` hides built-in `/skills` and surfaces the skill directly.
+        a.editor.set("please use /skill");
+        let mid: Vec<&str> = a.menu().into_iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(mid, vec!["i-have-adhd"]);
     }
 }

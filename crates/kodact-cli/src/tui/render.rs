@@ -540,7 +540,10 @@ pub fn full_view_at(
         if app.look == super::look::Look::Status { vec![readouts(app, width as usize)] } else { vec![] };
     // The conversation: the transcript down to the live region, with a blank row
     // between its last line and the input so the answer doesn't touch the box.
-    let gap = usize::from(!rows.is_empty() && !rows.last().is_some_and(|l| line_blank(l)));
+    // When the agent is working or the user is scrolled up, draw a crisp hairline
+    // divider so chat history and the active working task stay visually distinct.
+    let separate = !rows.is_empty() && (app.busy || scroll > 0);
+    let gap = usize::from(separate || (!rows.is_empty() && !rows.last().is_some_and(|l| line_blank(l))));
     let avail = h.saturating_sub(live.lines.len() + bar.len() + gap);
     let max_scroll = rows.len().saturating_sub(avail);
     let scroll = scroll.min(max_scroll);
@@ -604,7 +607,27 @@ pub fn full_view_at(
     let mut lines = bar;
     let cursor = live.cursor.map(|(x, y)| (x, y + (lines.len() + avail + gap) as u16));
     lines.extend(out);
-    lines.extend(std::iter::repeat_n(Line::default(), gap));
+    if gap > 0 {
+        if separate {
+            let t = app.theme;
+            let w = width as usize;
+            let divider = if app.busy {
+                let tag = if app.forcing_queue { " ◆ stopping " } else { " ◆ working " };
+                let left_r = "─".repeat(2.min(w));
+                let right_n = w.saturating_sub(text_width(&left_r) + text_width(tag));
+                Line::from(vec![
+                    Span::styled(left_r, t.hairline()),
+                    Span::styled(tag, t.accent()),
+                    Span::styled("─".repeat(right_n), t.hairline()),
+                ])
+            } else {
+                Line::from(Span::styled("─".repeat(w), t.hairline()))
+            };
+            lines.push(divider);
+        } else {
+            lines.push(Line::default());
+        }
+    }
     lines.extend(live.lines);
     (LiveView { lines, cursor }, max_scroll)
 }
@@ -2239,6 +2262,7 @@ mod tests {
         assert!(rows.iter().any(|r| r == "line 29") && !rows.iter().any(|r| r == "line 31"), "{rows:#?}");
         assert!(rows.iter().any(|r| r.trim() == "↑ 75% · ↓ 10 more lines · wheel / PgDn / End bottom"), "{rows:#?}");
         // A short transcript sits just above the live region, not at the top with a gap.
+        a.busy = false;
         let (v, _) = full_view(&a, 100, 30, &transcript[..2], &page, 0);
         let (rows, _) = draw(&v, 100);
         let at = rows.iter().position(|r| r == "line 2").unwrap();
@@ -2877,5 +2901,26 @@ mod tests {
         let footern = draw(&vn, 40).0.into_iter().find(|r| r.contains("End bottom")).unwrap();
         assert!(text_width(footern.trim_end()) <= 40, "{footern}");
         assert!(footern.contains("↑ 50%") && footern.contains("↓ 40"));
+    }
+
+    #[test]
+    fn busy_and_scrolled_views_separate_history_from_live_task() {
+        let mut a = app(false);
+        a.front = false;
+        let page = FrontPage { box_left: 0, box_w: 80, ..Default::default() };
+        let transcript: Vec<Line<'static>> = (1..=40).map(|i| Line::from(format!("line {i}"))).collect();
+
+        // Busy view draws the labelled `◆ working` divider between history and live task.
+        a.busy = true;
+        a.busy_since = Some(Instant::now());
+        let (vb, _) = full_view(&a, 80, 24, &transcript, &page, 0);
+        let rows_b = draw(&vb, 80).0;
+        assert!(rows_b.iter().any(|r| r.contains("── ◆ working ─")), "{rows_b:?}");
+
+        // Scrolled idle view draws a full-width hairline divider below the scroll footer.
+        a.busy = false;
+        let (vs, _) = full_view(&a, 80, 24, &transcript, &page, 10);
+        let rows_s = draw(&vs, 80).0;
+        assert!(rows_s.iter().any(|r| r == &"─".repeat(80)), "{rows_s:?}");
     }
 }

@@ -120,16 +120,6 @@ impl Provider {
     fn key_optional(self) -> bool {
         matches!(self, Provider::Ollama | Provider::Custom)
     }
-
-    pub fn default_models(self) -> &'static [&'static str] {
-        match self {
-            Provider::Anthropic => &["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
-            Provider::OpenAi => &["gpt-5", "gpt-5-mini", "o4-mini"],
-            Provider::Gemini => &["gemini-2.5-pro", "gemini-2.5-flash"],
-            Provider::Ollama => &["qwen2.5-coder:14b", "llama3.3", "deepseek-r1:14b"],
-            Provider::Custom => &["anthropic/claude-sonnet-4", "openai/gpt-4o", "deepseek/deepseek-chat"],
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,7 +209,7 @@ impl SetupState {
             api_key: String::new(),
             reveal_key: false,
             cred_field: CredField::Key,
-            models: Provider::Anthropic.default_models().iter().map(|s| (*s).to_string()).collect(),
+            models: Vec::new(),
             model_idx: 0,
             custom_model: String::new(),
             probing: false,
@@ -259,7 +249,7 @@ impl SetupState {
         let rows = self.rows();
         match rows.get(self.model_idx.min(rows.len().saturating_sub(1))) {
             Some(ModelRow::Listed(m)) | Some(ModelRow::Typed(m)) => m.clone(),
-            None => self.models.first().cloned().unwrap_or_else(|| self.provider().default_models()[0].to_string()),
+            None => self.models.first().cloned().unwrap_or_else(|| self.custom_model.trim().to_string()),
         }
     }
 
@@ -307,7 +297,7 @@ impl SetupState {
         let p = self.provider();
         self.base_url = p.default_base_url().unwrap_or("").to_string();
         self.cred_field = if p.needs_url() { CredField::Url } else { CredField::Key };
-        self.models = p.default_models().iter().map(|s| (*s).to_string()).collect();
+        self.models.clear();
         self.model_idx = 0;
         self.custom_model.clear();
         self.status = None;
@@ -1277,10 +1267,13 @@ pub async fn run(theme: &Theme) -> Result<SetupOutcome, Fail> {
                 state.probing = false;
                 match found {
                     Some(found) => {
-                        state.status = Some(format!("{} models found at the endpoint.", found.len()));
+                        state.status = Some(format!("{} models loaded from the endpoint.", found.len()));
                         state.replace_models(found);
                     }
-                    None => state.status = Some("Showing suggested models · type any ID your endpoint serves.".into()),
+                    None => {
+                        state.models.clear();
+                        state.status = Some("No models loaded from endpoint · check URL or type an ID.".into());
+                    }
                 }
                 None
             },
@@ -1296,10 +1289,11 @@ pub async fn run(theme: &Theme) -> Result<SetupOutcome, Fail> {
             }
             Some(SetupAction::ProbeModels) => {
                 state.status = None;
+                state.models.clear();
                 probe = probe_request(&state).map(|(url, key)| Box::pin(probe_models(url, key)) as Probe);
                 state.probing = probe.is_some();
                 if !state.probing {
-                    state.status = Some("Suggested models · type any ID to use another.".into());
+                    state.status = Some("Type the model ID to use.".into());
                 }
             }
             Some(SetupAction::Save) => match write_settings(&settings_path, &state) {
@@ -1379,11 +1373,15 @@ mod tests {
         assert_eq!(s.step, Step::Credentials);
         assert_eq!(s.base_url, "http://localhost:11434/v1");
 
-        // Enter -> Model step
+        // Enter -> Model step: no default models until loaded or typed
         assert_eq!(s.on_key(key(KeyCode::Enter)), Some(SetupAction::ProbeModels));
         assert_eq!(s.step, Step::Model);
+        assert!(s.models.is_empty());
+        assert_eq!(s.on_key(key(KeyCode::Enter)), None);
+        assert!(s.error.is_some(), "cannot advance without a loaded or typed model");
 
-        // Enter -> Review, Enter -> Save
+        // Endpoint returns loaded models -> Enter -> Review, Enter -> Save
+        s.replace_models(vec!["qwen2.5-coder:14b".into()]);
         assert_eq!(s.on_key(key(KeyCode::Enter)), None);
         assert_eq!(s.step, Step::Review);
         assert_eq!(s.on_key(key(KeyCode::Enter)), Some(SetupAction::Save));
@@ -1431,6 +1429,7 @@ mod tests {
         s.on_key(key(KeyCode::Enter));
         s.on_paste("k");
         s.on_key(key(KeyCode::Enter));
+        s.replace_models(vec!["claude-sonnet-4-6".into(), "claude-opus-4-6".into()]);
         for c in "opus".chars() {
             s.on_key(key(KeyCode::Char(c)));
         }
@@ -1549,6 +1548,7 @@ mod tests {
         s.enter_credentials();
         s.on_key(key(KeyCode::Down)); // not on the model step yet: still resolves by name
         s.step = Step::Model;
+        s.replace_models(vec!["qwen2.5-coder:14b".into(), "llama3.3".into()]);
         s.model_idx = 1;
         assert_eq!(s.selected_model(), "llama3.3");
         s.replace_models(vec!["a-model".into(), "llama3.3".into(), "z-model".into()]);
