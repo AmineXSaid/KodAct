@@ -19,15 +19,6 @@ pub struct Theme {
     pub accent: Option<Color>,
     /// How many colours the terminal shows.
     pub depth: Depth,
-    /// Motion reduced (`KODACT_REDUCED_MOTION`): spinners, shimmers and filling marks
-    /// hold their first frame instead of moving. What they say stays the same.
-    pub calm: bool,
-}
-
-/// Whether `KODACT_REDUCED_MOTION` asks for still marks: set, and not 0, false, no or off.
-pub fn reduced_motion() -> bool {
-    std::env::var("KODACT_REDUCED_MOTION")
-        .is_ok_and(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false" | "no" | "off"))
 }
 
 /// `/color` names and their colours.
@@ -51,17 +42,7 @@ impl Theme {
             "auto" => palette::light_background().unwrap_or(false),
             _ => false,
         };
-        Theme { color: color_ok && name != "none", light, accent: None, depth, calm: reduced_motion() }
-    }
-
-    /// The time an animation has run, as its frames should see it: none at all when
-    /// motion is reduced, so every mark holds its first frame.
-    pub fn motion(&self, ran: std::time::Duration) -> std::time::Duration {
-        if self.calm {
-            std::time::Duration::ZERO
-        } else {
-            ran
-        }
+        Theme { color: color_ok && name != "none", light, accent: None, depth }
     }
 
     /// A role's colour as a foreground, or no style without colour.
@@ -1288,7 +1269,7 @@ pub fn plain(line: &Line) -> String {
 mod tests {
     use super::*;
 
-    const T: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True, calm: false };
+    const T: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True };
 
     #[test]
     fn markdown_lines_keep_track_of_fences() {

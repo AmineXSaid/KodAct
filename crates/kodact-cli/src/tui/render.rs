@@ -689,11 +689,11 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
         let mut spans = if is_agent(&r.name) {
             // A sub-agent: a wave of dots and the word for it, so
             // its state never rests on the motion or the colour alone.
-            let mut v = scanner(&t, t.motion(ran));
+            let mut v = scanner(&t, ran);
             v.push(Span::styled("running  ", t.dim()));
             v
         } else {
-            let face = glyphs::RUNNING[(t.motion(ran).as_millis() / RUNNING_STEP.as_millis()) as usize % 4];
+            let face = glyphs::RUNNING[(ran.as_millis() / RUNNING_STEP.as_millis()) as usize % 4];
             vec![Span::styled(format!("{face} "), t.accent())]
         };
         // A sub-agent's row says what it explores; the line below says they're agents.
@@ -724,7 +724,7 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
         && !app.running.iter().any(|r| is_agent(&r.name));
     if app.busy && !asked_row && !(step_shown && !app.waiting_for_answer()) {
         let since = app.busy_since.map(|s| now.duration_since(s)).unwrap_or_default();
-        let frame = SPINNER[(t.motion(since).as_millis() / SPINNER_STEP.as_millis()) as usize % SPINNER.len()];
+        let frame = SPINNER[(since.as_millis() / SPINNER_STEP.as_millis()) as usize % SPINNER.len()];
         let mut line = vec![Span::styled(format!("{frame} "), t.accent())];
         if app.waiting_for_answer() {
             // Needs you: the brand colour, and how long you have been asked, not the turn's time.
@@ -751,7 +751,7 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
                     a => a.to_string(),
                 }
             };
-            line.extend(shimmer(&t, &format!("{verb}…"), t.motion(since)));
+            line.extend(shimmer(&t, &format!("{verb}…"), since));
             let done = if agents > 0 {
                 format!("{} of {} done · ", app.agents_done, agents + app.agents_done)
             } else {
@@ -1176,8 +1176,7 @@ mod tests {
     }
 
     fn app(color: bool) -> App {
-        let mut a =
-            App::new(Theme { color, light: false, accent: None, depth: Default::default(), calm: false }, vec![]);
+        let mut a = App::new(Theme { color, light: false, accent: None, depth: Default::default() }, vec![]);
         // The rounded boxes these tests were written for.
         a.look = crate::tui::look::Look::Card;
         a.on_event(UiEvent::Status(StatusView {
@@ -1764,7 +1763,7 @@ mod tests {
 
         // Ctrl+R shows the search and the match in the input box.
         let mut a = App::new(
-            Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false },
+            Theme { color: false, light: false, accent: None, depth: Default::default() },
             vec!["cargo test".into(), "git status".into()],
         );
         a.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
@@ -2029,30 +2028,8 @@ mod tests {
     }
 
     #[test]
-    fn reduced_motion_holds_every_mark_still() {
-        // KODACT_REDUCED_MOTION: the spinner, the shimmer and the running marks hold their
-        // first frame; the words and the seconds still change.
-        let mut a = app(true);
-        a.theme.calm = true;
-        typed(&mut a, "hello");
-        a.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let start = a.busy_since.unwrap();
-        let row = |ms: u64| {
-            let v = live_view_at(&a, 50, 20, start + Duration::from_millis(ms));
-            v.lines.into_iter().find(|l| l.spans.iter().any(|s| s.content.contains("(1s") || s.content.contains("(2s")))
-        };
-        let (early, late) = (row(1300).expect("a busy row at 1.3s"), row(2300).expect("a busy row at 2.3s"));
-        assert_eq!(early.spans[0].content, format!("{} ", SPINNER[0]), "the spinner holds its first frame");
-        assert_eq!(early.spans[0].content, late.spans[0].content);
-        let t = a.theme;
-        assert!(!early.spans.iter().any(|s| s.style == t.shimmer(3)), "no highlight sweeps the words");
-        assert_eq!(t.motion(Duration::from_secs(5)), Duration::ZERO);
-        assert_eq!(Theme { calm: false, ..t }.motion(Duration::from_secs(5)), Duration::from_secs(5));
-    }
-
-    #[test]
     fn the_shimmer_sweeps_and_the_meter_warns() {
-        let t = text::Theme { color: true, light: false, accent: None, depth: Default::default(), calm: false };
+        let t = text::Theme { color: true, light: false, accent: None, depth: Default::default() };
         let at = |ms| shimmer(&t, "Acting…", Duration::from_millis(ms));
         // Where the brightest character is, in characters from the start.
         let bright = |spans: &[Span]| {
@@ -2085,8 +2062,7 @@ mod tests {
 
     #[test]
     fn bars_fill_dot_by_dot_and_marks_breathe() {
-        let t =
-            crate::tui::text::Theme { color: true, light: false, accent: None, depth: Default::default(), calm: false };
+        let t = crate::tui::text::Theme { color: true, light: false, accent: None, depth: Default::default() };
         let bar = |pct| fill_bar(&t, pct, 4, t.accent()).iter().map(|s| s.content.to_string()).collect::<String>();
         assert_eq!(bar(0), "⣀⣀⣀⣀", "an empty bar is its faint track");
         assert_eq!(bar(50), "⣿⣿⣀⣀");
@@ -2354,7 +2330,6 @@ mod tests {
             light: false,
             accent: None,
             depth: crate::tui::palette::Depth::True,
-            calm: false,
         };
         let heads: Vec<usize> = (0..8).map(|f| scan_head(f).0).collect();
         assert_eq!(heads, [0, 1, 2, 3, 4, 3, 2, 1], "to the end and back, a cell a step");

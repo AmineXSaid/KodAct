@@ -184,8 +184,7 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         for (status, content) in &app.todos {
             let (mark, mark_style, body) = match status.as_str() {
                 "completed" => ("✓", t.subtle(), t.subtle()),
-                // Reduced motion: the ring whole and still, as while the session waits.
-                "in_progress" => match busy_for.filter(|_| app.busy && !t.calm) {
+                "in_progress" => match busy_for.filter(|_| app.busy) {
                     Some(ran) => (turning(ran), t.accent(), t.accent()),
                     None => (RING_STILL, t.accent(), t.accent()),
                 },
@@ -224,7 +223,7 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
                 "connected" => ("●", t.success(), String::new(), t.dim()),
                 "failed" => ("×", t.error(), "failed".to_string(), t.error()),
                 "pending" => {
-                    let ran = t.motion(now.saturating_duration_since(epoch()));
+                    let ran = now.saturating_duration_since(epoch());
                     (filling(ran), breathing(&t, t.warning(), ran), "connecting".into(), t.subtle())
                 }
                 "disabled" => ("○", t.subtle(), "off".to_string(), t.subtle()),
@@ -274,7 +273,7 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
             let ran = now.saturating_duration_since(r.since);
             let steps = format!("{} step{}", r.steps, if r.steps == 1 { "" } else { "s" });
             agents.push(row(
-                Span::styled(filling(t.motion(ran)), breathing(&t, t.accent(), t.motion(ran))),
+                Span::styled(filling(ran), breathing(&t, t.accent(), ran)),
                 asked.unwrap_or(kind),
                 Style::default(),
                 Span::styled(steps, t.subtle()),

@@ -446,7 +446,7 @@ mod tests {
         lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect()
     }
 
-    const DARK: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True, calm: false };
+    const DARK: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True };
 
     #[test]
     fn the_wordmark_is_kod_in_paper_and_act_in_lime() {

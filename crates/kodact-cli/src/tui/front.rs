@@ -702,7 +702,7 @@ mod tests {
         lines.iter().map(crate::tui::text::plain).collect()
     }
 
-    const DARK: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True, calm: false };
+    const DARK: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True };
 
     fn info() -> FrontInfo {
         FrontInfo {

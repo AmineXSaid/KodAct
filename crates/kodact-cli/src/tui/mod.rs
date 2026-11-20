@@ -1641,7 +1641,7 @@ mod tests {
     /// built from, neither display writes a control character.
     #[test]
     fn no_control_character_reaches_the_terminal() {
-        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false };
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
         let hostile = "before \u{1b}[2J\u{1b}]0;title\u{7} a\tb \u{1b}[?1049l \u{9b}31m \u{7f} after";
         let cells =
             |b: &TestBackend| -> String { b.buffer().content().iter().map(|c| c.symbol().to_string()).collect() };
@@ -1741,7 +1741,7 @@ mod tests {
     /// dropped, because the transcript is drawn at the narrower width beside the sidebar.
     #[test]
     fn new_lines_show_with_the_sidebar_open() {
-        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false };
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
         let mut a = app::App::new(theme, vec![]);
         a.front = false;
         let mut f = Full::new(TestBackend::new(160, 30), front::FrontInfo::default()).unwrap();
@@ -1780,7 +1780,7 @@ mod tests {
     /// view: two rows in every six could not be read. Paging never skips a row.
     #[test]
     fn paging_never_skips_a_row_in_a_short_window() {
-        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false };
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
         let mut a = app::App::new(theme, vec![]);
         a.front = false;
         for (cols, lines) in [(40u16, 12u16), (60, 20), (110, 36), (200, 50)] {
@@ -1938,7 +1938,7 @@ mod tests {
 
     #[test]
     fn the_full_screen_starts_over_when_the_conversation_is_replaced() {
-        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false };
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
         let mut a = app::App::new(theme, vec![]);
         let mut f = Full::new(TestBackend::new(100, 30), front::FrontInfo::default()).unwrap();
         a.submit("the old question".into());
@@ -1998,7 +1998,7 @@ mod tests {
 
     #[test]
     fn the_full_screen_keeps_a_gutter_on_both_sides() {
-        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false };
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
         let mut a = app::App::new(theme, vec![]);
         a.submit("fix it".into());
         a.front = false;
@@ -2039,7 +2039,7 @@ mod tests {
     #[test]
     fn ctrl_b_opens_the_sidebar_on_a_wide_screen() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false };
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
         let mut a = app::App::new(theme, vec![]);
         a.submit("add an age check to signups".into());
         a.front = false;
@@ -2146,7 +2146,7 @@ mod tests {
     #[test]
     fn the_mouse_wheel_scrolls_the_discussion_without_changing_the_prompt() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false };
+        let theme = text::Theme { color: false, light: false, accent: None, depth: Default::default() };
         let mut a = app::App::new(theme, vec!["earlier prompt".into(), "latest prompt".into()]);
         a.front = false;
         let mut f = Full::new(TestBackend::new(80, 16), front::FrontInfo::default()).unwrap();
@@ -2428,8 +2428,7 @@ mod snapshots {
     }
 
     fn app() -> App {
-        let mut a =
-            App::new(Theme { color: true, light: false, accent: None, depth: Default::default(), calm: false }, vec![]);
+        let mut a = App::new(Theme { color: true, light: false, accent: None, depth: Default::default() }, vec![]);
         a.front = true;
         a.transcript_indent = TRANSCRIPT_INDENT as usize;
         a.endpoint = "gpt.technica-engineering.net".into();
@@ -2832,8 +2831,7 @@ mod snapshots {
         // 16. The plan in the transcript, then its progress, with the spinner saying the task in
         // progress: at 100 columns (no sidebar), in a dark and a light terminal.
         for (name, light) in [("16-plan", false), ("16-plan-light", true)] {
-            let mut a =
-                App::new(Theme { color: true, light, accent: None, depth: Default::default(), calm: false }, vec![]);
+            let mut a = App::new(Theme { color: true, light, accent: None, depth: Default::default() }, vec![]);
             a.transcript_indent = TRANSCRIPT_INDENT as usize;
             a.submit("add an age check to signups".into());
             a.front = false;

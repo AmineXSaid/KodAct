@@ -557,7 +557,6 @@ the context window to compact in time, and prices to show costs.
 | `MCP_TIMEOUT`, `MCP_TOOL_TIMEOUT` | MCP connect and call timeouts, in milliseconds (30 s, 10 min) |
 | `KODACT_NO_INPUT` | Same as `--no-input` |
 | `KODACT_TUI` | `0`, `false`, `off` or `no`: interactive mode uses the line REPL (same as `--no-tui`) |
-| `KODACT_REDUCED_MOTION` | Set (and not `0`, `false`, `no` or `off`): the terminal UI's spinner, shimmer and working marks hold still; what they say, and the seconds, still change |
 | `KODACT_LOG` | Log filter, with `--debug` (`/debug` turns logging on partway through a session) |
 | `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR_FORCE` | Color |
 
