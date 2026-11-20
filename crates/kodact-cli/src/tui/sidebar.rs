@@ -168,7 +168,7 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
         context.push(Line::from(Span::styled(fit(&s.model, inner), t.dim())));
     }
 
-    // The plan: done steps quiet with a check, the active one in lime with a ring whose gap
+    // The plan: done steps quiet with a check, the active one in rose with a ring whose gap
     // goes round its edge while the turn runs (whole and still while it waits), the rest
     // open. Every mark takes the ring's two columns, the others flush right, so the steps'
     // text lines up. A long step takes the rows it needs while there is room, two when
@@ -256,7 +256,7 @@ pub fn sidebar(app: &App, w: usize, h: usize, now: Instant) -> Vec<Line<'static>
     };
 
     // The sub-agents at work, while any run, so delegated work stays in view after the
-    // conversation has scrolled past it: each filling in lime with what it was asked,
+    // conversation has scrolled past it: each filling in rose with what it was asked,
     // then its kind and its steps. While there is room, how long it has run and its
     // latest steps as a small tree; when there isn't, only the latest step.
     let working: Vec<&super::app::Running> = app.running.iter().filter(|r| is_agent(&r.name)).collect();

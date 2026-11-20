@@ -336,6 +336,10 @@ pub struct App {
     last_ctrl_c: Option<Instant>,
     /// A short hint in the status line ("Press Ctrl-C again to exit").
     pub hint: Option<(String, Instant)>,
+    /// A mode change not yet noted in the transcript: the mode it left, and whether a turn
+    /// was running. Shift+Tab cycles through several modes; only where it lands is written,
+    /// once, when the next prompt goes out or the running turn prints again.
+    mode_note: Option<(PermissionMode, Instant, bool)>,
     /// Shift+Tab reached Dangerous and waits for `y` before turning it on.
     pub danger_armed: bool,
     /// Dangerous mode was confirmed this session (or the session was launched in it, or
@@ -373,6 +377,11 @@ pub struct App {
     pub transcript_indent: usize,
     /// The front screen is showing: nothing sent yet. The input is a centred box under the wordmark.
     pub front: bool,
+    /// The welcome page's suggestion card that has the keyboard (Tab or ↓ from an empty prompt).
+    pub card: Option<usize>,
+    /// The last full-screen draw showed the suggestion cards (a short window, an inline
+    /// screen or a long note leave them out, and then they must not take keys).
+    pub cards_drawn: std::cell::Cell<bool>,
     /// No earlier conversation in this folder: the welcome shows an example request.
     pub first_run: bool,
     /// The sidebar is open (Ctrl+B, full screen from [`SIDEBAR_MIN_COLS`] columns).
@@ -453,6 +462,7 @@ impl App {
             last_esc: None,
             last_ctrl_c: None,
             hint: None,
+            mode_note: None,
             danger_armed: false,
             danger_confirmed: false,
             danger_blocked: false,
@@ -472,6 +482,8 @@ impl App {
             preparing: None,
             talked: false,
             front: false,
+            card: None,
+            cards_drawn: std::cell::Cell::new(false),
             first_run: false,
             sidebar: false,
             title: String::new(),
@@ -842,6 +854,10 @@ impl App {
 
     pub fn on_event(&mut self, ev: UiEvent) {
         self.dirty = true;
+        // A running turn prints again: note the mode it now runs under, once Shift+Tab rests.
+        if self.mode_note.is_some_and(|(_, at, _)| at.elapsed() >= super::render::HINT_FOR) {
+            self.note_mode();
+        }
         match ev {
             UiEvent::Engine(e) => self.on_engine(e),
             UiEvent::Ask { prompt, reply } => self.open_dialog(prompt, reply),
@@ -2202,22 +2218,13 @@ impl App {
     }
 
     fn set_mode(&mut self, mode: PermissionMode) -> Vec<Action> {
-        let m_str = mode.as_str();
-        self.status.mode = m_str.to_string();
-        self.gap();
-        let t = self.theme;
-        let mut spans = vec![
-            Span::styled("── ", t.hairline()),
-            Span::styled("◆ ", t.mode(m_str)),
-            Span::styled(format!("{} mode", mode.label()), t.mode(m_str).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" · {}", mode.short_rule()), t.subtle()),
-            Span::styled(format!(" - {}", mode.definition()), t.dim()),
-        ];
-        if self.busy {
-            spans.push(Span::styled(" (active immediately)", t.subtle()));
-        }
-        spans.push(Span::styled(" ──", t.hairline()));
-        self.pending.push(Line::from(spans));
+        let from = PermissionMode::parse(&self.status.mode).unwrap_or_default();
+        self.status.mode = mode.as_str().to_string();
+        // The status line names the mode at once; the transcript waits until the cycling stops.
+        let left = self.mode_note.map_or(from, |(left, _, _)| left);
+        let busy = self.busy || self.mode_note.is_some_and(|(_, _, b)| b);
+        self.mode_note = Some((left, Instant::now(), busy));
+        self.set_hint(&format!("{} mode · {}", mode.label(), mode.definition()));
 
         let auto_allow = match &self.dialog {
             Some(Dialog { kind: DialogKind::Permission { .. }, prompt: Some(p), .. }) => match mode {
@@ -2233,6 +2240,66 @@ impl App {
             self.answer(PermissionAnswer::Allow { updated_input: None, updated_permissions: vec![] });
         }
         vec![Action::SetMode(mode)]
+    }
+
+    /// Write the pending mode change into the transcript, once: nothing when Shift+Tab came
+    /// back to the mode it started from.
+    fn note_mode(&mut self) {
+        let Some((left, _, busy)) = self.mode_note.take() else { return };
+        let mode = PermissionMode::parse(&self.status.mode).unwrap_or_default();
+        if mode == left {
+            return;
+        }
+        let m_str = mode.as_str();
+        self.gap();
+        let t = self.theme;
+        let mut spans = vec![
+            Span::styled("── ", t.hairline()),
+            Span::styled("◆ ", t.mode(m_str)),
+            Span::styled(format!("{} mode", mode.label()), t.mode(m_str).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" · {}", mode.short_rule()), t.subtle()),
+            Span::styled(format!(" - {}", mode.definition()), t.dim()),
+        ];
+        if busy {
+            spans.push(Span::styled(" (active immediately)", t.subtle()));
+        }
+        spans.push(Span::styled(" ──", t.hairline()));
+        self.pending.push(Line::from(spans));
+    }
+
+    /// The welcome page's suggestion cards. From an empty prompt Tab or ↓ gives the
+    /// keyboard to the first card; ←/→ (or Tab) move along; Enter sends the
+    /// card's prompt; Esc or ↑ hands the keyboard back to the prompt, and so does typing,
+    /// with the key typed. `None` when the cards don't take the key.
+    fn card_key(&mut self, key: KeyEvent, modified: bool) -> Option<Vec<Action>> {
+        let cards_shown = self.front && self.look == super::look::Look::Frame && !self.busy && self.cards_drawn.get();
+        if !cards_shown || !self.editor.is_empty() {
+            self.card = None;
+            return None;
+        }
+        let n = super::front::CARDS.len();
+        let Some(i) = self.card else {
+            if !modified && matches!(key.code, KeyCode::Tab | KeyCode::Down) && key.modifiers.is_empty() {
+                self.card = Some(0);
+                return Some(vec![]);
+            }
+            return None;
+        };
+        match key.code {
+            KeyCode::Right | KeyCode::Tab => self.card = Some((i + 1) % n),
+            KeyCode::Left => self.card = Some((i + n - 1) % n),
+            KeyCode::Esc | KeyCode::Up => self.card = None,
+            KeyCode::Enter => {
+                self.card = None;
+                return Some(self.submit(super::front::CARDS[i].3.to_string()));
+            }
+            // Anything else goes to the prompt, which has the keyboard again.
+            _ => {
+                self.card = None;
+                return None;
+            }
+        }
+        Some(vec![])
     }
 
     pub fn on_key(&mut self, key: KeyEvent) -> Vec<Action> {
@@ -2283,6 +2350,9 @@ impl App {
             if let Some(a) = self.search_key(key) {
                 return a;
             }
+        }
+        if let Some(a) = self.card_key(key, ctrl || alt) {
+            return a;
         }
         if ctrl && key.code == KeyCode::Char('b') {
             self.sidebar = !self.sidebar;
@@ -2539,6 +2609,7 @@ impl App {
     }
 
     pub fn submit(&mut self, text: String) -> Vec<Action> {
+        self.note_mode();
         self.front = false;
         self.menu_selected = 0;
         self.menu_dismissed = false;
@@ -3220,7 +3291,7 @@ mod tests {
     }
 
     /// A TodoWrite call shows the plan as a checklist, as the reference CLI does: done tasks with
-    /// a green check and their text struck through, the one in progress in lime and bold with
+    /// a green check and their text struck through, the one in progress in rose and bold with
     /// a still circle, the rest open; its header says how far the plan is.
     #[test]
     fn a_plan_update_shows_the_plan_as_a_checklist() {
@@ -3240,7 +3311,7 @@ mod tests {
         let style = |row: usize, span: usize| lines[row].spans[span].style;
         assert_eq!(style(0, 1), t.success(), "a green check");
         assert!(style(0, 2).add_modifier.contains(Modifier::CROSSED_OUT), "done: struck through");
-        assert_eq!(style(1, 1), t.accent(), "the task in progress in lime");
+        assert_eq!(style(1, 1), t.accent(), "the task in progress in rose");
         assert!(style(1, 2).add_modifier.contains(Modifier::BOLD));
         assert_eq!(style(2, 1), t.subtle(), "open");
         let header: String =
@@ -3478,6 +3549,9 @@ mod tests {
         a.status.mode = "default".into();
         let stab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
         assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::AcceptEdits)]);
+        assert!(a.take_pending().is_empty(), "nothing is written while Shift+Tab may still cycle");
+        assert!(a.hint.as_ref().is_some_and(|(h, _)| h.contains("Accept edits mode")));
+        a.note_mode();
         let note: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
         assert!(note.contains("── ◆ Accept edits mode"), "{note}");
         assert!(note.contains(PermissionMode::AcceptEdits.short_rule()), "{note}");
@@ -3494,9 +3568,111 @@ mod tests {
         assert_eq!(a.on_key(stab), vec![Action::SetMode(PermissionMode::AcceptEdits)]);
         assert!(a.dialog.is_none(), "AcceptEdits auto-resolves pending Edit permission");
         assert!(matches!(rx.try_recv(), Ok(PermissionAnswer::Allow { .. })));
+        a.note_mode();
         let live_note: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
         assert!(live_note.contains("── ◆ Accept edits mode"), "{live_note}");
         assert!(live_note.contains("active immediately"), "{live_note}");
+    }
+
+    #[test]
+    fn the_welcome_cards_take_the_keyboard_from_an_empty_prompt() {
+        let mut a = app();
+        a.front = true;
+        a.look = crate::tui::look::Look::Frame;
+        a.cards_drawn.set(true);
+        let k = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+        // Tab from an empty prompt: the first card; arrows move along, wrapping.
+        assert!(a.on_key(k(KeyCode::Tab)).is_empty());
+        assert_eq!(a.card, Some(0));
+        a.on_key(k(KeyCode::Right));
+        assert_eq!(a.card, Some(1));
+        a.on_key(k(KeyCode::Left));
+        a.on_key(k(KeyCode::Left));
+        assert_eq!(a.card, Some(2), "wraps to the last");
+        // Esc gives the keyboard back; typing does too, and the key lands in the prompt.
+        a.on_key(k(KeyCode::Esc));
+        assert_eq!(a.card, None);
+        a.on_key(k(KeyCode::Down));
+        assert_eq!(a.card, Some(0), "↓ also enters the cards");
+        a.on_key(k(KeyCode::Char('h')));
+        assert_eq!(a.card, None);
+        assert_eq!(a.editor.text(), "h");
+        // With text in the prompt, Tab is not the cards'.
+        a.on_key(k(KeyCode::Tab));
+        assert_eq!(a.card, None);
+        // Enter on a card sends its prompt; `/init` as a command.
+        a.editor.clear();
+        a.on_key(k(KeyCode::Tab));
+        let sent = a.on_key(k(KeyCode::Enter));
+        assert_eq!(sent, vec![Action::Send(crate::tui::front::CARDS[0].3.to_string())]);
+        assert_eq!(a.card, None);
+        let mut b = app();
+        b.front = true;
+        b.look = crate::tui::look::Look::Frame;
+        b.cards_drawn.set(true);
+        b.on_key(k(KeyCode::Tab));
+        b.on_key(k(KeyCode::Right));
+        b.on_key(k(KeyCode::Right));
+        assert_eq!(b.on_key(k(KeyCode::Enter)), vec![Action::Send("/init".into())]);
+        // Cards that are not on screen (a short window, the inline screen) don't take Tab, or
+        // Enter would send a suggestion nobody saw.
+        let mut hidden = app();
+        hidden.front = true;
+        hidden.look = crate::tui::look::Look::Frame;
+        hidden.on_key(k(KeyCode::Tab));
+        assert_eq!(hidden.card, None);
+        a.card = Some(1);
+        a.cards_drawn.set(false);
+        a.on_key(k(KeyCode::Right));
+        assert_eq!(a.card, None, "focus is dropped when the cards stop being drawn");
+        // Other styles have no cards: Tab is left alone.
+        let mut c = app();
+        c.front = true;
+        c.look = crate::tui::look::Look::Bare;
+        c.on_key(k(KeyCode::Tab));
+        assert_eq!(c.card, None);
+    }
+
+    #[test]
+    fn cycling_modes_writes_only_where_it_lands() {
+        let mut a = app();
+        a.status.mode = "default".into();
+        let stab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        for _ in 0..3 {
+            a.on_key(stab);
+        }
+        assert!(a.take_pending().is_empty(), "no banner per step of the cycle");
+        let landed = PermissionMode::parse(&a.status.mode).unwrap();
+        a.submit("hi".into());
+        let text: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert_eq!(text.matches("── ◆").count(), 1, "{text}");
+        assert!(text.contains(&format!("{} mode", landed.label())), "{text}");
+
+        // Cycling all the way back to where it started writes nothing.
+        let mut b = app();
+        b.status.mode = "default".into();
+        b.on_key(stab);
+        b.set_mode(PermissionMode::Default);
+        b.note_mode();
+        assert!(b.take_pending().iter().all(|l| !l.to_string().contains("── ◆")));
+    }
+
+    #[test]
+    fn a_running_turn_notes_the_mode_once_cycling_rests() {
+        let mut a = app();
+        a.status.mode = "default".into();
+        a.busy = true;
+        a.set_mode(PermissionMode::AcceptEdits);
+        a.on_event(UiEvent::Engine(EngineEvent::Notice { level: NoticeLevel::Info, text: "x".into() }));
+        assert!(a.take_pending().iter().all(|l| !l.to_string().contains("── ◆")), "too soon: still cycling");
+        a.set_mode(PermissionMode::Plan);
+        a.mode_note.as_mut().unwrap().1 -= std::time::Duration::from_secs(3);
+        a.busy = false; // the turn may end before the note is written; the tag still says it was live
+        a.on_event(UiEvent::Engine(EngineEvent::Notice { level: NoticeLevel::Info, text: "y".into() }));
+        let text: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert_eq!(text.matches("── ◆").count(), 1, "{text}");
+        assert!(text.contains("Plan mode") && text.contains("active immediately"), "{text}");
+        assert!(a.mode_note.is_none());
     }
 
     fn prompt(tool: &str, input: Value) -> PermissionPrompt {
@@ -3926,6 +4102,7 @@ mod tests {
         let mut items = a.take_pending();
         a.busy = true;
         a.set_mode(kodact_permissions::PermissionMode::AcceptEdits);
+        a.note_mode();
         let banner = a.take_pending();
         items.push(shell);
         items.extend(diff);

@@ -731,7 +731,8 @@ impl<B: Backend> Full<B> {
             self.wrapped_layout = app.layout_version;
             self.wrapped_verbose = app.verbose;
         }
-        let page = front::front_page(&app.theme, app.look, &self.info, width as usize);
+        let info = front::FrontInfo { card: app.card, ..self.info.clone() };
+        let page = front::front_page(&app.theme, app.look, &info, width as usize);
         let open = matches!(app.look, look::Look::Bare | look::Look::Ledger);
         let front_w = (page.box_w as u16).saturating_sub(if open { 0 } else { 2 }).max(12).min(width);
         let front_rows;
@@ -1077,6 +1078,7 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
         mcp: driver.info.init.mcp_servers.iter().map(|s| (s.name.clone(), s.status.clone())).collect(),
         tools: driver.info.init.tools.len(),
         recent: recent.clone(),
+        card: None,
     };
     app.front = true;
     app.first_run = recent.is_empty();
@@ -1959,11 +1961,12 @@ mod tests {
         let rows = rows(f.terminal.backend());
         assert_eq!(f.scroll, 0);
         assert!(!rows.iter().any(|r| r.contains("❯ the old question")), "the old conversation is gone: {rows:#?}");
-        assert!(rows.iter().any(|r| r.contains("/resume") && r.contains("the old question")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("↺ the old question")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("/resume")), "{rows:#?}");
         assert!(rows.iter().any(|r| r.contains("❯ /clear")), "{rows:#?}");
         // A long warning on the front page wraps once to the box's width (never pre-wrapped at
         // the window's width and then wrapped a second time into a jagged short line) and lines
-        // up with `/resume` and `❯`.
+        // up with `❯`.
         f.reset(vec![("hi".into(), "just now".into())]);
         a.on_event(app::UiEvent::Engine(kodact_engine::EngineEvent::Notice {
             level: kodact_engine::NoticeLevel::Warning,
@@ -1980,10 +1983,8 @@ mod tests {
             "no double-wrapped orphan line: {wrows:#?}"
         );
         let box_row = wrows.iter().find(|r| r.contains("What shall we build")).unwrap();
-        let resume_row = wrows.iter().find(|r| r.contains("/resume")).unwrap();
         let warn_row = wrows.iter().find(|r| r.contains("▲ KodAct")).unwrap();
         let col = |r: &str, s: &str| text::width(&r[..r.find(s).unwrap()]);
-        assert_eq!(col(resume_row, "/resume"), col(box_row, "❯"), "`/resume` aligns with `❯`: {wrows:#?}");
         assert_eq!(col(warn_row, "▲"), col(box_row, "❯"), "warning aligns with `❯`: {wrows:#?}");
     }
 
@@ -2382,7 +2383,8 @@ mod snapshots {
             Color::White => "#e5e5e5".into(),
             Color::Black => "#101214".into(),
             Color::Gray | Color::DarkGray => "#8a8a8a".into(),
-            Color::LightGreen | Color::Green => "#9fe870".into(),
+            Color::LightGreen | Color::Green => "#8ccb8a".into(),
+            Color::Magenta | Color::LightMagenta => "#e8678a".into(),
             Color::Red | Color::LightRed => "#ff6b6b".into(),
             Color::Yellow | Color::LightYellow => "#f5d76e".into(),
             _ => default.into(),

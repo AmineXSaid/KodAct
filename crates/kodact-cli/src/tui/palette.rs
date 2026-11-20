@@ -1,4 +1,4 @@
-//! KodAct's colours in the terminal: ink, paper and lime, one value per role for a dark and for a light background.
+//! KodAct's colours in the terminal: ink, paper and a burgundy-led painter's palette, one value per role for a dark and for a light background.
 //! A role is drawn in 24-bit colour where the terminal has it, else as the
 //! nearest of xterm's 256 colours, else as one of the 16 ANSI colours.
 
@@ -72,16 +72,6 @@ const fn role(dark: u32, light: u32, ansi_dark: Color, ansi_light: Color) -> Rol
 }
 
 impl Role {
-    /// The role's colour for one background and its 16-colour fallback, as the logo's
-    /// pixels take them (`ink`).
-    pub fn ink(&self, light: bool) -> (u32, Color) {
-        if light {
-            (self.light, self.ansi_light)
-        } else {
-            (self.dark, self.ansi_dark)
-        }
-    }
-
     pub fn color(&self, depth: Depth, light: bool) -> Color {
         match depth {
             Depth::True => rgb(if light { self.light } else { self.dark }),
@@ -100,86 +90,89 @@ impl Role {
     }
 }
 
-// The roles: KodAct's identity. Ink and paper for text and surfaces, lime for
-// the brand and for what needs the person. Teal and violet, set either side of
-// lime on the colour wheel, carry the structure of an answer (headings, lists,
-// quotes, code), so it is not all one colour. Green, red and amber still mean
-// done, failed and a warning. On a light
-// background the lime deepens to an olive that reads on paper.
+// The roles: KodAct's identity, a painter's palette around one wine. Burgundy,
+// lit to a rose so it reads on a dark page, is the brand and what needs the
+// person. Its companions are chosen as on a canvas, each with one job: sea-glass
+// (burgundy's complement) and plum carry the structure of an answer (headings,
+// lists, quotes, code); a Prussian sky marks links; sage, ochre and vermilion
+// still mean done, a warning and failed (vermilion sits apart from the rose in
+// hue and is always drawn with a mark). Surfaces and greys are warmed toward
+// the wine. On a light background every colour deepens so it reads on paper.
 
 /// The brand: the prompt mark, the spinner, selections, the keys, headings.
-pub const BRAND: Role = role(0xc6ff3d, 0x4a7200, Color::LightGreen, Color::Green);
-/// The brand a step brighter, for emphasis: the wordmark, the shimmer's peak.
-pub const BRAND_STRONG: Role = role(0xdcff85, 0x3d5f00, Color::LightGreen, Color::Green);
+pub const BRAND: Role = role(0xe8678a, 0x8a1538, Color::LightMagenta, Color::Magenta);
+/// The brand a step brighter, for emphasis: headings in brand colour, the shimmer's peak.
+pub const BRAND_STRONG: Role = role(0xf2a3b6, 0x6e0f2b, Color::LightMagenta, Color::Magenta);
+/// Burgundy itself, behind white text: filled pills and buttons.
+pub const BRAND_FILL: Role = role(0xa3173f, 0x8a1538, Color::Magenta, Color::Magenta);
 /// Secondary text.
-pub const MUTED: Role = role(0xa9adb2, 0x55595e, Color::Gray, Color::DarkGray);
+pub const MUTED: Role = role(0xb0a9ab, 0x5a5254, Color::Gray, Color::DarkGray);
 /// Placeholders, hints, details.
 /// (At least 4.5:1 on both the page and the raised panel, in both themes.)
-pub const SUBTLE: Role = role(0x868b92, 0x63676d, Color::DarkGray, Color::DarkGray);
+pub const SUBTLE: Role = role(0x8f878a, 0x6a6265, Color::DarkGray, Color::DarkGray);
 /// Rules, gutters and box edges.
-pub const HAIRLINE: Role = role(0x2d3238, 0xd2d4d6, Color::DarkGray, Color::Gray);
-/// Links and paths.
-pub const INFO: Role = role(0x8fbef0, 0x2f63a8, Color::LightBlue, Color::Blue);
-/// Done.
-pub const SUCCESS: Role = role(0x7ccf8f, 0x2f7a45, Color::LightGreen, Color::Green);
-/// Needs a look.
-pub const WARNING: Role = role(0xf0c25e, 0x8f6200, Color::LightYellow, Color::Yellow);
-/// Failed.
-pub const DANGER: Role = role(0xff7a6b, 0xb8392e, Color::LightRed, Color::Red);
+pub const HAIRLINE: Role = role(0x3a2a30, 0xddd3d5, Color::DarkGray, Color::Gray);
+/// Links and paths: a Prussian sky.
+pub const INFO: Role = role(0x7fa7e8, 0x2a5596, Color::LightBlue, Color::Blue);
+/// Done: sage.
+pub const SUCCESS: Role = role(0x8ccb8a, 0x2f7a45, Color::LightGreen, Color::Green);
+/// Needs a look: ochre.
+pub const WARNING: Role = role(0xe8b860, 0x8a5e00, Color::LightYellow, Color::Yellow);
+/// Failed: vermilion.
+pub const DANGER: Role = role(0xff7a45, 0xb23a16, Color::LightRed, Color::Red);
 /// A diff's added line.
-pub const ADDED: Role = role(0x7ccf8f, 0x2f7a45, Color::LightGreen, Color::Green);
+pub const ADDED: Role = role(0x8ccb8a, 0x2f7a45, Color::LightGreen, Color::Green);
 /// A diff's removed line.
-pub const REMOVED: Role = role(0xff7a6b, 0xb8392e, Color::LightRed, Color::Red);
-/// The first companion to lime, a cool teal: second-level headings, numbers
-/// in lists, table headers, the second bullet level.
-pub const TEAL: Role = role(0x5fd8c4, 0x0e7568, Color::LightCyan, Color::Cyan);
-/// The teal's trail, fading toward the page (the sub-agent scanner).
+pub const REMOVED: Role = role(0xff7a45, 0xb23a16, Color::LightRed, Color::Red);
+/// The first companion, sea-glass (burgundy's complement): second-level headings,
+/// numbers in lists, table headers, the second bullet level.
+pub const TEAL: Role = role(0x6cc4b4, 0x0e6e62, Color::LightCyan, Color::Cyan);
+/// The sea-glass's trail, fading toward the page (the sub-agent scanner).
 pub const TEAL_TRAIL: [Role; 3] = [
-    role(0x41a597, 0x3f9488, Color::Cyan, Color::Cyan),
-    role(0x2b7268, 0x7ab8af, Color::DarkGray, Color::Gray),
-    role(0x1d4943, 0xadd5cf, Color::DarkGray, Color::Gray),
+    role(0x4f9a8d, 0x3f9488, Color::Cyan, Color::Cyan),
+    role(0x356b62, 0x7ab8af, Color::DarkGray, Color::Gray),
+    role(0x22453f, 0xadd5cf, Color::DarkGray, Color::Gray),
 ];
-/// The second companion, a soft violet: third-level headings, quote bars,
-/// the third bullet level, keywords in code.
-pub const VIOLET: Role = role(0xb4a2ff, 0x5a44c0, Color::LightMagenta, Color::Magenta);
-/// Inline code: a warm peach, the one warm accent, apart from the blue of
-/// links and the lime of the brand.
-pub const CODE: Role = role(0xffb98f, 0xa4461c, Color::LightRed, Color::Red);
+/// The second companion, plum: third-level headings, quote bars, the third
+/// bullet level, keywords in code, `auto` mode.
+pub const VIOLET: Role = role(0xb9a1e0, 0x5b3fa8, Color::LightBlue, Color::Blue);
+/// Inline code: warm sand, apart from the rose of the brand and the blue of links.
+pub const CODE: Role = role(0xe6c99a, 0x8a5a1c, Color::LightYellow, Color::Yellow);
 /// The model's words: a soft paper, a step below the person's own, so long
 /// answers read without glare and the two voices stay apart.
-pub const ANSWER: Role = role(0xd9d7cf, 0x2b2e33, Color::Reset, Color::Reset);
+pub const ANSWER: Role = role(0xddd6d3, 0x2e2729, Color::Reset, Color::Reset);
 /// Bold in an answer: the brightest paper, so emphasis carries.
 pub const STRONG: Role = role(0xfbf9f3, 0x08090b, Color::White, Color::Black);
-/// Behind inline `code`: a shade off the page, so code reads as code without backticks.
-pub const CODE_BG: Role = role(0x22262b, 0xece6db, Color::Reset, Color::Reset);
+/// Behind inline `code`: a shade off the page, warmed toward the wine.
+pub const CODE_BG: Role = role(0x24171c, 0xf1e7e2, Color::Reset, Color::Reset);
 /// The person's prompt: a raised surface (the logo's tile).
-pub const PROMPT_BG: Role = role(0x1b1f23, 0xebeae4, Color::DarkGray, Color::Gray);
+pub const PROMPT_BG: Role = role(0x1f1418, 0xf3ecea, Color::DarkGray, Color::Gray);
 /// Behind a command's `exit 0` badge.
 pub const SUCCESS_BG: Role = role(0x16301f, 0xdff1e4, Color::Reset, Color::Reset);
 /// Behind a failed command's `exit 1` badge.
-pub const DANGER_BG: Role = role(0x3a1714, 0xf8dedb, Color::Reset, Color::Reset);
-/// The glow style's band behind the person's words: a lime tint.
-pub const WARM_BG: Role = role(0x1c230f, 0xe8f1d2, Color::DarkGray, Color::Gray);
+pub const DANGER_BG: Role = role(0x3a1a10, 0xfbe2d8, Color::Reset, Color::Reset);
+/// A wine tint: the selected row, the glow style's band behind the person's words.
+pub const WARM_BG: Role = role(0x2a1219, 0xf6e2e7, Color::DarkGray, Color::Gray);
 /// Text on [`PROMPT_BG`].
 pub const PROMPT_FG: Role = role(0xf2f0e9, 0x101214, Color::White, Color::Black);
-/// The working shimmer's resting and brightest tones: grey up to lime.
-pub const SHIMMER_BASE: Role = role(0x80858b, 0x83878d, Color::Gray, Color::DarkGray);
-pub const SHIMMER_PEAK: Role = role(0xdcff85, 0x4a7200, Color::White, Color::Black);
+/// The working shimmer's resting and brightest tones: warm grey up to rose.
+pub const SHIMMER_BASE: Role = role(0x857d80, 0x857d80, Color::Gray, Color::DarkGray);
+pub const SHIMMER_PEAK: Role = role(0xf2a3b6, 0x8a1538, Color::White, Color::Black);
 
-// Code blocks: one quiet text colour and a few token colours.
+// Code blocks: one quiet text colour and a few token colours from the palette.
 
 /// Plain code.
-pub const CODE_TEXT: Role = role(0xcdd1d5, 0x33373b, Color::Gray, Color::DarkGray);
-/// Keywords: `fn`, `def`, `const`, `if`.
-pub const CODE_KEYWORD: Role = role(0xb4a2ff, 0x5a44c0, Color::LightMagenta, Color::Magenta);
-/// String literals.
-pub const CODE_STRING: Role = role(0xc9ec7a, 0x4f7000, Color::LightGreen, Color::Green);
-/// Numbers and constants.
-pub const CODE_NUMBER: Role = role(0xf0c25e, 0x8f6200, Color::LightYellow, Color::Yellow);
+pub const CODE_TEXT: Role = role(0xd2cbcd, 0x3a3335, Color::Gray, Color::DarkGray);
+/// Keywords: `fn`, `def`, `const`, `if` (plum).
+pub const CODE_KEYWORD: Role = role(0xb9a1e0, 0x5b3fa8, Color::LightBlue, Color::Blue);
+/// String literals (sage).
+pub const CODE_STRING: Role = role(0xa8cf8e, 0x4a6e1c, Color::LightGreen, Color::Green);
+/// Numbers and constants (ochre).
+pub const CODE_NUMBER: Role = role(0xe8b860, 0x8a5e00, Color::LightYellow, Color::Yellow);
 /// Comments.
-pub const CODE_COMMENT: Role = role(0x868b92, 0x63676d, Color::DarkGray, Color::DarkGray);
-/// Type names.
-pub const CODE_TYPE: Role = role(0x5fd8c4, 0x0e7568, Color::LightCyan, Color::Cyan);
+pub const CODE_COMMENT: Role = role(0x8f878a, 0x6a6265, Color::DarkGray, Color::DarkGray);
+/// Type names (sea-glass).
+pub const CODE_TYPE: Role = role(0x6cc4b4, 0x0e6e62, Color::LightCyan, Color::Cyan);
 
 pub const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -236,16 +229,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_logo_inks_are_the_palette_roles() {
-        // The wordmark and the mark take paper and lime from these roles: the same pixels
-        // as the literals they replaced.
-        assert_eq!(PROMPT_FG.ink(false), (0xf2f0e9, Color::White));
-        assert_eq!(PROMPT_FG.ink(true), (0x101214, Color::Black));
-        assert_eq!(BRAND.ink(false), (0xc6ff3d, Color::LightGreen));
-        assert_eq!(BRAND.ink(true), (0x4a7200, Color::Green));
-    }
-
-    #[test]
     fn depth_comes_from_what_the_terminal_says() {
         assert_eq!(Depth::from_env("", "truecolor", "xterm-256color", "", false), Depth::True);
         assert_eq!(Depth::from_env("", "", "xterm-256color", "", false), Depth::Ansi256);
@@ -262,9 +245,9 @@ mod tests {
         assert_eq!(nearest_256(0xff, 0xff, 0xff), 231);
         assert_eq!(nearest_256(0, 0, 0), 16);
         assert_eq!(nearest_256(0x80, 0x80, 0x80), 244);
-        // KodAct's lime on a dark background: xterm 155 (#afff5f) or a close neighbour.
-        let brand = nearest_256(0xc6, 0xff, 0x3d);
-        assert!([154, 155, 191, 192].contains(&brand), "{brand}");
+        // KodAct's rose on a dark background: xterm 168 (#d75f87) or a close neighbour.
+        let brand = nearest_256(0xe8, 0x67, 0x8a);
+        assert!([168, 169, 204, 205].contains(&brand), "{brand}");
     }
 
     /// WCAG contrast of two colours.
@@ -298,18 +281,50 @@ mod tests {
             check(r, page);
             check(r, panel);
         }
-        // Done and warning marks are drawn on the page; on the light panel
-        // they sit just under 4.5:1 (4.4), so they are checked on the page.
         for r in [SUCCESS, WARNING] {
             check(r, page);
+            check(r, panel);
         }
+        // White on the filled brand (pills, buttons).
+        assert!(contrast(0xffffff, BRAND_FILL.dark) >= 4.5 && contrast(0xffffff, BRAND_FILL.light) >= 4.5);
+    }
+
+    /// A colour's hue in degrees and its lightness (0-1).
+    fn hue_light(hex: u32) -> (f64, f64) {
+        let (r, g, b) = split(hex);
+        let (r, g, b) = (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let l = (max + min) / 2.0;
+        if max == min {
+            return (0.0, l);
+        }
+        let d = max - min;
+        let h = if max == r {
+            ((g - b) / d).rem_euclid(6.0)
+        } else if max == g {
+            (b - r) / d + 2.0
+        } else {
+            (r - g) / d + 4.0
+        };
+        (h * 60.0, l)
+    }
+
+    #[test]
+    fn a_failure_never_reads_as_the_brand() {
+        for (b, d) in [(BRAND.dark, DANGER.dark), (BRAND.light, DANGER.light)] {
+            let ((hb, _), (hd, _)) = (hue_light(b), hue_light(d));
+            let apart = (hb - hd).abs().min(360.0 - (hb - hd).abs());
+            assert!(apart >= 25.0, "{b:06x} and {d:06x} are {apart:.0}° apart");
+        }
+        assert_ne!(BRAND.ansi_dark, DANGER.ansi_dark);
+        assert_ne!(BRAND.ansi_light, DANGER.ansi_light);
     }
 
     #[test]
     fn roles_differ_for_light_and_dark_backgrounds() {
-        assert_eq!(BRAND.color(Depth::True, false), Color::Rgb(0xc6, 0xff, 0x3d));
-        assert_eq!(BRAND.color(Depth::True, true), Color::Rgb(0x4a, 0x72, 0x00));
-        assert_eq!(BRAND.color(Depth::Ansi16, false), Color::LightGreen);
+        assert_eq!(BRAND.color(Depth::True, false), Color::Rgb(0xe8, 0x67, 0x8a));
+        assert_eq!(BRAND.color(Depth::True, true), Color::Rgb(0x8a, 0x15, 0x38));
+        assert_eq!(BRAND.color(Depth::Ansi16, false), Color::LightMagenta);
         assert!(matches!(BRAND.color(Depth::Ansi256, false), Color::Indexed(_)));
     }
 }
