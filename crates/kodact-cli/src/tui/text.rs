@@ -154,7 +154,7 @@ impl Theme {
         self.role(r)
     }
 
-    /// Teal, lime's first companion. Bold without colour.
+    /// Sea-glass, burgundy's first companion. Bold without colour.
     pub fn teal(&self) -> Style {
         if self.color {
             self.role(palette::TEAL)
@@ -163,7 +163,7 @@ impl Theme {
         }
     }
 
-    /// Violet, lime's second companion. Plain without colour.
+    /// Plum, burgundy's second companion. Plain without colour.
     pub fn violet(&self) -> Style {
         self.role(palette::VIOLET)
     }
@@ -181,7 +181,7 @@ impl Theme {
         }
     }
 
-    /// Inline `code`: peach, on a shade of its own where there are enough colours.
+    /// Inline `code`: sand, on a shade of its own where there are enough colours.
     pub fn code(&self) -> Style {
         let st = self.role(palette::CODE);
         if self.color && self.depth != Depth::Ansi16 {
@@ -205,6 +205,68 @@ impl Theme {
             }
         }
         line
+    }
+
+    /// A surface colour as a background, where the terminal has enough colours.
+    pub fn surface(&self, role: palette::Role) -> Option<Color> {
+        (self.color && self.depth != Depth::Ansi16).then(|| role.color(self.depth, self.light))
+    }
+
+    /// The brightest text, bold: headings that sit on a faint edge.
+    pub fn strong(&self) -> Style {
+        match self.surface(palette::STRONG) {
+            Some(c) => self.bold().fg(c),
+            None => self.bold(),
+        }
+    }
+
+    /// A key drawn as a key: its name on a raised surface (` ⏎ `, ` esc `).
+    pub fn keycap(&self, key: &str) -> Span<'static> {
+        let style = match self.surface(palette::PROMPT_BG) {
+            Some(bg) => Style::default().bg(bg).fg(palette::PROMPT_FG.color(self.depth, self.light)),
+            None => self.bold(),
+        };
+        Span::styled(format!(" {key} "), style)
+    }
+
+    /// White on burgundy, bold: the filled call to action.
+    pub fn fill(&self) -> Style {
+        if self.color {
+            Style::default()
+                .bg(palette::BRAND_FILL.color(self.depth, self.light))
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        }
+    }
+
+    /// A filled button: its label with room on both sides.
+    pub fn button(&self, label: &str) -> Span<'static> {
+        Span::styled(format!("  {label}  "), self.fill())
+    }
+
+    /// A permission mode as a filled pill: ` Manual ` white on burgundy; the other modes
+    /// filled with their own colour, dark text on it.
+    pub fn pill(&self, mode: &str, label: &str) -> Span<'static> {
+        let text = format!(" {label} ");
+        if !self.color || self.depth == Depth::Ansi16 {
+            return Span::styled(text, self.mode(mode).add_modifier(Modifier::BOLD | Modifier::REVERSED));
+        }
+        let style = match mode {
+            "default" | "" => self.fill(),
+            _ => {
+                let bg = self.mode(mode).fg.unwrap_or(Color::Reset);
+                let fg = if self.light { Color::White } else { Color::Rgb(0x14, 0x0d, 0x10) };
+                Style::default().bg(bg).fg(fg).add_modifier(Modifier::BOLD)
+            }
+        };
+        Span::styled(text, style)
+    }
+
+    /// The wine tint behind a selected row or card.
+    pub fn tint(&self) -> Option<Color> {
+        self.surface(palette::WARM_BG)
     }
 
     /// The highlighted row of a menu or dialog.
@@ -1310,14 +1372,14 @@ mod tests {
 
     #[test]
     fn every_kind_of_block_is_drawn() {
-        // Headings by level: lime, then teal, then violet.
+        // Headings by level: rose, then sea-glass, then plum.
         let h1 = Markdown::default().line("# Title #", &T).unwrap();
         assert_eq!(plain(&h1), "Title");
         assert!(h1.spans[0].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(h1.spans[0].style.fg, T.brand_strong().fg);
         assert_eq!(Markdown::default().line("## Plan", &T).unwrap().spans[0].style.fg, T.teal().fg);
         assert_eq!(Markdown::default().line("### Step", &T).unwrap().spans[0].style.fg, T.violet().fg);
-        assert_ne!(T.teal().fg, T.accent().fg, "the second level is not lime again");
+        assert_ne!(T.teal().fg, T.accent().fg, "the second level is not rose again");
         assert_eq!(one("#hashtag"), "#hashtag", "no space, no heading");
         // Lists: bullets by level, numbers, tasks.
         assert_eq!(one("- one"), "• one");

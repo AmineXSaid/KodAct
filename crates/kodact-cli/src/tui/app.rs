@@ -377,6 +377,11 @@ pub struct App {
     pub transcript_indent: usize,
     /// The front screen is showing: nothing sent yet. The input is a centred box under the wordmark.
     pub front: bool,
+    /// The welcome page's suggestion card that has the keyboard (Tab or ↓ from an empty prompt).
+    pub card: Option<usize>,
+    /// The last full-screen draw showed the suggestion cards (a short window, an inline
+    /// screen or a long note leave them out, and then they must not take keys).
+    pub cards_drawn: std::cell::Cell<bool>,
     /// No earlier conversation in this folder: the welcome shows an example request.
     pub first_run: bool,
     /// The sidebar is open (Ctrl+B, full screen from [`SIDEBAR_MIN_COLS`] columns).
@@ -477,6 +482,8 @@ impl App {
             preparing: None,
             talked: false,
             front: false,
+            card: None,
+            cards_drawn: std::cell::Cell::new(false),
             first_run: false,
             sidebar: false,
             title: String::new(),
@@ -2260,6 +2267,41 @@ impl App {
         self.pending.push(Line::from(spans));
     }
 
+    /// The welcome page's suggestion cards. From an empty prompt Tab or ↓ gives the
+    /// keyboard to the first card; ←/→ (or Tab) move along; Enter sends the
+    /// card's prompt; Esc or ↑ hands the keyboard back to the prompt, and so does typing,
+    /// with the key typed. `None` when the cards don't take the key.
+    fn card_key(&mut self, key: KeyEvent, modified: bool) -> Option<Vec<Action>> {
+        let cards_shown = self.front && self.look == super::look::Look::Frame && !self.busy && self.cards_drawn.get();
+        if !cards_shown || !self.editor.is_empty() {
+            self.card = None;
+            return None;
+        }
+        let n = super::front::CARDS.len();
+        let Some(i) = self.card else {
+            if !modified && matches!(key.code, KeyCode::Tab | KeyCode::Down) && key.modifiers.is_empty() {
+                self.card = Some(0);
+                return Some(vec![]);
+            }
+            return None;
+        };
+        match key.code {
+            KeyCode::Right | KeyCode::Tab => self.card = Some((i + 1) % n),
+            KeyCode::Left => self.card = Some((i + n - 1) % n),
+            KeyCode::Esc | KeyCode::Up => self.card = None,
+            KeyCode::Enter => {
+                self.card = None;
+                return Some(self.submit(super::front::CARDS[i].3.to_string()));
+            }
+            // Anything else goes to the prompt, which has the keyboard again.
+            _ => {
+                self.card = None;
+                return None;
+            }
+        }
+        Some(vec![])
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) -> Vec<Action> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -2308,6 +2350,9 @@ impl App {
             if let Some(a) = self.search_key(key) {
                 return a;
             }
+        }
+        if let Some(a) = self.card_key(key, ctrl || alt) {
+            return a;
         }
         if ctrl && key.code == KeyCode::Char('b') {
             self.sidebar = !self.sidebar;
@@ -3246,7 +3291,7 @@ mod tests {
     }
 
     /// A TodoWrite call shows the plan as a checklist, as the reference CLI does: done tasks with
-    /// a green check and their text struck through, the one in progress in lime and bold with
+    /// a green check and their text struck through, the one in progress in rose and bold with
     /// a still circle, the rest open; its header says how far the plan is.
     #[test]
     fn a_plan_update_shows_the_plan_as_a_checklist() {
@@ -3266,7 +3311,7 @@ mod tests {
         let style = |row: usize, span: usize| lines[row].spans[span].style;
         assert_eq!(style(0, 1), t.success(), "a green check");
         assert!(style(0, 2).add_modifier.contains(Modifier::CROSSED_OUT), "done: struck through");
-        assert_eq!(style(1, 1), t.accent(), "the task in progress in lime");
+        assert_eq!(style(1, 1), t.accent(), "the task in progress in rose");
         assert!(style(1, 2).add_modifier.contains(Modifier::BOLD));
         assert_eq!(style(2, 1), t.subtle(), "open");
         let header: String =
@@ -3527,6 +3572,65 @@ mod tests {
         let live_note: String = a.take_pending().iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
         assert!(live_note.contains("── ◆ Accept edits mode"), "{live_note}");
         assert!(live_note.contains("active immediately"), "{live_note}");
+    }
+
+    #[test]
+    fn the_welcome_cards_take_the_keyboard_from_an_empty_prompt() {
+        let mut a = app();
+        a.front = true;
+        a.look = crate::tui::look::Look::Frame;
+        a.cards_drawn.set(true);
+        let k = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+        // Tab from an empty prompt: the first card; arrows move along, wrapping.
+        assert!(a.on_key(k(KeyCode::Tab)).is_empty());
+        assert_eq!(a.card, Some(0));
+        a.on_key(k(KeyCode::Right));
+        assert_eq!(a.card, Some(1));
+        a.on_key(k(KeyCode::Left));
+        a.on_key(k(KeyCode::Left));
+        assert_eq!(a.card, Some(2), "wraps to the last");
+        // Esc gives the keyboard back; typing does too, and the key lands in the prompt.
+        a.on_key(k(KeyCode::Esc));
+        assert_eq!(a.card, None);
+        a.on_key(k(KeyCode::Down));
+        assert_eq!(a.card, Some(0), "↓ also enters the cards");
+        a.on_key(k(KeyCode::Char('h')));
+        assert_eq!(a.card, None);
+        assert_eq!(a.editor.text(), "h");
+        // With text in the prompt, Tab is not the cards'.
+        a.on_key(k(KeyCode::Tab));
+        assert_eq!(a.card, None);
+        // Enter on a card sends its prompt; `/init` as a command.
+        a.editor.clear();
+        a.on_key(k(KeyCode::Tab));
+        let sent = a.on_key(k(KeyCode::Enter));
+        assert_eq!(sent, vec![Action::Send(crate::tui::front::CARDS[0].3.to_string())]);
+        assert_eq!(a.card, None);
+        let mut b = app();
+        b.front = true;
+        b.look = crate::tui::look::Look::Frame;
+        b.cards_drawn.set(true);
+        b.on_key(k(KeyCode::Tab));
+        b.on_key(k(KeyCode::Right));
+        b.on_key(k(KeyCode::Right));
+        assert_eq!(b.on_key(k(KeyCode::Enter)), vec![Action::Send("/init".into())]);
+        // Cards that are not on screen (a short window, the inline screen) don't take Tab, or
+        // Enter would send a suggestion nobody saw.
+        let mut hidden = app();
+        hidden.front = true;
+        hidden.look = crate::tui::look::Look::Frame;
+        hidden.on_key(k(KeyCode::Tab));
+        assert_eq!(hidden.card, None);
+        a.card = Some(1);
+        a.cards_drawn.set(false);
+        a.on_key(k(KeyCode::Right));
+        assert_eq!(a.card, None, "focus is dropped when the cards stop being drawn");
+        // Other styles have no cards: Tab is left alone.
+        let mut c = app();
+        c.front = true;
+        c.look = crate::tui::look::Look::Bare;
+        c.on_key(k(KeyCode::Tab));
+        assert_eq!(c.card, None);
     }
 
     #[test]

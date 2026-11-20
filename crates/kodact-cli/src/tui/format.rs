@@ -338,7 +338,7 @@ const TODO_ACTIVE_MARK: &str = "◉ ";
 /// A TodoWrite call's plan, as a checklist under its header, every task in the plan's order:
 /// - done ones with a green `✓` and their text struck through, as a Markdown task list shows
 ///   them;
-/// - the one in progress with a still circle (`◉`), in lime and bold;
+/// - the one in progress with a still circle (`◉`), in rose and bold;
 /// - the rest open `○`.
 pub(super) fn todo_checklist(t: &Theme, todos: &Value) -> Vec<Line<'static>> {
     let items: Vec<&Value> = todos.as_array().map(|a| a.iter().collect()).unwrap_or_default();

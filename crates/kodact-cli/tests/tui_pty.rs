@@ -155,3 +155,17 @@ async fn setup_walks_to_a_saved_settings_file() {
     assert_eq!(saved["model"], "claude-opus-4-6");
     assert_eq!(saved["env"]["ANTHROPIC_API_KEY"], "sk-ant-test-0000-1234");
 }
+
+/// The welcome page's cards: Tab gives the keyboard to the first, Enter sends its prompt.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_welcome_card_sends_its_prompt() {
+    let d = dirs();
+    let api = MockApi::start(vec![MockTurn::text("Here is the map")]).await;
+    let mut tui = Pty::spawn(&kodact_bin(), &d.cwd, &d.home, &api.url, &[], 120, 40);
+    tui.wait_for("Explain this project", WAIT).unwrap_or_else(|s| panic!("no cards:\n{s}"));
+    tui.keys("\t");
+    tui.wait_for("back to the prompt", WAIT).unwrap_or_else(|s| panic!("the card has no keyboard:\n{s}"));
+    tui.keys("\r");
+    tui.wait_for("Here is the map", WAIT).unwrap_or_else(|s| panic!("no answer:\n{s}"));
+    assert!(prompt_sent(&api).contains("Explain this project"), "{}", prompt_sent(&api));
+}

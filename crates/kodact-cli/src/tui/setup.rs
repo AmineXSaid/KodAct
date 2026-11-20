@@ -28,7 +28,7 @@ use ratatui::{Frame, Terminal};
 use serde_json::{json, Map, Value};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::palette::{self, Depth};
+use super::palette;
 use super::text::Theme;
 use crate::exit::Fail;
 
@@ -701,39 +701,20 @@ fn clamp_row(spans: Vec<Span<'static>>, w: usize) -> Line<'static> {
     Line::from(out)
 }
 
-/// A surface colour as a background, where the terminal has enough colours.
 fn surface(t: &Theme, role: palette::Role) -> Option<Color> {
-    (t.color && t.depth != Depth::Ansi16).then(|| role.color(t.depth, t.light))
+    t.surface(role)
 }
 
-/// A key and what it does, for the foot of the card.
 fn keycap(t: &Theme, key: &str) -> Span<'static> {
-    let style = match surface(t, palette::PROMPT_BG) {
-        Some(bg) => Style::default().bg(bg).fg(palette::PROMPT_FG.color(t.depth, t.light)),
-        None => t.bold(),
-    };
-    Span::styled(format!(" {key} "), style)
+    t.keycap(key)
 }
 
-/// The brightest text, bold: a heading on the card's faint edge, which would otherwise take
-/// the edge's colour.
 fn strong(t: &Theme) -> Style {
-    if t.color && t.depth != Depth::Ansi16 {
-        t.bold().fg(palette::STRONG.color(t.depth, t.light))
-    } else {
-        t.bold()
-    }
+    t.strong()
 }
 
-/// The filled call to action on the review step.
 fn button(t: &Theme, label: &str) -> Span<'static> {
-    let style = if t.color {
-        let fg = if t.light { Color::White } else { Color::Black };
-        Style::default().bg(palette::BRAND.color(t.depth, t.light)).fg(fg).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
-    };
-    Span::styled(format!("  {label}  "), style)
+    t.button(label)
 }
 
 /// The rows inside the card, and where the terminal cursor goes, if a field has focus.
@@ -1373,6 +1354,7 @@ pub async fn run_standalone() -> Result<i32, Fail> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::palette::Depth;
     use ratatui::backend::TestBackend;
 
     fn key(code: KeyCode) -> KeyEvent {

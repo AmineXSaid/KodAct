@@ -1,6 +1,6 @@
 //! KodAct's name in the terminal: the KodAct wordmark (heavy 8-bit letters,
-//! "Act" in glossy burgundy over a burgundy drop shadow) and its mark (a step
-//! and a chevron, from code to impact, in lime), drawn as pixels in half blocks
+//! "Act" in glossy burgundy over a burgundy drop shadow) and its mark (the logo
+//! "./<": a dot, a slash and a chevron in burgundy), drawn as pixels in half blocks
 //! (each cell is two pixels stacked, so the pixels come out square), and the
 //! two screens they head: the front screen and the first-run card.
 
@@ -43,10 +43,10 @@ const WORDMARK_H: usize = 11;
 
 /// "Act"'s gloss, one colour per pixel row: light rose at the top to deep wine at the foot.
 /// A terminal cell holds two pixel rows, each its own colour, so the ramp draws exactly.
-const GLOSS_DARK: [u32; 10] =
+pub(super) const GLOSS_DARK: [u32; 10] =
     [0xf2a3b6, 0xe4708d, 0xcf4469, 0xb82652, 0xa3173f, 0x931439, 0x821233, 0x73102d, 0x640d27, 0x560b22];
 /// The same on a light background, a step deeper so it holds its contrast on paper.
-const GLOSS_LIGHT: [u32; 10] =
+pub(super) const GLOSS_LIGHT: [u32; 10] =
     [0xc93e64, 0xb82652, 0xa3173f, 0x931439, 0x8a1538, 0x7e1233, 0x73102d, 0x690e29, 0x5e0c25, 0x540a21];
 
 /// One pixel: its colour (hex) and the ANSI colour for 16-colour terminals.
@@ -92,74 +92,55 @@ pub(super) fn wordmark_grid(light: bool) -> Vec<Vec<Px>> {
         .collect()
 }
 
-/// KodAct's mark, traced from the logo: a step up from the left, then a
-/// chevron pointing right, every slant on one slope. 20 pixels by 12 (six
-/// terminal rows); `M` is the mark.
+/// KodAct's mark, the logo "./<" that reads as a K: a dot, a slash in paper,
+/// and a chevron opening to the right, its tip against the slash's middle.
+/// 20 pixels by 12 (six terminal rows): `D` the dot, `S` the slash, `C` the chevron.
 const MARK: [&str; 12] = [
-    "............##......",
-    "...........####.....",
-    "..........######....",
-    "............#####...",
-    "......####...#####..",
-    ".....######...#####.",
-    "...######......#####",
-    "..######.....######.",
-    ".######....#######..",
-    "######....#######...",
-    ".........#######....",
-    "........#######.....",
+    "........SS.......CCC",
+    "........SS.....CCC..",
+    ".......SS.....CCC...",
+    ".......SS...CCC.....",
+    "......SS...CCC......",
+    "......SS.CCC........",
+    ".....SS..CCC........",
+    ".....SS....CCC......",
+    "....SS......CCC.....",
+    "....SS........CCC...",
+    "DD.SS..........CCC..",
+    "DD.SS............CCC",
 ];
 
 /// The mark's width in columns; it is half as many rows tall as [`MARK`] has.
 pub const MARK_W: usize = 20;
 
 /// The mark's pixel rows.
-pub fn mark_rows() -> Vec<String> {
-    MARK.iter().map(|r| r.replace('#', "M")).collect()
+#[cfg(test)]
+fn mark_rows() -> Vec<String> {
+    MARK.iter().map(|r| r.to_string()).collect()
 }
 
-/// The mark's ink for a light or dark background: hex, and the ANSI colour for
-/// 16-colour terminals. Lime, deepened to an olive that reads on a light background.
-fn ink(c: char, light: bool) -> Option<(u32, Color)> {
-    Some(match (c, light) {
-        ('M', false) => (0xc6ff3d, Color::LightGreen),
-        ('M', true) => (0x4a7200, Color::Green),
-        _ => return None,
-    })
-}
-
-/// Pixel rows in half blocks. Without colour the shape is drawn in the
-/// terminal's own colour.
-fn sprite(rows: &[String], t: &Theme) -> Vec<Line<'static>> {
-    let color_of = |c: Option<char>| -> Option<Color> {
-        let (hex, ansi) = ink(c?, t.light)?;
-        if !t.color {
-            return Some(Color::Reset);
-        }
-        Some(palette::ink(hex, t.depth, ansi))
+/// The mark's pixels: the slash in paper (ink on a light background), the dot and
+/// the chevron in the wordmark's burgundy gloss, one colour per pixel row.
+fn mark_grid(light: bool) -> Vec<Vec<Px>> {
+    let (paper, gloss, act) = if light {
+        ((0x101214, Color::Black), GLOSS_LIGHT, Color::Magenta)
+    } else {
+        ((0xf2f0e9, Color::White), GLOSS_DARK, Color::LightMagenta)
     };
-    let mut out = vec![];
-    for pair in rows.chunks(2) {
-        let upper: Vec<char> = pair[0].chars().collect();
-        let lower: Vec<char> = pair.get(1).map(|r| r.chars().collect()).unwrap_or_default();
-        let mut spans: Vec<Span<'static>> = vec![];
-        for x in 0..upper.len() {
-            let (u, l) = (color_of(upper.get(x).copied()), color_of(lower.get(x).copied()));
-            let (text, style) = match (u, l) {
-                (None, None) => (" ", Style::default()),
-                (Some(u), None) => ("▀", fg(u)),
-                (None, Some(l)) => ("▄", fg(l)),
-                (Some(u), Some(l)) if u == l => ("█", fg(u)),
-                (Some(u), Some(l)) => ("▀", fg(u).bg(l)),
-            };
-            match spans.last_mut() {
-                Some(s) if s.style == style => s.content.to_mut().push_str(text),
-                _ => spans.push(Span::styled(text.to_string(), style)),
-            }
-        }
-        out.push(Line::from(spans));
-    }
-    out
+    let n = MARK.len();
+    MARK.iter()
+        .enumerate()
+        .map(|(y, row)| {
+            let shade = gloss[y * (gloss.len() - 1) / (n - 1)];
+            row.chars()
+                .map(|c| match c {
+                    'S' => Some(paper),
+                    'C' | 'D' => Some((shade, act)),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect()
 }
 
 pub(super) fn fg(c: Color) -> Style {
@@ -221,7 +202,7 @@ pub(super) fn half_blocks(grid: &[Vec<Px>], t: &Theme) -> Vec<Line<'static>> {
 
 /// The mark, [`MARK_W`] columns wide and six rows tall.
 pub fn mark(t: &Theme) -> Vec<Line<'static>> {
-    sprite(&mark_rows(), t)
+    half_blocks(&mark_grid(t.light), t)
 }
 
 /// The name in one row, for terminals too narrow for the wordmark: `KodAct`,
@@ -555,32 +536,27 @@ mod tests {
     }
 
     #[test]
-    fn the_mark_is_a_step_and_a_chevron() {
+    fn the_mark_is_dot_slash_chevron() {
         let rows = mark_rows();
         assert_eq!(rows.len(), 12);
         assert!(rows.iter().all(|r| r.chars().count() == MARK_W), "{rows:?}");
-        assert!(rows.iter().flat_map(|r| r.chars()).all(|c| c == '.' || ink(c, false).is_some()));
-        // The chevron's point: its top at the right of the middle, its tip at the right edge, halfway down.
-        assert!(rows[0].trim_matches('.').len() <= 2, "a pointed top");
-        assert!(rows[6].ends_with('M'), "the tip, halfway down");
-        assert!(rows.iter().enumerate().all(|(y, r)| y == 6 || r.ends_with('.')));
-        // Below the top, two strokes side by side: the step, a gap, the chevron.
-        let runs = |r: &str| r.split('.').filter(|s| !s.is_empty()).count();
-        for (y, row) in rows.iter().enumerate().take(10).skip(4) {
-            assert_eq!(runs(row), 2, "{y}: {row}");
-        }
-        // Every slant on one slope: each stroke's left edge moves one pixel a row.
-        let left = |r: &str| r.find('M').unwrap();
-        for y in [1, 2, 7, 8, 9] {
-            assert_eq!(left(&rows[y - 1]), left(&rows[y]) + 1, "{y}");
-        }
+        // The chevron opens right: its arms at the right edge top and bottom, its tip halfway down.
+        assert!(rows[0].ends_with('C') && rows[11].ends_with('C'));
+        let tip = |r: &str| r.find('C').unwrap();
+        assert!(tip(&rows[5]) < tip(&rows[0]) && tip(&rows[6]) < tip(&rows[11]), "a tip in the middle");
+        assert_eq!(tip(&rows[5]), tip(&rows[6]));
+        // The slash leans right as it rises; the dot sits at its foot.
+        let slash = |r: &str| r.find('S').unwrap();
+        assert!(slash(&rows[0]) > slash(&rows[11]));
+        assert!(rows[10].starts_with("DD") && rows[11].starts_with("DD"));
+        // The slash in paper; the chevron in the burgundy gloss, light at the top, deep at the foot.
+        let grid = mark_grid(false);
+        assert_eq!(grid[0][slash(&rows[0])].map(|(h, _)| h), Some(0xf2f0e9));
+        assert_eq!(grid[0][MARK_W - 1].map(|(h, _)| h), Some(GLOSS_DARK[0]));
+        assert_eq!(grid[11][MARK_W - 1].map(|(h, _)| h), Some(GLOSS_DARK[9]));
         let m = mark(&DARK);
         assert_eq!(m.len(), 6);
         assert!(m.iter().all(|l| l.spans.iter().map(|s| width(&s.content)).sum::<usize>() <= MARK_W));
-        assert!(m
-            .iter()
-            .flat_map(|l| &l.spans)
-            .all(|s| s.style.fg.is_none() || s.style.fg == Some(Color::Rgb(0xc6, 0xff, 0x3d))));
     }
 
     #[test]

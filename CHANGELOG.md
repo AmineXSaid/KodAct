@@ -2,6 +2,26 @@
 
 ## 0.1.0 (unreleased)
 
+### Burgundy palette and a welcome page with suggestion cards
+- **Lime is gone: KodAct's colours are a painter's palette around one wine.**
+  Rose (lit burgundy) is the brand: the prompt mark, selections, keys and the
+  edges of what is active. Burgundy fills pills and buttons with white text.
+  Sea-glass and plum carry headings, lists and code; links are a Prussian sky;
+  done, a warning and failed are sage, ochre and vermilion (kept apart from
+  the rose in hue, and always drawn with a mark). Surfaces and greys are
+  warmed toward the wine. A test holds every text colour at 4.5:1 or more on
+  the page and the panel, in dark and light; 256- and 16-colour terminals
+  get the nearest colours.
+- **The mark is the "./<" logo**, its chevron in the wordmark's burgundy gloss;
+  the other front-page styles' wordmarks are recoloured to match.
+- **The welcome page (default style):** the mode as a filled pill in the
+  prompt panel; three suggestion cards under it (Explain this project, Fix a
+  failing test, Write KODACT.md). Tab or ↓ from an empty prompt picks one,
+  ←/→ move, Enter sends it, Esc or typing goes back to the prompt. Up to
+  three recent conversations, and keys on the status line drawn as keys. On a
+  short screen the cards go first; the title, the prompt and any warning stay.
+- **Selected rows** in menus and dialogs get a wine tint across the row.
+
 ### Harbor: Docker running out of networks is named, and cleared before a run
 - **A trial Docker couldn't give a network to reads "didn't run (Docker out
   of networks)"**, stays outside the score, and the report says how to clear
