@@ -425,6 +425,10 @@ with `{"text", "cwd"}`:
 - **While the model works**, the spinner names the plan's task in progress,
   its `activeForm` (`Running the tests…`), or its content when it has none;
   with no task in progress, a word for what it does.
+- **Reduced motion** (`KODACT_REDUCED_MOTION=1`): the spinner, the working
+  words' shimmer, a step's running mark, a sub-agent's scanner and the
+  sidebar's filling and turning marks hold their first frame (the plan's ring
+  whole and still); the words and the seconds still change.
 - **While the model writes a tool call**, the working line says what it is
   preparing: `Preparing an edit to cart.py…`, `Writing notes.md…`,
   `Preparing a command…`; the file name once its path has arrived.

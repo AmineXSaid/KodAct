@@ -216,7 +216,7 @@ pub const KEYS: &[(&str, &str, &[&str])] = &[
     ("Shift+Enter, Alt+Enter, Ctrl+J, \\ Enter", "New line", &["newline"]),
     ("Esc", "Interrupt the turn; close a menu; cancel a dialog", &["cancel"]),
     ("Esc Esc", "On an empty prompt: rewind (/rewind)", &[]),
-    ("Ctrl+C", "Clear the input; interrupt; twice on an empty prompt: exit", &["interrupt"]),
+    ("Ctrl+C", "Clear the input; interrupt the turn; twice on an empty prompt: exit", &["interrupt"]),
     ("Ctrl+D", "Exit (empty prompt)", &["exit"]),
     ("Shift+Tab", "Cycle the permission mode: default, accept edits, plan", &["cycleMode"]),
     ("Up / Down", "Move between lines; earlier prompts", &[]),
@@ -1374,7 +1374,7 @@ impl App {
             DialogKind::Picker { .. } => self
                 .picker_rows()
                 .into_iter()
-                .map(|c| (if c.current { format!("{} ✔", c.label) } else { c.label.clone() }, c.detail.clone()))
+                .map(|c| (if c.current { format!("{} ✓", c.label) } else { c.label.clone() }, c.detail.clone()))
                 .collect(),
         }
     }
@@ -2211,7 +2211,7 @@ impl App {
             Span::styled("◆ ", t.mode(m_str)),
             Span::styled(format!("{} mode", mode.label()), t.mode(m_str).add_modifier(Modifier::BOLD)),
             Span::styled(format!(" · {}", mode.short_rule()), t.subtle()),
-            Span::styled(format!(" — {}", mode.definition()), t.dim()),
+            Span::styled(format!(" - {}", mode.definition()), t.dim()),
         ];
         if self.busy {
             spans.push(Span::styled(" (active immediately)", t.subtle()));
@@ -2584,7 +2584,10 @@ mod tests {
     use kodact_types::{MessageContent, StopReason, Usage};
 
     fn app() -> App {
-        let mut a = App::new(Theme { color: false, light: false, accent: None, depth: Default::default() }, vec![]);
+        let mut a = App::new(
+            Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false },
+            vec![],
+        );
         a.commands = vec![
             CommandInfo { name: "clear".into(), args: "[name]".into(), description: "Start a new conversation".into() },
             CommandInfo { name: "compact".into(), args: "[instructions]".into(), description: "Summarize".into() },
@@ -2708,7 +2711,8 @@ mod tests {
 
     #[test]
     fn a_failed_checklist_paints_only_its_failed_rows() {
-        let mut a = App::new(Theme { color: true, light: false, accent: None, depth: Default::default() }, vec![]);
+        let mut a =
+            App::new(Theme { color: true, light: false, accent: None, depth: Default::default(), calm: false }, vec![]);
         a.on_event(UiEvent::Reply { text: "ok   git          found\nFAIL shell        none".into(), is_error: true });
         let lines = a.take_pending();
         let (ok, fail) = (&lines[1], &lines[2]);
@@ -2723,7 +2727,8 @@ mod tests {
 
     #[test]
     fn notices_lead_with_a_mark_in_their_colour() {
-        let mut a = App::new(Theme { color: true, light: false, accent: None, depth: Default::default() }, vec![]);
+        let mut a =
+            App::new(Theme { color: true, light: false, accent: None, depth: Default::default(), calm: false }, vec![]);
         a.on_event(UiEvent::Engine(EngineEvent::Notice {
             level: NoticeLevel::Warning,
             text: "careful\nsecond".into(),
@@ -2769,7 +2774,8 @@ mod tests {
 
     #[test]
     fn color_and_focus_change_this_session_only() {
-        let mut a = App::new(Theme { color: true, light: false, accent: None, depth: Default::default() }, vec![]);
+        let mut a =
+            App::new(Theme { color: true, light: false, accent: None, depth: Default::default(), calm: false }, vec![]);
         assert!(a.submit("/color green".into()).is_empty(), "answered by the UI");
         assert_eq!(a.theme.accent, Some(ratatui::style::Color::Green));
         assert_eq!(a.theme.accent().fg, Some(ratatui::style::Color::Green));
@@ -3005,7 +3011,8 @@ mod tests {
 
     #[test]
     fn the_persons_message_takes_the_input_mark_in_its_modes_colour() {
-        let mut a = App::new(Theme { color: true, light: false, accent: None, depth: Default::default() }, vec![]);
+        let mut a =
+            App::new(Theme { color: true, light: false, accent: None, depth: Default::default(), calm: false }, vec![]);
         a.look = crate::tui::look::Look::Frame;
         a.echo_prompt("fix the cart\nand the tests");
         let lines = a.take_pending();
@@ -3224,7 +3231,7 @@ mod tests {
     /// a still circle, the rest open; its header says how far the plan is.
     #[test]
     fn a_plan_update_shows_the_plan_as_a_checklist() {
-        let t = Theme { color: true, light: false, accent: None, depth: Default::default() };
+        let t = Theme { color: true, light: false, accent: None, depth: Default::default(), calm: false };
         let todos = json!([
             {"content": "Read the signup form", "status": "completed", "activeForm": "Reading the signup form"},
             {"content": "Add the age check", "status": "in_progress", "activeForm": "Adding the age check"},
@@ -3255,7 +3262,7 @@ mod tests {
 
     #[test]
     fn results_say_what_happened() {
-        let t = Theme { color: false, light: false, accent: None, depth: Default::default() };
+        let t = Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false };
         let read =
             json!({"type": "text", "file": {"filePath": "/p/a.rs", "numLines": 40, "startLine": 1, "totalLines": 120}});
         assert_eq!(texts(&result_lines(&t, "Read", "     1\tfn main", false, Some(&read))), ["  └ 40 of 120 lines"]);
@@ -3612,7 +3619,7 @@ mod tests {
         let mut a = app();
         a.on_event(UiEvent::Picker(picker()));
         assert_eq!(a.dialog_selected(), 1, "the current choice is selected");
-        assert_eq!(a.dialog_options()[1].0, "Haiku ✔");
+        assert_eq!(a.dialog_options()[1].0, "Haiku ✓");
         typed(&mut a, "op");
         assert_eq!(a.dialog_options().len(), 1);
         assert_eq!(a.dialog_text().1, ["❯ op▏"]);
@@ -3641,7 +3648,7 @@ mod tests {
     #[test]
     fn ctrl_r_searches_history() {
         let mut a = App::new(
-            Theme { color: false, light: false, accent: None, depth: Default::default() },
+            Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false },
             vec!["cargo test".into(), "git status".into(), "cargo build".into()],
         );
         typed(&mut a, "draft");
@@ -3725,7 +3732,8 @@ mod tests {
 
     #[test]
     fn question_mark_themes_and_clipboard() {
-        let mut a = App::new(Theme { color: true, light: false, accent: None, depth: Default::default() }, vec![]);
+        let mut a =
+            App::new(Theme { color: true, light: false, accent: None, depth: Default::default(), calm: false }, vec![]);
         a.on_key(key(KeyCode::Char('?')));
         let shown = texts(&a.take_pending()).join("\n");
         assert!(shown.contains("Shift+Tab") && shown.contains("Ctrl+R"), "{shown}");
@@ -3734,13 +3742,16 @@ mod tests {
         assert_eq!(a.editor.text(), "why?");
 
         a.on_event(UiEvent::Theme("light".into()));
-        assert_eq!(a.theme, Theme { color: true, light: true, accent: None, depth: Default::default() });
+        assert_eq!(a.theme, Theme { color: true, light: true, accent: None, depth: Default::default(), calm: false });
         a.on_event(UiEvent::Theme("none".into()));
         assert!(!a.theme.color);
         a.on_event(UiEvent::Theme("dark".into()));
-        assert_eq!(a.theme, Theme { color: true, light: false, accent: None, depth: Default::default() });
+        assert_eq!(a.theme, Theme { color: true, light: false, accent: None, depth: Default::default(), calm: false });
         // Without colour allowed, no theme brings it back.
-        let mut b = App::new(Theme { color: false, light: false, accent: None, depth: Default::default() }, vec![]);
+        let mut b = App::new(
+            Theme { color: false, light: false, accent: None, depth: Default::default(), calm: false },
+            vec![],
+        );
         b.on_event(UiEvent::Theme("light".into()));
         assert!(!b.theme.color);
 

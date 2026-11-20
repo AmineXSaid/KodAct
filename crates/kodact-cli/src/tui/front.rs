@@ -123,11 +123,7 @@ const COMPACT_GAP: usize = 1;
 
 /// The compact wordmark's pixels: "Kod" in paper, "Act" in lime.
 fn compact_grid(light: bool) -> Vec<Vec<Px>> {
-    let (paper, lime) = if light {
-        ((0x101214, Color::Black), (0x4a7200, Color::Green))
-    } else {
-        ((0xf2f0e9, Color::White), (0xc6ff3d, Color::LightGreen))
-    };
+    let (paper, lime) = (palette::PROMPT_FG.ink(light), palette::BRAND.ink(light));
     (0..8)
         .map(|y| {
             let mut row: Vec<Px> = vec![];
@@ -156,11 +152,8 @@ pub fn compact_w() -> usize {
 /// The wordmark's pixels in one of its looks: 52 by 10, 53 by 11 with a
 /// shadow. "Kod" is paper (ink on a light background) and "Act" lime.
 fn wordmark_grid(look: Letters, light: bool) -> Vec<Vec<Px>> {
-    let (paper, lime, shadow) = if light {
-        ((0x101214, Color::Black), (0x4a7200, Color::Green), (0xa9c172, Color::Gray))
-    } else {
-        ((0xf2f0e9, Color::White), (0xc6ff3d, Color::LightGreen), (0x3d5a10, Color::Green))
-    };
+    let (paper, lime) = (palette::PROMPT_FG.ink(light), palette::BRAND.ink(light));
+    let shadow = if light { (0xa9c172, Color::Gray) } else { (0x3d5a10, Color::Green) };
     // The glow: bright at the top, settling to a deeper green at the foot.
     const GLOW: [(u32, Color); 10] = [
         (0xf1ffc4, Color::White),
@@ -709,7 +702,7 @@ mod tests {
         lines.iter().map(crate::tui::text::plain).collect()
     }
 
-    const DARK: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True };
+    const DARK: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True, calm: false };
 
     fn info() -> FrontInfo {
         FrontInfo {

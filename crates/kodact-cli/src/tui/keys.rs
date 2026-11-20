@@ -168,8 +168,8 @@ impl Chord {
 pub const ACTIONS: &[(&str, &[&str], &str)] = &[
     ("submit", &["enter"], "Send the prompt"),
     ("newline", &["shift+enter", "alt+enter", "ctrl+j"], "New line"),
-    ("cancel", &["esc"], "Interrupt the turn; close a menu or dialog; twice: /rewind"),
-    ("interrupt", &["ctrl+c"], "Clear the input; interrupt; twice on an empty prompt: exit"),
+    ("cancel", &["esc"], "Interrupt the turn; close a menu; cancel a dialog; twice: /rewind"),
+    ("interrupt", &["ctrl+c"], "Clear the input; interrupt the turn; twice on an empty prompt: exit"),
     ("exit", &["ctrl+d"], "Exit (empty prompt)"),
     ("cycleMode", &["shift+tab"], "Cycle the permission mode"),
     ("historySearch", &["ctrl+r"], "Search earlier prompts"),

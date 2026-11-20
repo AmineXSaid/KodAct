@@ -72,6 +72,16 @@ const fn role(dark: u32, light: u32, ansi_dark: Color, ansi_light: Color) -> Rol
 }
 
 impl Role {
+    /// The role's colour for one background and its 16-colour fallback, as the logo's
+    /// pixels take them (`ink`).
+    pub fn ink(&self, light: bool) -> (u32, Color) {
+        if light {
+            (self.light, self.ansi_light)
+        } else {
+            (self.dark, self.ansi_dark)
+        }
+    }
+
     pub fn color(&self, depth: Depth, light: bool) -> Color {
         match depth {
             Depth::True => rgb(if light { self.light } else { self.dark }),
@@ -224,6 +234,16 @@ pub fn nearest_256(r: u8, g: u8, b: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_logo_inks_are_the_palette_roles() {
+        // The wordmark and the mark take paper and lime from these roles: the same pixels
+        // as the literals they replaced.
+        assert_eq!(PROMPT_FG.ink(false), (0xf2f0e9, Color::White));
+        assert_eq!(PROMPT_FG.ink(true), (0x101214, Color::Black));
+        assert_eq!(BRAND.ink(false), (0xc6ff3d, Color::LightGreen));
+        assert_eq!(BRAND.ink(true), (0x4a7200, Color::Green));
+    }
 
     #[test]
     fn depth_comes_from_what_the_terminal_says() {

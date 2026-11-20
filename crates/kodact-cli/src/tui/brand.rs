@@ -92,10 +92,8 @@ pub fn mark_rows() -> Vec<String> {
 /// for "Act" and the mark, deepened to an olive that reads on a light background.
 fn ink(c: char, light: bool) -> Option<(u32, Color)> {
     Some(match (c, light) {
-        ('P', false) => (0xf2f0e9, Color::White),
-        ('P', true) => (0x101214, Color::Black),
-        ('G' | 'M', false) => (0xc6ff3d, Color::LightGreen),
-        ('G' | 'M', true) => (0x4a7200, Color::Green),
+        ('P', _) => palette::PROMPT_FG.ink(light),
+        ('G' | 'M', _) => palette::BRAND.ink(light),
         _ => return None,
     })
 }
@@ -448,7 +446,7 @@ mod tests {
         lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect()
     }
 
-    const DARK: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True };
+    const DARK: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True, calm: false };
 
     #[test]
     fn the_wordmark_is_kod_in_paper_and_act_in_lime() {

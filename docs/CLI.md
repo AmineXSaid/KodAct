@@ -100,8 +100,8 @@ working unless they are bound to something else or to `"none"`. A bad entry
 | --- | --- | --- |
 | `submit` | Enter | Send the prompt |
 | `newline` | Shift+Enter, Alt+Enter, Ctrl+J | New line |
-| `cancel` | Esc | Interrupt the turn; close a menu or dialog; twice: `/rewind` |
-| `interrupt` | Ctrl+C | Clear the input; interrupt; twice on an empty prompt: exit |
+| `cancel` | Esc | Interrupt the turn; close a menu; cancel a dialog; twice: `/rewind` |
+| `interrupt` | Ctrl+C | Clear the input; interrupt the turn; twice on an empty prompt: exit |
 | `exit` | Ctrl+D | Exit (empty prompt) |
 | `cycleMode` | Shift+Tab | Cycle the permission mode |
 | `historySearch` | Ctrl+R | Search earlier prompts |
@@ -557,6 +557,7 @@ the context window to compact in time, and prices to show costs.
 | `MCP_TIMEOUT`, `MCP_TOOL_TIMEOUT` | MCP connect and call timeouts, in milliseconds (30 s, 10 min) |
 | `KODACT_NO_INPUT` | Same as `--no-input` |
 | `KODACT_TUI` | `0`, `false`, `off` or `no`: interactive mode uses the line REPL (same as `--no-tui`) |
+| `KODACT_REDUCED_MOTION` | Set (and not `0`, `false`, `no` or `off`): the terminal UI's spinner, shimmer and working marks hold still; what they say, and the seconds, still change |
 | `KODACT_LOG` | Log filter, with `--debug` (`/debug` turns logging on partway through a session) |
 | `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR_FORCE` | Color |
 
