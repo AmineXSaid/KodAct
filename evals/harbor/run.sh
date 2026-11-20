@@ -133,6 +133,22 @@ fi
 job="kodact-${mode}-${model_tag}-${commit}${dirty}${custom}${ca}-$(date +%Y%m%d-%H%M%S)"
 echo "job: $job"
 
+# Each trial gets a Docker network; a killed run leaves its networks behind, and Docker's address
+# ranges run out ("all predefined address pools have been fully subnetted": 11 of 12 trials never
+# started on 2026-11-19). Remove task networks with nothing attached that are over 10 minutes old,
+# so a job starting beside this one keeps the networks it is setting up.
+if command -v docker >/dev/null 2>&1; then
+  now=$(date +%s)
+  for net in $(docker network ls --filter name=__env_default --format '{{.Name}}' 2>/dev/null); do
+    info=$(docker network inspect -f '{{len .Containers}} {{.Created.Unix}}' "$net" 2>/dev/null) || continue
+    attached=${info%% *}
+    created=${info##* }
+    if [ "$attached" = 0 ] && [ $((now - created)) -gt 600 ]; then
+      docker network rm "$net" >/dev/null 2>&1 && echo "removed leftover Docker network $net"
+    fi
+  done
+fi
+
 # The report is written even when harbor fails part way.
 status=0
 . "$repo/evals/harbor/verifier-ca.sh"

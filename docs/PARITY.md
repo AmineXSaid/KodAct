@@ -329,7 +329,7 @@ The manual checks are in `docs/CHECKLIST.md`, "Terminal UI".
 | `/` command menu | done | `tui::app::tests::slash_menu_filters_completes_and_runs`, `tui::render::tests::the_menu_lists_matching_commands` | Prefix matches first, then substring matches |
 | Permission, AskUserQuestion and plan dialogs | done | `tui::app::tests::dialogs_answer_permissions_questions_and_plans`, `tui::render::tests::dialogs_draw_in_a_box_without_the_input`, `tui::session::tests::turns_commands_questions_and_exit_go_through_the_channels` | "Don't ask again" adds the suggested rule |
 | Queued messages while a turn runs | done | `tui::app::tests::enter_sends_and_queues_while_busy`, `tui::session::tests::turns_commands_questions_and_exit_go_through_the_channels` | |
-| Esc / Ctrl-C / Ctrl-D / Shift+Tab | done | `tui::app::tests::esc_ctrl_c_and_shift_tab` | Esc twice opens `/rewind` |
+| Esc / Ctrl-C / Ctrl-D / Shift+Tab | done | `tui::app::tests::esc_ctrl_c_and_shift_tab` | Esc twice opens `/rewind`. Shift+Tab cycling writes one mode note, for where it lands (`tui_pty::cycling_modes_leaves_one_note_in_the_transcript`) |
 | Status line: mode, model, context, cost | done | `tui::render::tests::idle_shows_the_placeholder_and_status`, `tui::render::tests::plan_mode_and_hints_show_in_the_status_line` | |
 | Scheduled tasks and subtasks while idle | done | `tui::session` (same loop as the REPL) | A firing task shows the spinner |
 | Terminal restored on exit and on panic | done | manual (CHECKLIST) | A Drop guard and a panic hook |

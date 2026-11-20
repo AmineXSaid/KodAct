@@ -441,3 +441,27 @@ def test_tests_that_could_not_reach_the_hub_are_a_verifier_error(tmp_path):
     error = ctrf_test("test_compress_decompress_workflow", "error", "E   ValueError: Couldn't find cache for allenai/c4")
     t = make_trial(tmp_path, "reshard-c4-data", "0", HF_UNREACHABLE, ran_tests=1, tests=[error])
     assert t.verdict == "verifier error"
+
+
+def test_a_trial_docker_had_no_network_for_says_so_and_how_to_clear_it(tmp_path):
+    # 2026-11-19: 11 of 12 trials never started, "all predefined address pools have been fully
+    # subnetted", while a second job ran beside it. Outside the score, with the way out.
+    job = make_job(tmp_path, [("largest-eigenval", 0.0, 0, []), ("fix-git", 1.0, 600, [])])
+    d = job.path / "largest-eigenval__T"
+    (d / "agent" / "kodact.jsonl").unlink()
+    (d / "result.json").write_text(json.dumps({
+        "task_name": "largest-eigenval",
+        "agent_setup": None,
+        "agent_execution": None,
+        "exception_info": {
+            "exception_type": "RuntimeError",
+            "exception_message": "Docker compose command failed for environment largest-eigenval. ... Error "
+            "response from daemon: all predefined address pools have been fully subnetted",
+        },
+    }))
+    job = report.Job(job.path)
+    trial = next(t for t in job.trials if t.task == "largest-eigenval")
+    assert trial.verdict == "didn't run (Docker out of networks)"
+    text = job.report()
+    assert "valid trials (model reached, verifier ran): 1/2" in text, text[:900]
+    assert "docker network ls --filter name=__env_default" in text, text[:2000]

@@ -2,6 +2,50 @@
 
 ## 0.1.0 (unreleased)
 
+### Burgundy palette and a welcome page with suggestion cards
+- **Lime is gone: KodAct's colours are a painter's palette around one wine.**
+  Rose (lit burgundy) is the brand: the prompt mark, selections, keys and the
+  edges of what is active. Burgundy fills pills and buttons with white text.
+  Sea-glass and plum carry headings, lists and code; links are a Prussian sky;
+  done, a warning and failed are sage, ochre and vermilion (kept apart from
+  the rose in hue, and always drawn with a mark). Surfaces and greys are
+  warmed toward the wine. A test holds every text colour at 4.5:1 or more on
+  the page and the panel, in dark and light; 256- and 16-colour terminals
+  get the nearest colours.
+- **The mark is the "./<" logo**, its chevron in the wordmark's burgundy gloss;
+  the other front-page styles' wordmarks are recoloured to match.
+- **The welcome page (default style):** the mode as a filled pill in the
+  prompt panel; three suggestion cards under it (Explain this project, Fix a
+  failing test, Write KODACT.md). Tab or ↓ from an empty prompt picks one,
+  ←/→ move, Enter sends it, Esc or typing goes back to the prompt. Up to
+  three recent conversations, and keys on the status line drawn as keys. On a
+  short screen the cards go first; the title, the prompt and any warning stay.
+- **Selected rows** in menus and dialogs get a wine tint across the row.
+
+### Harbor: Docker running out of networks is named, and cleared before a run
+- **A trial Docker couldn't give a network to reads "didn't run (Docker out
+  of networks)"**, stays outside the score, and the report says how to clear
+  it. On 2026-11-19, 11 of 12 trials of a baseline job never started ("all
+  predefined address pools have been fully subnetted") while a second job ran
+  beside it, so its 1/12 said nothing about the agent.
+- **run.sh removes task networks left by earlier trials** (nothing attached,
+  over 10 minutes old) before it starts, so a job starting beside it keeps
+  the networks it is still setting up.
+
+### Shift+Tab notes one mode; `kodact setup` is a card
+- **Cycling permission modes with Shift+Tab no longer prints a banner for
+  every mode it passes.** The status line names the mode at once; the
+  transcript gets one note, for the mode the cycle landed on, when the next
+  prompt goes out (or, mid-turn, once the cycling rests). Coming back to the
+  starting mode writes nothing.
+- **`kodact setup` is one centred card**: a stepper (Provider → Connect →
+  Model → Review), boxed fields with the cursor in them, a model list you
+  filter by typing (any other ID is offered as typed), a `/models` check that
+  no longer freezes the screen, a review before saving, and a key already in
+  the shell's environment accepted as is. Every row is cut to the card, so
+  nothing crosses its edges at any terminal size; pastes arrive as one paste,
+  and the terminal is restored however the wizard ends.
+
 ### Harbor: extra kodact flags that can't be split stop the run at once
 - **`KODACT_HARBOR_ARGS` with an unclosed quote is refused before any
   container starts.** Before, every trial crashed at its start ("No closing

@@ -314,7 +314,7 @@ fn status(app: &App, w: usize, now: Instant) -> Line<'static> {
     let folder = !app.status.cwd.is_empty() && left == super::short_path(&app.status.cwd);
     let left = if folder { keep_end(&left, (w / 2).max(8)) } else { fit(&left, w.saturating_sub(lead)) };
     // The folder always shows: its parents quiet, its own name brighter, then the
-    // branch after a lime mark, so where you are reads at a glance.
+    // branch after a rose mark, so where you are reads at a glance.
     let left_spans = if folder {
         let t = app.theme;
         let cut = left.rfind('/').map_or(0, |i| i + 1);
@@ -405,6 +405,9 @@ pub fn full_view_at(
     now: Instant,
 ) -> (LiveView, usize) {
     let h = (height as usize).max(1);
+    // Whether the last frame drew the cards: the status line below is built with it, and built
+    // again if this frame decides otherwise, so its "tab suggestions" hint never lags a frame.
+    let cards_before = app.cards_drawn.get();
     // The front page has room for a note or two under it (a warning at start, the answer
     // to /clear). An answer longer than that takes the page's place: `?` or /status on
     // the front page showed only its last six rows, or none on a short window.
@@ -415,7 +418,8 @@ pub fn full_view_at(
         let fb = FrontBox { left: page.box_left, w: page.box_w, under: page.under };
         let live = live_view_inner(app, width, height, now, Some(fb));
         let mut input = live.lines;
-        let status = input.pop().unwrap_or_default();
+        let mut status = input.pop().unwrap_or_default();
+        app.cards_drawn.set(false);
         let room = h.saturating_sub(1);
         // Each row in `rows` starts with `TRANSCRIPT_INDENT` (2 spaces), which lines its
         // `❯` up with a boxed input's `│ ❯` when the box starts at column 0. On the front
@@ -480,8 +484,10 @@ pub fn full_view_at(
             out.extend(input);
         } else {
             let mut mid: Vec<Line<'static>> = vec![];
-            // The style's art goes first when the screen is too short for it all.
-            let fits = page.header.len() + page.above.len() + base_input_len + page.below.len() <= room
+            // What a short screen keeps, in order: the input, the style's art over it, the notes
+            // (a warning at start, an answer), then the rows under the input (suggestions,
+            // recent work), which go first.
+            let fits = page.header.len() + page.above.len() + base_input_len <= room
                 && page.header.len() + page.above.len() + input.len() <= room;
             if fits {
                 mid.extend(page.above.iter().cloned());
@@ -489,18 +495,21 @@ pub fn full_view_at(
             let at = mid.len();
             mid.extend(input);
             let mut base_mid_len = mid.len().saturating_sub(popup);
-            if page.header.len() + base_mid_len + page.below.len() <= room {
-                base_mid_len += page.below.len();
+            let note_rows = if notes.is_empty() { 0 } else { 1 + notes.len() };
+            if !notes.is_empty() && page.header.len() + base_mid_len + note_rows > room {
+                break 'front;
             }
-            if mid.len() + page.below.len() + page.header.len() <= room {
-                mid.extend(page.below.iter().cloned());
+            let below_fits = page.header.len() + base_mid_len + note_rows + page.below.len() <= room;
+            if below_fits {
+                base_mid_len += page.below.len();
+                if page.header.len() + mid.len() + note_rows + page.below.len() <= room {
+                    mid.extend(page.below.iter().cloned());
+                    app.cards_drawn.set(app.look == super::look::Look::Frame);
+                }
             }
             if !notes.is_empty() {
-                if page.header.len() + base_mid_len + 1 + notes.len() > room {
-                    break 'front;
-                }
-                base_mid_len += 1 + notes.len();
-                if page.header.len() + mid.len() + 1 + notes.len() <= room {
+                base_mid_len += note_rows;
+                if page.header.len() + mid.len() + note_rows <= room {
                     mid.push(Line::default());
                     mid.extend(notes);
                 }
@@ -517,10 +526,14 @@ pub fn full_view_at(
         }
         out.truncate(room);
         out.resize(room, Line::default());
+        if app.cards_drawn.get() != cards_before {
+            status = live_view_inner(app, width, height, now, Some(fb)).lines.pop().unwrap_or_default();
+        }
         out.push(status);
         let cursor = live.cursor.map(|(x, y)| (x, y + box_at as u16)).filter(|(_, y)| (*y as usize) < room);
         return (LiveView { lines: out, cursor }, 0);
     }
+    app.cards_drawn.set(false);
     let live = live_view_at(app, width, height, now);
     // The status style: a bar of the session's readouts across the top.
     let bar: Vec<Line<'static>> =
@@ -797,7 +810,7 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
     let (left, bw) = fb.map(|b| (b.left.min(w.saturating_sub(4)), b.w.min(w))).unwrap_or((0, w));
     let margin = " ".repeat(left);
     use super::look::Look;
-    // Bare and Ledger draw the input under a rule, without a box; Glow's box glows lime.
+    // Bare and Ledger draw the input under a rule, without a box; Glow's box glows rose.
     let open = matches!(app.look, Look::Bare | Look::Ledger);
     let border = match app.look {
         Look::Glow | Look::Frame => t.accent(),
@@ -1087,12 +1100,12 @@ fn session_row(app: &App, room: usize) -> Vec<Span<'static>> {
     let s = &app.status;
     let w_of = |v: &[Span<'static>]| v.iter().map(|s| text_width(&s.content)).sum::<usize>();
     let sep = || Span::styled("  ·  ", t.subtle());
-    let (label, mstyle) = if app.danger_armed {
-        ("Dangerous (y/n)".to_string(), t.error())
+    // The mode as a filled pill: white on burgundy for Manual, the others in their own colour.
+    let mode = if app.danger_armed {
+        vec![t.pill("bypassPermissions", "Dangerous (y/n)")]
     } else {
-        (mode_name(&s.mode), t.mode(&s.mode))
+        vec![t.pill(&s.mode, &mode_name(&s.mode))]
     };
-    let mode = vec![Span::styled(label, mstyle.add_modifier(ratatui::style::Modifier::BOLD))];
     let mut right = vec![];
     if s.context_pct.is_some_and(|p| p > 0 || s.context_used) {
         right.extend(gauge(&t, s));
@@ -1226,7 +1239,7 @@ mod tests {
         assert_eq!(rows[2], format!("╰{}╯", "─".repeat(58)));
         assert_eq!(rows[3], "  /p                                     opus · ⡀ 88% left");
         assert_eq!(v.cursor, Some((4, 1)));
-        // The placeholder is quiet but readable (muted, over 4.5:1); the prompt marker is KodAct's lime.
+        // The placeholder is quiet but readable (muted, over 4.5:1); the prompt marker is KodAct's rose.
         assert_eq!(buf[(6, 1)].fg, crate::tui::palette::MUTED.color(Default::default(), false));
         assert_eq!(buf[(2, 1)].fg, crate::tui::palette::BRAND.color(Default::default(), false));
     }
@@ -1432,7 +1445,8 @@ mod tests {
         b.look = crate::tui::look::Look::Frame;
         b.status.mode = "plan".into();
         let (rows, _) = draw(&live_view(&b, 80, 12), 80);
-        assert!(rows.last().unwrap().contains("shift+tab leave plan mode"), "{rows:#?}");
+        let last = rows.last().unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(last.contains("shift+tab leave plan mode"), "{rows:#?}");
         // Paths from the session's folder; the home folder as ~.
         use crate::tui::app::relative_spans;
         let home = std::env::var("HOME").unwrap_or_default();
@@ -1666,9 +1680,9 @@ mod tests {
         a.status.context_pct = Some(4);
         a.status.window_guessed = true;
         a.status.session_tokens = 25_300;
-        let (rows, buf) = draw(&live_view(&a, 110, 12), 110);
+        let (rows, buf) = draw(&live_view(&a, 120, 12), 120);
         let n = rows.len();
-        // The box: the text, a row of air, the session row; lime all round.
+        // The box: the text, a row of air, the session row; rose all round.
         assert!(rows[n - 6].starts_with('╭') && rows[n - 2].starts_with('╰'), "{rows:#?}");
         assert!(rows[n - 5].starts_with(&format!("│ ❯ {PLACEHOLDER}")), "{rows:#?}");
         assert!(
@@ -1677,23 +1691,23 @@ mod tests {
                 && rows[n - 4][3..rows[n - 4].len() - 3].trim().is_empty()
         );
         let session = &rows[n - 3];
-        assert!(session.starts_with("│ Manual  ·  quick-thinking  ·  gpt.example.net"), "{session}");
+        assert!(session.starts_with("│  Manual   ·  quick-thinking  ·  gpt.example.net"), "{session}");
         assert!(session.contains("asks edits & shell"), "wide box shows concise mode rule: {session}");
         assert!(session.ends_with("⡀ ~96% left  ·  25.3k tokens used │"), "the room left on the right: {session}");
         assert_eq!(buf[(0, (n - 6) as u16)].fg, a.theme.accent().fg.unwrap());
-        assert_eq!(buf[(2, (n - 3) as u16)].fg, a.theme.mode("default").fg.unwrap(), "the mode in its colour");
+        assert_eq!(buf[(3, (n - 3) as u16)].bg, a.theme.fill().bg.unwrap(), "the mode as a filled pill");
         // The status line: the folder and the keys that help; the box has the rest.
         let last = rows[n - 1].trim_end();
-        assert!(last.starts_with("  /p") && last.contains("/ commands") && !last.contains("quick-thinking"), "{last}");
+        assert!(last.starts_with("  /p") && last.contains("/  commands") && !last.contains("quick-thinking"), "{last}");
         // At 80 columns the endpoint is the first to go, so the context still fits.
         let (rows, _) = draw(&live_view(&a, 80, 12), 80);
-        assert!(rows[n - 3].starts_with("│ Manual  ·  quick-thinking  ") && !rows[n - 3].contains("gpt.example.net"));
+        assert!(rows[n - 3].starts_with("│  Manual   ·  quick-thinking  ") && !rows[n - 3].contains("gpt.example.net"));
         assert!(rows[n - 3].contains("~96% left"), "{rows:#?}");
         // Plan mode: named in the box in its colour, not repeated on the line.
         a.status.mode = "plan".into();
         let (rows, buf) = draw(&live_view(&a, 80, 12), 80);
-        assert!(rows[n - 3].starts_with("│ Plan  ·  quick-thinking"), "{rows:#?}");
-        assert_eq!(buf[(2, (n - 3) as u16)].fg, a.theme.mode("plan").fg.unwrap());
+        assert!(rows[n - 3].starts_with("│  Plan   ·  quick-thinking"), "{rows:#?}");
+        assert_eq!(buf[(3, (n - 3) as u16)].bg, a.theme.mode("plan").fg.unwrap(), "a pill in the mode's colour");
         assert!(!rows[n - 1].contains("plan mode on"), "{rows:#?}");
         // Narrow: the endpoint goes first, then the model shortens; the mode always stays.
         a.status.model = "accounts/fireworks/models/a-very-long-model-name-that-goes-on-and-on".into();
@@ -2023,7 +2037,7 @@ mod tests {
         assert_eq!(
             color,
             crate::tui::palette::BRAND.color(Default::default(), false),
-            "running is lime, as the spinner"
+            "running is rose, as the spinner"
         );
     }
 
@@ -2774,13 +2788,29 @@ mod tests {
     }
 
     #[test]
+    fn the_first_frame_offers_the_cards_it_draws() {
+        let mut a = app(false);
+        a.look = crate::tui::look::Look::Frame;
+        a.front = true;
+        let page = crate::tui::front::front_page(&a.theme, a.look, &Default::default(), 120);
+        // The very first frame: the cards are drawn, and the status line says how to reach them.
+        let (v, _) = full_view(&a, 120, 40, &[], &page, 0);
+        let status = draw(&v, 120).0.pop().unwrap();
+        assert!(a.cards_drawn.get() && status.contains("suggestions"), "{status}");
+        // Too short for them: neither the cards nor the hint.
+        let (v, _) = full_view(&a, 120, 16, &[], &page, 0);
+        let status = draw(&v, 120).0.pop().unwrap();
+        assert!(!a.cards_drawn.get() && !status.contains("suggestions"), "{status}");
+    }
+
+    #[test]
     fn contextual_hints_adapt_to_session_state() {
         let mut a = app(false);
         a.look = crate::tui::look::Look::Frame;
         let status_row = |app: &App, w: u16| draw(&live_view(app, w, 12), w).0.pop().unwrap();
 
         // Fresh idle session: base navigation without find/fold/copy clutter.
-        let fresh = status_row(&a, 140);
+        let fresh = status_row(&a, 140).split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(fresh.contains("/ commands") && fresh.contains("@ files") && fresh.contains("shift+tab mode"));
         assert!(!fresh.contains("ctrl+f find") && !fresh.contains("ctrl+o") && !fresh.contains("alt+c copy code"));
 
@@ -2788,19 +2818,19 @@ mod tests {
         a.talked = true;
         a.has_collapsible = true;
         a.has_code = true;
-        let rich = status_row(&a, 140);
+        let rich = status_row(&a, 140).split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(rich.contains("ctrl+f find"), "{rich}");
         assert!(rich.contains("ctrl+o thoughts"), "{rich}");
         assert!(rich.contains("alt+c copy code"), "{rich}");
 
         // Verbose toggle flips the ctrl+o hint label from `thoughts` to `less`.
         a.verbose = true;
-        let expanded = status_row(&a, 140);
+        let expanded = status_row(&a, 140).split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(expanded.contains("ctrl+o less"), "{expanded}");
 
         // Find mode surfaces match navigation hints.
         a.find = Some(crate::tui::app::Find { query: "foo".into(), ..Default::default() });
-        let find_row = status_row(&a, 140);
+        let find_row = status_row(&a, 140).split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(find_row.contains("enter next") && find_row.contains("↑↓ match") && find_row.contains("esc close"));
         a.find = None;
 
@@ -2808,12 +2838,12 @@ mod tests {
         a.busy = true;
         a.busy_since = Some(Instant::now());
         a.verbose = false;
-        let busy_row = status_row(&a, 140);
+        let busy_row = status_row(&a, 140).split_whitespace().collect::<Vec<_>>().join(" ");
         assert_eq!(busy_row.matches("esc").count(), 1, "{busy_row}");
         assert!(busy_row.contains("ctrl+o thoughts") && busy_row.contains("shift+tab mode"), "{busy_row}");
 
         a.queued.push_back("next prompt".into());
-        let queued_row = status_row(&a, 140);
+        let queued_row = status_row(&a, 140).split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(queued_row.contains("take the queued message back") && queued_row.contains("ctrl+o thoughts"));
     }
 

@@ -261,6 +261,9 @@ pub(super) fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
                 if !desc.is_empty() && left >= 4 {
                     spans.push(Span::styled(format!("  {}", fit(desc, left)), t.dim()));
                 }
+                if i == selected {
+                    return tint_row(&t, spans, 0, width);
+                }
                 Line::from(spans)
             }
             None => {
@@ -399,6 +402,8 @@ pub(super) fn hints(app: &App, room: usize) -> Vec<Span<'static>> {
     let mut keys: Vec<(&'static str, &'static str)> = Vec::new();
     if app.dialog.is_some() {
         // The dialog says its own keys.
+    } else if app.card.is_some() {
+        keys.extend([("enter", "open"), ("←→", "choose"), ("esc", "back to the prompt")]);
     } else if app.find.is_some() {
         keys.extend([("enter", "next"), ("↑↓", "match"), ("esc", "close")]);
     } else if app.busy && !app.queued.is_empty() && app.editor.is_empty() {
@@ -429,6 +434,9 @@ pub(super) fn hints(app: &App, room: usize) -> Vec<Span<'static>> {
         }
         keys.push(("?", "keys"));
     } else if app.editor.is_empty() {
+        if app.front && app.look == super::look::Look::Frame && app.cards_drawn.get() {
+            keys.push(("tab", "suggestions"));
+        }
         keys.extend([("/", "commands"), ("@", "files"), ("shift+tab", "mode")]);
         if app.talked {
             keys.push(("ctrl+f", "find"));
@@ -446,14 +454,15 @@ pub(super) fn hints(app: &App, room: usize) -> Vec<Span<'static>> {
     let mut out: Vec<Span<'static>> = vec![];
     let mut used = 0;
     for (i, (k, what)) in keys.iter().enumerate() {
-        let gap = if i == 0 { "" } else { "   " };
-        let w = text_width(gap) + text_width(k) + 1 + text_width(what);
+        // Each key drawn as a key, on a raised surface, then what it does.
+        let gap = if i == 0 { "" } else { "  " };
+        let w = text_width(gap) + text_width(k) + 2 + 1 + text_width(what);
         if used + w > room {
             break;
         }
         used += w;
         out.push(Span::raw(gap));
-        out.push(Span::styled(k.to_string(), if t.color { Style::default() } else { t.bold() }));
+        out.push(t.keycap(k));
         out.push(Span::styled(format!(" {what}"), t.subtle()));
     }
     out
@@ -478,9 +487,23 @@ pub(super) fn file_menu(app: &App, left: usize, w: usize, lead: &str) -> Vec<Lin
                 spans.push(Span::raw(" ".repeat(left)));
             }
             spans.push(Span::styled(fit(&format!("{lead}{f}"), w), st));
+            if first + i == sel {
+                return tint_row(&t, spans, left, w);
+            }
             Line::from(spans)
         })
         .collect()
+}
+
+/// A selected row: the wine tint behind it, from its first text to `w` columns past `left`.
+fn tint_row(t: &super::text::Theme, mut spans: Vec<Span<'static>>, left: usize, w: usize) -> Line<'static> {
+    let Some(bg) = t.tint() else { return Line::from(spans) };
+    let used: usize = spans.iter().map(|s| text_width(&s.content)).sum();
+    spans.push(Span::raw(" ".repeat((left + w).saturating_sub(used))));
+    for s in spans.iter_mut().skip(usize::from(left > 0)) {
+        s.style = s.style.bg(bg);
+    }
+    Line::from(spans)
 }
 
 pub(super) fn menu(app: &App, left: usize, w: usize, lead: &str) -> Vec<Line<'static>> {
@@ -514,6 +537,9 @@ pub(super) fn menu(app: &App, left: usize, w: usize, lead: &str) -> Vec<Line<'st
                 spans.push(Span::raw(" ".repeat(left)));
             }
             spans.extend([Span::styled(l, st), Span::raw("  "), Span::styled(desc, t.dim())]);
+            if selected {
+                return tint_row(&t, spans, left, w);
+            }
             Line::from(spans)
         })
         .collect()

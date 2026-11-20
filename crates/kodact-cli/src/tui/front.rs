@@ -5,25 +5,24 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-use super::brand::{centred, GAP, GLYPHS, MARK_W, SHORT_TAGLINE, TAGLINE, WORDMARK_W};
+use super::brand::{
+    centred, half_blocks, px_ink as ink, Px, GAP, GLOSS_DARK, GLOSS_LIGHT, GLYPHS, LETTERS_W, MARK_W, SHORT_TAGLINE,
+    TAGLINE, WORDMARK_W,
+};
 use super::look::Look;
-use super::palette;
 use super::render::fit;
 use super::text::{width, Theme};
-
-/// One pixel: its colour (hex) and the ANSI colour for 16-colour terminals.
-type Px = Option<(u32, Color)>;
 
 /// How the wordmark is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Letters {
-    /// "Kod" in paper, "Act" in lime.
+    /// "Kod" in paper, "Act" in rose.
     Flat,
-    /// Paper and lime letters over a dark olive shadow, one pixel down and right.
+    /// Paper and rose letters over a deep wine shadow, one pixel down and right.
     Shadow,
-    /// Lit from above: bright lime at the top, a deeper green at the foot.
+    /// Lit from above: light rose at the top, deep wine at the foot.
     Glow,
-    /// The letters' edges only, in lime.
+    /// The letters' edges only, in rose.
     Outline,
 }
 
@@ -41,6 +40,116 @@ pub struct FrontInfo {
     pub tools: usize,
     /// The newest other conversations here: (what, how long ago).
     pub recent: Vec<(String, String)>,
+    /// The suggestion card that has the keyboard, if one does.
+    pub card: Option<usize>,
+}
+
+/// The welcome page's suggestion cards: icon, title, what it does, and what Enter sends.
+pub const CARDS: [(&str, &str, &str, &str); 3] = [
+    (
+        "◇",
+        "Explain this project",
+        "Map the code, start here",
+        "Explain this project: what it does, how it is laid out, and where to start.",
+    ),
+    ("✦", "Fix a failing test", "Run tests, find, fix", "Run the tests, find what fails and why, and fix it."),
+    ("¶", "Write KODACT.md", "/init · project notes", "/init"),
+];
+
+/// A card's icon colour: sea-glass, ochre, plum.
+fn card_ink(t: &Theme, i: usize) -> Style {
+    match i {
+        0 => t.teal(),
+        1 => t.warning(),
+        _ => t.violet(),
+    }
+}
+
+/// The suggestion cards across the panel's width `w` from column `left`: three small rounded
+/// cards side by side, or a list of three rows where they don't fit. The card with the
+/// keyboard has a rose edge and a wine tint.
+fn cards(t: &Theme, focus: Option<usize>, left: usize, w: usize) -> Vec<Line<'static>> {
+    const GAP_W: usize = 2;
+    let card_w = w.saturating_sub(2 * GAP_W) / 3;
+    let tint = |on: bool, st: Style| match (on, t.tint()) {
+        (true, Some(bg)) => st.bg(bg),
+        _ => st,
+    };
+    if card_w >= 24 {
+        let mut rows: Vec<Vec<Span<'static>>> = vec![vec![Span::raw(" ".repeat(left))]; 4];
+        for (i, (icon, title, hint, _)) in CARDS.iter().enumerate() {
+            // The last card takes what the division left over, so the row ends with the panel.
+            let cw = if i + 1 == CARDS.len() { w - 2 * (card_w + GAP_W) } else { card_w };
+            let inner = cw - 4;
+            let on = focus == Some(i);
+            let edge = if on { t.accent() } else { t.hairline() };
+            let fill = tint(on, Style::default());
+            if i > 0 {
+                for r in rows.iter_mut() {
+                    r.push(Span::raw(" ".repeat(GAP_W)));
+                }
+            }
+            let title = fit(title, inner.saturating_sub(2));
+            let hint = fit(hint, inner);
+            let title_st = if on { t.strong() } else { Style::default() };
+            rows[0].push(Span::styled(format!("╭{}╮", "─".repeat(cw - 2)), edge));
+            rows[1].push(Span::styled("│", edge));
+            rows[1].push(Span::styled(" ", fill));
+            rows[1].push(Span::styled(format!("{icon} "), tint(on, card_ink(t, i))));
+            rows[1].push(Span::styled(title.clone(), tint(on, title_st)));
+            rows[1].push(Span::styled(" ".repeat(inner.saturating_sub(2 + width(&title)) + 1), fill));
+            rows[1].push(Span::styled("│", edge));
+            rows[2].push(Span::styled("│", edge));
+            rows[2].push(Span::styled(" ", fill));
+            rows[2].push(Span::styled(hint.clone(), tint(on, t.subtle())));
+            rows[2].push(Span::styled(" ".repeat(inner.saturating_sub(width(&hint)) + 1), fill));
+            rows[2].push(Span::styled("│", edge));
+            rows[3].push(Span::styled(format!("╰{}╯", "─".repeat(cw - 2)), edge));
+        }
+        return rows.into_iter().map(Line::from).collect();
+    }
+    // Narrow: one row per suggestion, the one with the keyboard marked and tinted.
+    let room = w.saturating_sub(4);
+    CARDS
+        .iter()
+        .enumerate()
+        .map(|(i, (icon, title, _, _))| {
+            let on = focus == Some(i);
+            let title = fit(title, room.saturating_sub(4));
+            let pad = room.saturating_sub(4 + width(&title));
+            Line::from(vec![
+                Span::raw(" ".repeat(left)),
+                Span::styled(if on { "❯ " } else { "  " }, t.accent()),
+                Span::styled(format!("{icon} "), tint(on, card_ink(t, i))),
+                Span::styled(title, tint(on, if on { t.strong() } else { t.dim() })),
+                Span::styled(" ".repeat(pad), tint(on, Style::default())),
+            ])
+        })
+        .collect()
+}
+
+/// Up to three past conversations here, newest first, each with how long ago, under a
+/// quiet heading, then how to pick one up.
+fn recent(t: &Theme, recent: &[(String, String)], col: usize, room: usize) -> Vec<Line<'static>> {
+    let mut out = vec![at(col, Line::from(Span::styled("Recent", t.subtle())))];
+    for (what, ago) in recent.iter().take(3) {
+        let what = fit(what, room.saturating_sub(width(ago) + 6).max(8));
+        let dots = room.saturating_sub(2 + width(&what) + 2 + width(ago));
+        out.push(at(
+            col,
+            Line::from(vec![
+                Span::styled("↺ ", t.accent()),
+                Span::styled(what, t.dim()),
+                Span::styled(format!(" {} ", "·".repeat(dots)), t.hairline()),
+                Span::styled(ago.clone(), t.subtle()),
+            ]),
+        ));
+    }
+    out.push(at(
+        col,
+        Line::from(vec![Span::styled("/resume", t.accent()), Span::styled(" to pick one up", t.subtle())]),
+    ));
+    out
 }
 
 /// A front page for `full_view`: rows pinned to the top, rows above and below
@@ -60,44 +169,6 @@ pub struct FrontPage {
     pub dock: bool,
     /// The page starts at the top (under the header) instead of centred down the screen.
     pub top: bool,
-}
-
-fn ink(hex: u32, ansi: Color, t: &Theme) -> Color {
-    if !t.color {
-        return Color::Reset;
-    }
-    palette::ink(hex, t.depth, ansi)
-}
-
-/// A grid of pixels in half blocks: one line per two rows.
-fn half_blocks(grid: &[Vec<Px>], t: &Theme) -> Vec<Line<'static>> {
-    let colour = |p: Px| p.map(|(hex, ansi)| ink(hex, ansi, t));
-    let fg = |c: Color| if c == Color::Reset { Style::default() } else { Style::default().fg(c) };
-    let w = grid.iter().map(Vec::len).max().unwrap_or(0);
-    let mut out = vec![];
-    for pair in grid.chunks(2) {
-        let mut spans: Vec<Span<'static>> = vec![];
-        for x in 0..w {
-            let u = pair[0].get(x).copied().flatten().and_then(|p| colour(Some(p)));
-            let l = pair.get(1).and_then(|r| r.get(x).copied().flatten()).and_then(|p| colour(Some(p)));
-            let (text, style) = match (u, l) {
-                (None, None) => (" ", Style::default()),
-                (Some(u), None) => ("▀", fg(u)),
-                (None, Some(l)) => ("▄", fg(l)),
-                (Some(u), Some(l)) if u == l => ("█", fg(u)),
-                (Some(u), Some(l)) => ("▀", fg(u).bg(l)),
-            };
-            match spans.last_mut() {
-                Some(s) if s.style == style => s.content.to_mut().push_str(text),
-                _ => spans.push(Span::styled(text.to_string(), style)),
-            }
-        }
-        while spans.last().is_some_and(|s| s.content.trim().is_empty() && s.style.bg.is_none()) {
-            spans.pop();
-        }
-        out.push(Line::from(spans));
-    }
-    out
 }
 
 /// The compact wordmark's letters: one-pixel strokes, eight pixels tall (four
@@ -121,12 +192,12 @@ const COMPACT: [&[&str; 8]; 6] = [
 /// Columns between the compact letters.
 const COMPACT_GAP: usize = 1;
 
-/// The compact wordmark's pixels: "Kod" in paper, "Act" in lime.
+/// The compact wordmark's pixels: "Kod" in paper, "Act" in the burgundy gloss.
 fn compact_grid(light: bool) -> Vec<Vec<Px>> {
-    let (paper, lime) = if light {
-        ((0x101214, Color::Black), (0x4a7200, Color::Green))
+    let (paper, gloss, act) = if light {
+        ((0x101214, Color::Black), GLOSS_LIGHT, Color::Magenta)
     } else {
-        ((0xf2f0e9, Color::White), (0xc6ff3d, Color::LightGreen))
+        ((0xf2f0e9, Color::White), GLOSS_DARK, Color::LightMagenta)
     };
     (0..8)
         .map(|y| {
@@ -135,7 +206,7 @@ fn compact_grid(light: bool) -> Vec<Vec<Px>> {
                 if gi > 0 {
                     row.extend(std::iter::repeat_n(None, COMPACT_GAP));
                 }
-                let ink = if gi < 3 { paper } else { lime };
+                let ink = if gi < 3 { paper } else { (gloss[y * 9 / 7], act) };
                 row.extend(g[y].chars().map(|c| (c == 'X').then_some(ink)));
             }
             row
@@ -154,28 +225,18 @@ pub fn compact_w() -> usize {
 }
 
 /// The wordmark's pixels in one of its looks: 52 by 10, 53 by 11 with a
-/// shadow. "Kod" is paper (ink on a light background) and "Act" lime.
+/// shadow. "Kod" is paper (ink on a light background) and "Act" rose.
 fn wordmark_grid(look: Letters, light: bool) -> Vec<Vec<Px>> {
-    let (paper, lime, shadow) = if light {
-        ((0x101214, Color::Black), (0x4a7200, Color::Green), (0xa9c172, Color::Gray))
+    let (paper, rose, shadow, gloss) = if light {
+        ((0x101214, Color::Black), (0x8a1538, Color::Magenta), (0xe8c9d1, Color::Gray), GLOSS_LIGHT)
     } else {
-        ((0xf2f0e9, Color::White), (0xc6ff3d, Color::LightGreen), (0x3d5a10, Color::Green))
+        ((0xf2f0e9, Color::White), (0xe8678a, Color::LightMagenta), (0x45091b, Color::DarkGray), GLOSS_DARK)
     };
-    // The glow: bright at the top, settling to a deeper green at the foot.
-    const GLOW: [(u32, Color); 10] = [
-        (0xf1ffc4, Color::White),
-        (0xe4ff9a, Color::LightGreen),
-        (0xd6ff6e, Color::LightGreen),
-        (0xc6ff3d, Color::LightGreen),
-        (0xb8f034, Color::LightGreen),
-        (0xa8de2c, Color::Green),
-        (0x97c925, Color::Green),
-        (0x86b31e, Color::Green),
-        (0x749c18, Color::Green),
-        (0x628512, Color::Green),
-    ];
+    // The glow: the whole name lit from above, light rose at the top to deep wine at the foot.
+    let glow: Vec<(u32, Color)> =
+        gloss.iter().enumerate().map(|(i, h)| (*h, if i < 3 { Color::LightMagenta } else { Color::Magenta })).collect();
     let step = 7 + GAP;
-    let base = 6 * 7 + 5 * GAP;
+    let base = LETTERS_W;
     let (w, h) = if look == Letters::Shadow { (base + 1, 11) } else { (base, 10) };
     let mut letter = vec![vec![None::<usize>; w]; h];
     for (gi, rows) in GLYPHS.iter().enumerate() {
@@ -196,14 +257,14 @@ fn wordmark_grid(look: Letters, light: bool) -> Vec<Vec<Px>> {
             let (xi, yi) = (x as isize, y as isize);
             *cell = match at(xi, yi) {
                 Some(gi) => match look {
-                    Letters::Glow => Some(GLOW[y.min(9)]),
+                    Letters::Glow => Some(glow[y.min(9)]),
                     Letters::Outline => {
                         let inside =
                             [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().all(|(dx, dy)| at(xi + dx, yi + dy).is_some());
-                        (!inside).then_some(lime)
+                        (!inside).then_some(rose)
                     }
                     _ if gi < 3 => Some(paper),
-                    _ => Some(lime),
+                    _ => Some(rose),
                 },
                 None if look == Letters::Shadow && at(xi - 1, yi - 1).is_some() => Some(shadow),
                 None => None,
@@ -220,10 +281,10 @@ pub fn wordmark(t: &Theme, look: Letters) -> Vec<Line<'static>> {
 
 /// The wordmark's width in columns.
 pub fn wordmark_w(look: Letters) -> usize {
-    WORDMARK_W + usize::from(look == Letters::Shadow)
+    LETTERS_W + usize::from(look == Letters::Shadow)
 }
 
-/// KodAct's mark (a step and a chevron in lime): [`MARK_W`] columns by 6 rows.
+/// KodAct's mark (the "./<" logo, its chevron in burgundy): [`MARK_W`] columns by 6 rows.
 pub fn mark_art(t: &Theme) -> Vec<Line<'static>> {
     super::brand::mark(t)
 }
@@ -385,20 +446,22 @@ fn small_name(t: &Theme) -> Vec<Span<'static>> {
     super::brand::wordmark_text(t).spans
 }
 
-/// 1 · Essentials: the compact wordmark alone, centred (four rows), "From code to impact." under them, then the
+/// 1 · Essentials: the wordmark alone, centred (six rows; the compact one, four rows, when narrower), "From code to impact." under them, then the
 /// input (the frame style's panel, which names the mode, the model and where
 /// it runs) and one line to resume the last conversation. A server that failed
 /// to start says so; everything else (the folder, the branch, the version) is
 /// on the status line.
 fn frame(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let one = compact_w();
-    let (mut above, lw) = if cols < one + 4 {
+    let (mut above, lw) = if cols >= WORDMARK_W + 4 {
+        // The name alone, in the wordmark: no mark beside it.
+        (centre_block(super::brand::wordmark(t), WORDMARK_W, cols), WORDMARK_W)
+    } else if cols >= one + 4 {
+        // Narrower: the compact letters.
+        (centre_block(compact_wordmark(t), one, cols), one)
+    } else {
         // Too narrow for the letters: the name in one row.
         (vec![centred(Line::from(small_name(t)), cols)], 6)
-    } else {
-        // The name alone: no mark beside it.
-        let (logo, lw) = (compact_wordmark(t), one);
-        (centre_block(logo, lw, cols), lw)
     };
     // The panel at least as wide as the name above it, so the logo never overhangs the input.
     let fw = cols.saturating_sub(8).clamp(cols.min(20), 96.max(lw));
@@ -408,33 +471,13 @@ fn frame(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let room = fw.saturating_sub(4);
     above.push(Line::default());
     above.push(centred(Line::from(Span::styled(SHORT_TAGLINE, t.dim())), cols));
+    // One row of air over the box, as under it: the name, the box and the cards read as one block.
     above.push(Line::default());
-    above.push(Line::default());
-    let mut below = vec![];
-    match info.recent.first() {
-        Some((what, ago)) => {
-            below.push(Line::default());
-            below.push(at(col, Line::from(resume_spans(t, what, ago, room))));
-        }
-        // A first run: one thing to try, and where the project's instructions go.
-        None => {
-            // Each suggestion shows whole or not at all: a window too narrow for both
-            // keeps the first, never half of the second.
-            let mut tip = vec![Span::styled("Try ", t.subtle()), Span::styled("\"explain this project\"", t.dim())];
-            let init = [
-                Span::styled("  ·  ", t.subtle()),
-                Span::styled("/init", t.accent()),
-                Span::styled(" writes KODACT.md for it", t.subtle()),
-            ];
-            let w = |spans: &[Span]| spans.iter().map(|s| width(&s.content)).sum::<usize>();
-            if w(&tip) + w(&init) <= room {
-                tip.extend(init);
-            }
-            if w(&tip) <= room {
-                below.push(Line::default());
-                below.push(at(col, Line::from(tip)));
-            }
-        }
+    let mut below = vec![Line::default()];
+    below.extend(cards(t, info.card, m, fw));
+    if !info.recent.is_empty() {
+        below.push(Line::default());
+        below.extend(recent(t, &info.recent, col, room));
     }
     let failed: Vec<&str> = info.mcp.iter().filter(|(_, s)| s == "failed").map(|(n, _)| n.as_str()).collect();
     if !failed.is_empty() {
@@ -474,8 +517,8 @@ fn glow(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
         // Sparks rising off the letters, at fixed places.
         let spark = |hex: u32| Style::default().fg(ink(hex, Color::Yellow, t));
         let rows: [&[(usize, &str, u32)]; 2] = [
-            &[(9, "·", 0xdcff85), (21, "˙", 0xf1ffc4), (33, "·", 0xc6ff3d)],
-            &[(4, "˙", 0xa8de2c), (15, "·", 0xdcff85), (27, "·", 0xb8f034), (40, "˙", 0xc6ff3d)],
+            &[(9, "·", 0xe8b860), (21, "˙", 0xf6c3cf), (33, "·", 0xe8678a)],
+            &[(4, "˙", 0xcf4469), (15, "·", 0xe8b860), (27, "·", 0xf2a3b6), (40, "˙", 0xe8678a)],
         ];
         for r in rows {
             let mut spans = vec![];
@@ -494,13 +537,13 @@ fn glow(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
             .map(|i| {
                 let d = (i as f32 - n as f32 / 2.0).abs() / (n as f32 / 2.0);
                 let hex = if d < 0.2 {
-                    0xf1ffc4
+                    0xf6c3cf
                 } else if d < 0.5 {
-                    0xc6ff3d
+                    0xe8678a
                 } else if d < 0.8 {
-                    0x749c18
+                    0x8e1438
                 } else {
-                    0x2a3a0c
+                    0x2a0a14
                 };
                 Span::styled("━", if t.color { Style::default().fg(ink(hex, Color::Yellow, t)) } else { t.subtle() })
             })
@@ -565,7 +608,7 @@ fn mark_card(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     FrontPage { above: boxed(x, cw, rows, border), below, box_left: x, box_w: cw, ..Default::default() }
 }
 
-/// 4 · Aligned left: the name in lime outline, past work numbered beside this folder,
+/// 4 · Aligned left: the name in rose outline, past work numbered beside this folder,
 /// the input docked at the bottom.
 fn ledger(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let m = 8;
@@ -721,6 +764,7 @@ mod tests {
             mcp: vec![("jira".into(), "connected".into()), ("figma".into(), "failed".into())],
             tools: 18,
             recent: vec![("checkout rounding".into(), "2h ago".into())],
+            card: None,
         }
     }
 
@@ -756,24 +800,38 @@ mod tests {
         }
         let frame = plain(&front_page(&DARK, Look::Frame, &info(), 120).above).join("\n");
         assert!(!frame.contains("Welcome to"), "the name speaks for itself");
-        // The compact name: four rows, whether or not there is history.
+        // The wordmark: six rows, whether or not there is history; the compact name, four rows,
+        // where the wordmark doesn't fit.
         let first = FrontInfo { recent: vec![], ..info() };
         let art = |p: &FrontPage| plain(&p.above).iter().filter(|l| l.contains(['▀', '▄', '█'])).count();
-        assert_eq!(art(&front_page(&DARK, Look::Frame, &first, 140)), 4, "four rows on a first run");
-        assert_eq!(art(&front_page(&DARK, Look::Frame, &info(), 140)), 4, "and after");
+        assert_eq!(art(&front_page(&DARK, Look::Frame, &first, 140)), 6, "six rows on a first run");
+        assert_eq!(art(&front_page(&DARK, Look::Frame, &info(), 140)), 6, "and after");
+        assert_eq!(art(&front_page(&DARK, Look::Frame, &info(), WORDMARK_W + 3)), 4, "compact when narrower");
         assert!(front_page(&DARK, Look::Frame, &first, 140).above.iter().all(|l| line_w(l) <= 140));
-        // A first run's suggestions fit the panel's text column at every width: the second
-        // one was cut mid-word ("/init writes KODA") by the window's edge at 60 columns.
+        // The suggestion cards stay inside the panel at every width: three side by side where
+        // they fit, a list of three rows where they don't, every title whole.
         for cols in [200usize, 106, 76, 56, 36, 24] {
             let p = front_page(&DARK, Look::Frame, &first, cols);
-            for l in plain(&p.below) {
-                assert!(width(&l) <= p.box_left + p.box_w, "{cols}: {l:?} runs past the panel");
-                let whole = ["project\"", "for it", "/mcp", " failed"].iter().any(|end| l.ends_with(end));
-                assert!(l.trim().is_empty() || whole, "{cols}: cut: {l:?}");
+            let below = plain(&p.below);
+            for l in &below {
+                assert!(width(l) <= p.box_left + p.box_w, "{cols}: {l:?} runs past the panel");
+            }
+            if cols >= 40 {
+                for (_, title, _, _) in CARDS {
+                    assert!(below.iter().any(|l| l.contains(title)), "{cols}: {title}\n{below:#?}");
+                }
             }
         }
+        let wide = plain(&front_page(&DARK, Look::Frame, &first, 120).below);
+        assert_eq!(wide.iter().filter(|l| l.matches('╭').count() == 3).count(), 1, "three cards in a row");
+        let focus = FrontInfo { card: Some(1), ..first.clone() };
+        let lines = front_page(&DARK, Look::Frame, &focus, 120).below;
+        let edge = lines.iter().find(|l| l.spans.iter().any(|s| s.content.contains('╭'))).unwrap();
+        let rose: Vec<_> = edge.spans.iter().filter(|s| s.content.contains('╭')).map(|s| s.style.fg).collect();
+        assert_eq!(rose[1], DARK.accent().fg, "the card with the keyboard has a rose edge");
+        assert_ne!(rose[0], DARK.accent().fg);
         let first_below = plain(&front_page(&DARK, Look::Frame, &first, 120).below).join("\n");
-        assert!(first_below.contains("/init writes KODACT.md"), "a first run says what to try: {first_below}");
+        assert!(first_below.contains("Write KODACT.md"), "a first run says what to try: {first_below}");
         // The panel is never narrower than the name over it.
         let p = front_page(&DARK, Look::Frame, &first, 140);
         assert!(p.box_w >= compact_w(), "{}", p.box_w);
@@ -784,9 +842,10 @@ mod tests {
         }
         let fp = front_page(&DARK, Look::Frame, &info(), 120);
         let below = plain(&fp.below).join("\n");
-        assert!(below.contains("/resume  checkout rounding"), "{below}");
+        assert!(below.contains("↺ checkout rounding") && below.contains("/resume"), "{below}");
         assert!(below.contains("figma didn't start  ·  /mcp"), "a server that failed says so: {below}");
-        for l in plain(&fp.below).into_iter().filter(|l| !l.trim().is_empty()) {
+        // Text lines under the panel align with its text; the cards span the panel's edges.
+        for l in plain(&fp.below).into_iter().filter(|l| !l.trim().is_empty() && !l.contains(['╭', '│', '╰'])) {
             assert_eq!(
                 l.len() - l.trim_start().len(),
                 fp.box_left + 2,
@@ -812,7 +871,7 @@ mod tests {
             let art: Vec<&Line> =
                 above.iter().filter(|l| plain(&[(*l).clone()])[0].contains(['▀', '▄', '█'])).collect();
             let w = art.iter().map(|l| line_w(l)).max().unwrap();
-            assert!(w <= (140 + compact_w()) / 2 + 1, "only the letters, centred: {w}");
+            assert!(w <= (140 + WORDMARK_W) / 2 + 1, "only the letters, centred: {w}");
         }
     }
 }
