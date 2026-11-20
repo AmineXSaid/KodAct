@@ -139,8 +139,9 @@ async fn setup_walks_to_a_saved_settings_file() {
     assert!(!screen.contains("sk-ant-test"), "the key is masked:\n{screen}");
     tui.keys("\r");
     tui.wait_for("Pick a default model", WAIT).unwrap_or_else(|s| panic!("no model step:\n{s}"));
-    tui.keys("opus");
-    tui.wait_for("Use “opus”", WAIT).unwrap_or_else(|s| panic!("no filter:\n{s}"));
+    // No suggested list (the endpoint lists the models, and here it doesn't answer): the ID typed is the one used.
+    tui.keys("claude-opus-4-6");
+    tui.wait_for("Use “claude-opus-4-6”", WAIT).unwrap_or_else(|s| panic!("no typed model:\n{s}"));
     tui.keys("\r");
     let screen = tui.wait_for("Review & save", WAIT).unwrap_or_else(|s| panic!("no review:\n{s}"));
     assert!(screen.contains("claude-opus-4-6") && screen.contains("••••1234"), "{screen}");
