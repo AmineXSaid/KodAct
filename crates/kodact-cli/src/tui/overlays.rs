@@ -407,13 +407,21 @@ pub(super) fn hints(app: &App, room: usize) -> Vec<Span<'static>> {
     } else if app.find.is_some() {
         keys.extend([("enter", "next"), ("↑↓", "match"), ("esc", "close")]);
     } else if app.busy && !app.queued.is_empty() && app.editor.is_empty() {
-        keys.extend([("esc", "stop"), ("↑", "take the queued message back")]);
+        if app.forcing_queue {
+            keys.extend([("esc", "stop"), ("↑", "take back")]);
+        } else {
+            keys.extend([("enter", "force next"), ("↑", "take back"), ("esc", "stop")]);
+        }
         if app.has_collapsible {
             keys.push(("ctrl+o", if app.verbose { "less" } else { "thoughts" }));
         }
         keys.push(("shift+tab", "mode"));
     } else if app.busy {
-        keys.extend([("esc", "stop"), ("enter", "queue a message")]);
+        if !app.editor.is_empty() {
+            keys.extend([("enter", "queue"), ("ctrl+enter", "force"), ("esc", "stop")]);
+        } else {
+            keys.extend([("esc", "stop"), ("enter", "queue a message")]);
+        }
         if app.has_collapsible {
             keys.push(("ctrl+o", if app.verbose { "less" } else { "thoughts" }));
         }
@@ -529,14 +537,20 @@ pub(super) fn menu(app: &App, left: usize, w: usize, lead: &str) -> Vec<Line<'st
         .map(|(i, c)| {
             let l = fit(&label(c), pad);
             let l = format!("{lead}{l}{}", " ".repeat(pad.saturating_sub(text_width(&l))));
-            let desc = fit(&c.description, w.saturating_sub(text_width(&l) + 2));
+            let is_skill = app.skills.iter().any(|s| s.eq_ignore_ascii_case(&c.name));
+            let desc_room = w.saturating_sub(text_width(&l) + 2 + if is_skill { 8 } else { 0 });
+            let desc = fit(&c.description, desc_room);
             let selected = first + i == sel;
             let st = if selected { t.selected() } else { Style::default() };
             let mut spans = vec![];
             if left > 0 {
                 spans.push(Span::raw(" ".repeat(left)));
             }
-            spans.extend([Span::styled(l, st), Span::raw("  "), Span::styled(desc, t.dim())]);
+            spans.extend([Span::styled(l, st), Span::raw("  ")]);
+            if is_skill {
+                spans.push(Span::styled("skill · ", if selected { t.accent() } else { t.subtle() }));
+            }
+            spans.push(Span::styled(desc, t.dim()));
             if selected {
                 return tint_row(&t, spans, left, w);
             }
