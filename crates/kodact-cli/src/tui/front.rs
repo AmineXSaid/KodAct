@@ -5,14 +5,12 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-use super::brand::{centred, GAP, GLYPHS, MARK_W, SHORT_TAGLINE, TAGLINE, WORDMARK_W};
+use super::brand::{
+    centred, half_blocks, px_ink as ink, Px, GAP, GLYPHS, LETTERS_W, MARK_W, SHORT_TAGLINE, TAGLINE, WORDMARK_W,
+};
 use super::look::Look;
-use super::palette;
 use super::render::fit;
 use super::text::{width, Theme};
-
-/// One pixel: its colour (hex) and the ANSI colour for 16-colour terminals.
-type Px = Option<(u32, Color)>;
 
 /// How the wordmark is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,44 +58,6 @@ pub struct FrontPage {
     pub dock: bool,
     /// The page starts at the top (under the header) instead of centred down the screen.
     pub top: bool,
-}
-
-fn ink(hex: u32, ansi: Color, t: &Theme) -> Color {
-    if !t.color {
-        return Color::Reset;
-    }
-    palette::ink(hex, t.depth, ansi)
-}
-
-/// A grid of pixels in half blocks: one line per two rows.
-fn half_blocks(grid: &[Vec<Px>], t: &Theme) -> Vec<Line<'static>> {
-    let colour = |p: Px| p.map(|(hex, ansi)| ink(hex, ansi, t));
-    let fg = |c: Color| if c == Color::Reset { Style::default() } else { Style::default().fg(c) };
-    let w = grid.iter().map(Vec::len).max().unwrap_or(0);
-    let mut out = vec![];
-    for pair in grid.chunks(2) {
-        let mut spans: Vec<Span<'static>> = vec![];
-        for x in 0..w {
-            let u = pair[0].get(x).copied().flatten().and_then(|p| colour(Some(p)));
-            let l = pair.get(1).and_then(|r| r.get(x).copied().flatten()).and_then(|p| colour(Some(p)));
-            let (text, style) = match (u, l) {
-                (None, None) => (" ", Style::default()),
-                (Some(u), None) => ("▀", fg(u)),
-                (None, Some(l)) => ("▄", fg(l)),
-                (Some(u), Some(l)) if u == l => ("█", fg(u)),
-                (Some(u), Some(l)) => ("▀", fg(u).bg(l)),
-            };
-            match spans.last_mut() {
-                Some(s) if s.style == style => s.content.to_mut().push_str(text),
-                _ => spans.push(Span::styled(text.to_string(), style)),
-            }
-        }
-        while spans.last().is_some_and(|s| s.content.trim().is_empty() && s.style.bg.is_none()) {
-            spans.pop();
-        }
-        out.push(Line::from(spans));
-    }
-    out
 }
 
 /// The compact wordmark's letters: one-pixel strokes, eight pixels tall (four
@@ -175,7 +135,7 @@ fn wordmark_grid(look: Letters, light: bool) -> Vec<Vec<Px>> {
         (0x628512, Color::Green),
     ];
     let step = 7 + GAP;
-    let base = 6 * 7 + 5 * GAP;
+    let base = LETTERS_W;
     let (w, h) = if look == Letters::Shadow { (base + 1, 11) } else { (base, 10) };
     let mut letter = vec![vec![None::<usize>; w]; h];
     for (gi, rows) in GLYPHS.iter().enumerate() {
@@ -220,7 +180,7 @@ pub fn wordmark(t: &Theme, look: Letters) -> Vec<Line<'static>> {
 
 /// The wordmark's width in columns.
 pub fn wordmark_w(look: Letters) -> usize {
-    WORDMARK_W + usize::from(look == Letters::Shadow)
+    LETTERS_W + usize::from(look == Letters::Shadow)
 }
 
 /// KodAct's mark (a step and a chevron in lime): [`MARK_W`] columns by 6 rows.
@@ -385,20 +345,22 @@ fn small_name(t: &Theme) -> Vec<Span<'static>> {
     super::brand::wordmark_text(t).spans
 }
 
-/// 1 · Essentials: the compact wordmark alone, centred (four rows), "From code to impact." under them, then the
+/// 1 · Essentials: the wordmark alone, centred (six rows; the compact one, four rows, when narrower), "From code to impact." under them, then the
 /// input (the frame style's panel, which names the mode, the model and where
 /// it runs) and one line to resume the last conversation. A server that failed
 /// to start says so; everything else (the folder, the branch, the version) is
 /// on the status line.
 fn frame(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let one = compact_w();
-    let (mut above, lw) = if cols < one + 4 {
+    let (mut above, lw) = if cols >= WORDMARK_W + 4 {
+        // The name alone, in the wordmark: no mark beside it.
+        (centre_block(super::brand::wordmark(t), WORDMARK_W, cols), WORDMARK_W)
+    } else if cols >= one + 4 {
+        // Narrower: the compact letters.
+        (centre_block(compact_wordmark(t), one, cols), one)
+    } else {
         // Too narrow for the letters: the name in one row.
         (vec![centred(Line::from(small_name(t)), cols)], 6)
-    } else {
-        // The name alone: no mark beside it.
-        let (logo, lw) = (compact_wordmark(t), one);
-        (centre_block(logo, lw, cols), lw)
     };
     // The panel at least as wide as the name above it, so the logo never overhangs the input.
     let fw = cols.saturating_sub(8).clamp(cols.min(20), 96.max(lw));
@@ -756,11 +718,13 @@ mod tests {
         }
         let frame = plain(&front_page(&DARK, Look::Frame, &info(), 120).above).join("\n");
         assert!(!frame.contains("Welcome to"), "the name speaks for itself");
-        // The compact name: four rows, whether or not there is history.
+        // The wordmark: six rows, whether or not there is history; the compact name, four rows,
+        // where the wordmark doesn't fit.
         let first = FrontInfo { recent: vec![], ..info() };
         let art = |p: &FrontPage| plain(&p.above).iter().filter(|l| l.contains(['▀', '▄', '█'])).count();
-        assert_eq!(art(&front_page(&DARK, Look::Frame, &first, 140)), 4, "four rows on a first run");
-        assert_eq!(art(&front_page(&DARK, Look::Frame, &info(), 140)), 4, "and after");
+        assert_eq!(art(&front_page(&DARK, Look::Frame, &first, 140)), 6, "six rows on a first run");
+        assert_eq!(art(&front_page(&DARK, Look::Frame, &info(), 140)), 6, "and after");
+        assert_eq!(art(&front_page(&DARK, Look::Frame, &info(), WORDMARK_W + 3)), 4, "compact when narrower");
         assert!(front_page(&DARK, Look::Frame, &first, 140).above.iter().all(|l| line_w(l) <= 140));
         // A first run's suggestions fit the panel's text column at every width: the second
         // one was cut mid-word ("/init writes KODA") by the window's edge at 60 columns.
@@ -812,7 +776,7 @@ mod tests {
             let art: Vec<&Line> =
                 above.iter().filter(|l| plain(&[(*l).clone()])[0].contains(['▀', '▄', '█'])).collect();
             let w = art.iter().map(|l| line_w(l)).max().unwrap();
-            assert!(w <= (140 + compact_w()) / 2 + 1, "only the letters, centred: {w}");
+            assert!(w <= (140 + WORDMARK_W) / 2 + 1, "only the letters, centred: {w}");
         }
     }
 }

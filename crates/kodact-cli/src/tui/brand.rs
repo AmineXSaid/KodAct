@@ -1,4 +1,5 @@
-//! KodAct's name in the terminal: the KodAct wordmark and its mark (a step
+//! KodAct's name in the terminal: the KodAct wordmark (heavy 8-bit letters,
+//! "Act" in glossy burgundy over a burgundy drop shadow) and its mark (a step
 //! and a chevron, from code to impact, in lime), drawn as pixels in half blocks
 //! (each cell is two pixels stacked, so the pixels come out square), and the
 //! two screens they head: the front screen and the first-run card.
@@ -9,30 +10,47 @@ use ratatui::text::{Line, Span};
 use super::palette;
 use super::text::{width, Theme};
 
-/// The wordmark's letters, seven pixels wide and ten tall (five terminal
-/// rows): capitals K and A, lowercase o, d, c and t on the same baseline,
-/// after the logo's geometric letters (the A pointed, the t's foot curled).
-/// `.` is empty and `X` a letter.
+/// The wordmark's letters, heavy 8-bit: seven pixels wide and ten tall (five
+/// terminal rows), two-pixel strokes, square counters and a flat-topped A.
+/// Capitals K and A, lowercase o, d, c and t on one baseline. `.` is empty and
+/// `X` a letter.
 pub(super) const GLYPHS: [[&str; 10]; 6] = [
     // K
-    ["XX...XX", "XX..XX.", "XX.XX..", "XXXX...", "XXX....", "XXX....", "XXXX...", "XX.XX..", "XX..XX.", "XX...XX"],
+    ["XX...XX", "XX...XX", "XX..XX.", "XX.XX..", "XXXX...", "XXXX...", "XX.XX..", "XX..XX.", "XX...XX", "XX...XX"],
     // o
-    [".......", ".......", ".......", ".XXXXX.", "XXXXXXX", "XX...XX", "XX...XX", "XX...XX", "XXXXXXX", ".XXXXX."],
+    [".......", ".......", ".......", "XXXXXXX", "XXXXXXX", "XX...XX", "XX...XX", "XX...XX", "XXXXXXX", "XXXXXXX"],
     // d
-    [".....XX", ".....XX", ".....XX", ".XXXXXX", "XXXXXXX", "XX...XX", "XX...XX", "XX...XX", "XXXXXXX", ".XXXXXX"],
+    [".....XX", ".....XX", ".....XX", "XXXXXXX", "XXXXXXX", "XX...XX", "XX...XX", "XX...XX", "XXXXXXX", "XXXXXXX"],
     // A
-    ["..XXX..", "..XXX..", ".XX.XX.", ".XX.XX.", "XX...XX", "XXXXXXX", "XXXXXXX", "XX...XX", "XX...XX", "XX...XX"],
+    ["XXXXXXX", "XXXXXXX", "XX...XX", "XX...XX", "XX...XX", "XXXXXXX", "XXXXXXX", "XX...XX", "XX...XX", "XX...XX"],
     // c
-    [".......", ".......", ".......", ".XXXXXX", "XXXXXXX", "XX.....", "XX.....", "XX.....", "XXXXXXX", ".XXXXXX"],
+    [".......", ".......", ".......", "XXXXXXX", "XXXXXXX", "XX.....", "XX.....", "XX.....", "XXXXXXX", "XXXXXXX"],
     // t
-    [".......", ".XX....", ".XX....", "XXXXXX.", "XXXXXX.", ".XX....", ".XX....", ".XX....", ".XXXXXX", "..XXXXX"],
+    [".XX....", ".XX....", ".XX....", "XXXXXX.", "XXXXXX.", ".XX....", ".XX....", ".XX....", ".XXXXX.", "..XXXX."],
 ];
 
 /// Columns between letters.
 pub(super) const GAP: usize = 2;
 
-/// The wordmark's width in columns.
-pub const WORDMARK_W: usize = 6 * 7 + 5 * GAP;
+/// The letters' width in pixels (and columns), without the shadow.
+pub(super) const LETTERS_W: usize = 6 * 7 + 5 * GAP;
+
+/// The wordmark's width in columns: the letters and their shadow, one pixel to the right.
+pub const WORDMARK_W: usize = LETTERS_W + 1;
+
+/// The wordmark's height in pixels: ten, and the shadow's row under them (six terminal rows).
+const WORDMARK_H: usize = 11;
+
+/// "Act"'s gloss, one colour per pixel row: light rose at the top to deep wine at the foot.
+/// A terminal cell holds two pixel rows, each its own colour, so the ramp draws exactly.
+const GLOSS_DARK: [u32; 10] =
+    [0xf2a3b6, 0xe4708d, 0xcf4469, 0xb82652, 0xa3173f, 0x931439, 0x821233, 0x73102d, 0x640d27, 0x560b22];
+/// The same on a light background, a step deeper so it holds its contrast on paper.
+const GLOSS_LIGHT: [u32; 10] =
+    [0xc93e64, 0xb82652, 0xa3173f, 0x931439, 0x8a1538, 0x7e1233, 0x73102d, 0x690e29, 0x5e0c25, 0x540a21];
+
+/// One pixel: its colour (hex) and the ANSI colour for 16-colour terminals.
+pub(super) type Px = Option<(u32, Color)>;
 
 /// The short tagline, for the default front page.
 pub const SHORT_TAGLINE: &str = "From code to impact, with any model.";
@@ -40,23 +58,36 @@ pub const SHORT_TAGLINE: &str = "From code to impact, with any model.";
 /// The tagline under the wordmark.
 pub const TAGLINE: &str = "From code to impact: a coding agent on the model you choose.";
 
-/// The wordmark's pixel rows: `P` for "Kod" in paper, `G` for "Act" in lime,
-/// so the name reads as what it does.
-fn wordmark_rows() -> Vec<String> {
-    (0..10)
+/// The wordmark's pixels, [`WORDMARK_W`] by 11: "Kod" in paper (ink on a light
+/// background), "Act" in the burgundy gloss, and under every letter a burgundy
+/// shadow one pixel down and to the right.
+pub(super) fn wordmark_grid(light: bool) -> Vec<Vec<Px>> {
+    let (paper, gloss, act, shadow) = if light {
+        ((0x101214, Color::Black), GLOSS_LIGHT, Color::Magenta, (0xe8c9d1, Color::Gray))
+    } else {
+        ((0xf2f0e9, Color::White), GLOSS_DARK, Color::LightMagenta, (0x45091b, Color::DarkGray))
+    };
+    let letter = |x: isize, y: isize| -> Option<usize> {
+        if x < 0 || !(0..10).contains(&y) {
+            return None;
+        }
+        let (x, y) = (x as usize, y as usize);
+        let (g, gx) = (x / (7 + GAP), x % (7 + GAP));
+        (g < GLYPHS.len() && gx < 7 && GLYPHS[g][y].as_bytes()[gx] == b'X').then_some(g)
+    };
+    (0..WORDMARK_H)
         .map(|y| {
-            let mut row = String::new();
-            for (i, g) in GLYPHS.iter().enumerate() {
-                if i > 0 {
-                    row.push_str(&".".repeat(GAP));
-                }
-                row.extend(g[y].chars().map(|c| match c {
-                    'X' if i < 3 => 'P',
-                    'X' => 'G',
-                    other => other,
-                }));
-            }
-            row
+            (0..WORDMARK_W)
+                .map(|x| {
+                    let (xi, yi) = (x as isize, y as isize);
+                    match letter(xi, yi) {
+                        Some(g) if g < 3 => Some(paper),
+                        Some(_) => Some((gloss[y], act)),
+                        None if letter(xi - 1, yi - 1).is_some() => Some(shadow),
+                        None => None,
+                    }
+                })
+                .collect()
         })
         .collect()
 }
@@ -87,15 +118,12 @@ pub fn mark_rows() -> Vec<String> {
     MARK.iter().map(|r| r.replace('#', "M")).collect()
 }
 
-/// The inks for a light or dark background: hex, and the ANSI colour for
-/// 16-colour terminals. Paper letters (ink on a light background), and lime
-/// for "Act" and the mark, deepened to an olive that reads on a light background.
+/// The mark's ink for a light or dark background: hex, and the ANSI colour for
+/// 16-colour terminals. Lime, deepened to an olive that reads on a light background.
 fn ink(c: char, light: bool) -> Option<(u32, Color)> {
     Some(match (c, light) {
-        ('P', false) => (0xf2f0e9, Color::White),
-        ('P', true) => (0x101214, Color::Black),
-        ('G' | 'M', false) => (0xc6ff3d, Color::LightGreen),
-        ('G' | 'M', true) => (0x4a7200, Color::Green),
+        ('M', false) => (0xc6ff3d, Color::LightGreen),
+        ('M', true) => (0x4a7200, Color::Green),
         _ => return None,
     })
 }
@@ -142,9 +170,53 @@ pub(super) fn fg(c: Color) -> Style {
     }
 }
 
-/// The wordmark: [`WORDMARK_W`] columns by 5 rows.
+/// The wordmark: [`WORDMARK_W`] columns by 6 rows.
 pub fn wordmark(t: &Theme) -> Vec<Line<'static>> {
-    sprite(&wordmark_rows(), t)
+    // Every row padded to the full width, so a row centred on its own stays aligned with the others.
+    let mut rows = half_blocks(&wordmark_grid(t.light), t);
+    for l in &mut rows {
+        let w: usize = l.spans.iter().map(|s| width(&s.content)).sum();
+        l.spans.push(Span::raw(" ".repeat(WORDMARK_W.saturating_sub(w))));
+    }
+    rows
+}
+
+/// A colour of the logo for this terminal: none without colour.
+pub(super) fn px_ink(hex: u32, ansi: Color, t: &Theme) -> Color {
+    if !t.color {
+        return Color::Reset;
+    }
+    palette::ink(hex, t.depth, ansi)
+}
+
+/// A grid of pixels in half blocks: one line per two rows, each pixel its own colour.
+pub(super) fn half_blocks(grid: &[Vec<Px>], t: &Theme) -> Vec<Line<'static>> {
+    let colour = |p: Px| p.map(|(hex, ansi)| px_ink(hex, ansi, t));
+    let w = grid.iter().map(Vec::len).max().unwrap_or(0);
+    let mut out = vec![];
+    for pair in grid.chunks(2) {
+        let mut spans: Vec<Span<'static>> = vec![];
+        for x in 0..w {
+            let u = colour(pair[0].get(x).copied().flatten());
+            let l = colour(pair.get(1).and_then(|r| r.get(x).copied().flatten()));
+            let (text, style) = match (u, l) {
+                (None, None) => (" ", Style::default()),
+                (Some(u), None) => ("▀", fg(u)),
+                (None, Some(l)) => ("▄", fg(l)),
+                (Some(u), Some(l)) if u == l => ("█", fg(u)),
+                (Some(u), Some(l)) => ("▀", fg(u).bg(l)),
+            };
+            match spans.last_mut() {
+                Some(s) if s.style == style => s.content.to_mut().push_str(text),
+                _ => spans.push(Span::styled(text.to_string(), style)),
+            }
+        }
+        while spans.last().is_some_and(|s| s.content.trim().is_empty() && s.style.bg.is_none()) {
+            spans.pop();
+        }
+        out.push(Line::from(spans));
+    }
+    out
 }
 
 /// The mark, [`MARK_W`] columns wide and six rows tall.
@@ -451,27 +523,35 @@ mod tests {
     const DARK: Theme = Theme { color: true, light: false, accent: None, depth: Depth::True };
 
     #[test]
-    fn the_wordmark_is_kod_in_paper_and_act_in_lime() {
-        let rows = wordmark_rows();
-        assert_eq!(rows.len(), 10);
-        assert!(rows.iter().all(|r| r.chars().count() == WORDMARK_W));
-        assert!(
-            rows.iter().flat_map(|r| r.chars()).all(|c| c == '.' || ink(c, false).is_some()),
-            "every pixel has an ink"
-        );
+    fn the_wordmark_is_heavy_8_bit_kod_in_paper_act_in_glossy_burgundy() {
+        let grid = wordmark_grid(false);
+        assert_eq!(grid.len(), WORDMARK_H, "ten pixel rows and the shadow's");
+        assert!(grid.iter().all(|r| r.len() == WORDMARK_W));
         let m = wordmark(&DARK);
-        assert_eq!(m.len(), 5, "five rows");
+        assert_eq!(m.len(), 6, "six rows");
         assert!(m.iter().all(|l| l.spans.iter().map(|s| width(&s.content)).sum::<usize>() <= WORDMARK_W));
+        let hex = |x: usize, y: usize| grid[y][x].map(|(h, _)| h);
+        // Heavy strokes: the K's stem is two pixels wide, top to bottom, in paper.
+        assert!((0..10).all(|y| hex(0, y) == Some(0xf2f0e9) && hex(1, y) == Some(0xf2f0e9)));
+        // A flat-topped A (the fourth letter): its whole top row is lit.
+        let a = 3 * (7 + GAP);
+        assert!((a..a + 7).all(|x| grid[0][x].is_some()), "flat top");
+        // "Act" shines: each pixel row of the A's stem is a step down the gloss, light to deep.
+        let stem: Vec<u32> = (0..10).map(|y| hex(a, y).unwrap()).collect();
+        assert_eq!(stem, GLOSS_DARK.to_vec());
+        // The shadow: one pixel down and right of a letter, where no letter is.
+        assert_eq!(hex(2, 1), Some(0x45091b), "under the K's stem");
+        assert_eq!(hex(WORDMARK_W - 1, 10), None, "nothing past the last shadow");
+        assert!(grid[10].iter().any(|p| p.map(|(h, _)| h) == Some(0x45091b)), "the shadow's own row");
+        // On a light background the paper letters are ink and the gloss deeper.
+        let light = wordmark_grid(true);
+        assert_eq!(light[0][0].map(|(h, _)| h), Some(0x101214));
+        assert_eq!(light[5][a].map(|(h, _)| h), Some(GLOSS_LIGHT[5]));
+        // Drawn in half blocks, each cell keeps both of its pixels' colours.
         let cells = |l: &Line| l.spans.iter().flat_map(|s| s.content.chars().map(move |_| s.style)).collect::<Vec<_>>();
-        let paper = Some(Color::Rgb(0xf2, 0xf0, 0xe9));
-        let lime = Some(Color::Rgb(0xc6, 0xff, 0x3d));
-        // The K's stem, at the left, in paper; the t's stem, at the right, in lime.
-        assert_eq!(cells(&m[0])[0].fg, paper);
-        assert!(cells(&m[4]).iter().rev().take(6).any(|s| s.fg == lime || s.bg == lime), "Act in lime");
-        // On a light background the paper letters are ink, and "Act" olive.
-        let light = wordmark(&Theme { light: true, ..DARK });
-        assert_eq!(cells(&light[0])[0].fg, Some(Color::Rgb(0x10, 0x12, 0x14)));
-        assert!(cells(&light[4]).iter().any(|s| s.fg == Some(Color::Rgb(0x4a, 0x72, 0x00))));
+        let row0 = cells(&m[0]);
+        assert_eq!(row0[a].fg, Some(Color::Rgb(0xf2, 0xa3, 0xb6)));
+        assert_eq!(row0[a].bg, Some(Color::Rgb(0xe4, 0x70, 0x8d)));
     }
 
     #[test]
@@ -531,7 +611,7 @@ mod tests {
         // Wide: the wordmark, centred across and down.
         let wide = plain(&welcome(&DARK, &w, 100, 40));
         let art: Vec<&String> = wide.iter().filter(|l| l.contains('█') || l.contains('▀') || l.contains('▄')).collect();
-        assert_eq!(art.len(), 5);
+        assert_eq!(art.len(), 6);
         let lead = art[0].len() - art[0].trim_start().len();
         assert_eq!(lead, (100 - WORDMARK_W) / 2);
         let first = wide.iter().position(|l| !l.trim().is_empty()).unwrap();
