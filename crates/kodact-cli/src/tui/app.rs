@@ -419,6 +419,8 @@ pub struct App {
     held: Option<Dialog>,
     /// Images attached to the next prompt (`--image` or clipboard paste).
     pub pending_images: Vec<super::clipboard::AttachedImage>,
+    /// True after the user forced a queued message while waiting for `TurnEnd`.
+    pub forcing_queue: bool,
     /// Last rendered inner text width of the input box (0 = unbounded).
     pub input_width: usize,
     /// The conversation on screen was replaced: the loop starts the screen over before it
@@ -502,6 +504,7 @@ impl App {
             has_code: false,
             held: None,
             pending_images: Vec::new(),
+            forcing_queue: false,
             input_width: 0,
             reset: None,
         }
@@ -903,6 +906,7 @@ impl App {
                 }
                 self.turn_summary();
                 self.busy = false;
+                self.forcing_queue = false;
                 self.busy_since = None;
                 self.activity.clear();
             }
@@ -927,6 +931,7 @@ impl App {
         self.todo_active = None;
         self.skills_used.clear();
         self.agents_done = 0;
+        self.forcing_queue = false;
         self.title.clear();
         self.talked = !replay.is_empty();
         self.front = replay.is_empty();
@@ -2441,6 +2446,22 @@ impl App {
             }
             KeyCode::Char('j') if ctrl => self.editor.insert("\n"),
             KeyCode::Char('c') if alt && !ctrl => return vec![Action::Send("/copy code last".into())],
+            KeyCode::Enter if ctrl && self.busy && menu_len == 0 => {
+                let text = self.editor.text();
+                if !text.trim().is_empty() {
+                    let text = self.editor.take();
+                    let actions = self.submit(text);
+                    if !actions.is_empty() {
+                        return actions;
+                    }
+                }
+                if !self.queued.is_empty() && !self.forcing_queue {
+                    self.forcing_queue = true;
+                    self.flash_hint("Stopping current turn to send queued message");
+                    return vec![Action::Interrupt];
+                }
+                return vec![];
+            }
             KeyCode::Enter => {
                 if menu_len > 0 {
                     let c = self.menu()[self.menu_selected.min(menu_len - 1)].clone();
@@ -2466,6 +2487,11 @@ impl App {
                     return vec![];
                 }
                 if text.trim().is_empty() {
+                    if self.busy && !self.queued.is_empty() && !self.forcing_queue {
+                        self.forcing_queue = true;
+                        self.flash_hint("Stopping current turn to send queued message");
+                        return vec![Action::Interrupt];
+                    }
                     return vec![];
                 }
                 let text = self.editor.take();
@@ -2489,6 +2515,9 @@ impl App {
             KeyCode::Up if self.editor.is_empty() && !self.queued.is_empty() => {
                 if let Some(text) = self.queued.pop_back() {
                     self.editor.set(&text);
+                    if self.queued.is_empty() {
+                        self.forcing_queue = false;
+                    }
                 }
             }
             KeyCode::Up => {
@@ -2768,6 +2797,25 @@ mod tests {
         assert_eq!(a.next_queued().as_deref(), Some("first queued"));
         a.busy = false;
         assert_eq!(a.next_queued(), None, "the withdrawn one is never sent");
+
+        // Pressing Enter on an empty prompt with a queued message forces it by interrupting.
+        a.busy = true;
+        typed(&mut a, "urgent");
+        assert!(a.on_key(key(KeyCode::Enter)).is_empty());
+        assert_eq!(a.on_key(key(KeyCode::Enter)), vec![Action::Interrupt]);
+        assert!(a.forcing_queue);
+        assert!(a.on_key(key(KeyCode::Enter)).is_empty(), "idempotent while stopping");
+        a.on_event(UiEvent::Idle);
+        assert!(!a.forcing_queue);
+        assert_eq!(a.next_queued().as_deref(), Some("urgent"));
+
+        // Ctrl+Enter while busy with typed text queues it and immediately interrupts.
+        typed(&mut a, "right now");
+        assert_eq!(a.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)), vec![Action::Interrupt]);
+        assert!(a.forcing_queue);
+        assert_eq!(a.queued.front().map(String::as_str), Some("right now"));
+        a.queued.clear();
+        a.forcing_queue = false;
         // A trailing backslash, Shift+Enter or Ctrl+J start a new line instead.
         a.on_event(UiEvent::Idle);
         typed(&mut a, "one\\");
