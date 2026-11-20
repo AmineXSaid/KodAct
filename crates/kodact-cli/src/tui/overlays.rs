@@ -407,13 +407,21 @@ pub(super) fn hints(app: &App, room: usize) -> Vec<Span<'static>> {
     } else if app.find.is_some() {
         keys.extend([("enter", "next"), ("↑↓", "match"), ("esc", "close")]);
     } else if app.busy && !app.queued.is_empty() && app.editor.is_empty() {
-        keys.extend([("esc", "stop"), ("↑", "take the queued message back")]);
+        if app.forcing_queue {
+            keys.extend([("esc", "stop"), ("↑", "take back")]);
+        } else {
+            keys.extend([("enter", "force next"), ("↑", "take back"), ("esc", "stop")]);
+        }
         if app.has_collapsible {
             keys.push(("ctrl+o", if app.verbose { "less" } else { "thoughts" }));
         }
         keys.push(("shift+tab", "mode"));
     } else if app.busy {
-        keys.extend([("esc", "stop"), ("enter", "queue a message")]);
+        if !app.editor.is_empty() {
+            keys.extend([("enter", "queue"), ("ctrl+enter", "force"), ("esc", "stop")]);
+        } else {
+            keys.extend([("esc", "stop"), ("enter", "queue a message")]);
+        }
         if app.has_collapsible {
             keys.push(("ctrl+o", if app.verbose { "less" } else { "thoughts" }));
         }

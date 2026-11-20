@@ -100,8 +100,8 @@ working unless they are bound to something else or to `"none"`. A bad entry
 | --- | --- | --- |
 | `submit` | Enter | Send the prompt |
 | `newline` | Shift+Enter, Alt+Enter, Ctrl+J | New line |
-| `cancel` | Esc | Interrupt the turn; close a menu or dialog; twice: `/rewind` |
-| `interrupt` | Ctrl+C | Clear the input; interrupt; twice on an empty prompt: exit |
+| `cancel` | Esc | Interrupt the turn; close a menu; cancel a dialog; twice: `/rewind` |
+| `interrupt` | Ctrl+C | Clear the input; interrupt the turn; twice on an empty prompt: exit |
 | `exit` | Ctrl+D | Exit (empty prompt) |
 | `cycleMode` | Shift+Tab | Cycle the permission mode |
 | `historySearch` | Ctrl+R | Search earlier prompts |

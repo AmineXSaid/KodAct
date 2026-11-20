@@ -788,10 +788,13 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
     let mut queued: Vec<Line<'static>> = app
         .queued
         .iter()
-        .map(|q| {
+        .enumerate()
+        .map(|(i, q)| {
+            let (tag, style) =
+                if i == 0 && app.forcing_queue { ("forcing ▸ ", t.accent()) } else { ("queued ▸ ", t.warning()) };
             Line::from(vec![
-                Span::styled("queued ▸ ", t.warning()),
-                Span::styled(fit(&q.replace('\n', " "), tw.saturating_sub(9)), t.dim()),
+                Span::styled(tag, style),
+                Span::styled(fit(&q.replace('\n', " "), tw.saturating_sub(tag.len())), t.dim()),
             ])
         })
         .collect();
@@ -1772,7 +1775,7 @@ mod tests {
         assert_eq!(rows[1], "│ Select a model                       │");
         assert_eq!(rows[2], "│ ❯ type to filter                     │", "a field to type in");
         assert_eq!(rows[4], "│   1. Opus  big                       │");
-        assert_eq!(rows[5], "│ ❯ 2. Haiku ✔  small                  │");
+        assert_eq!(rows[5], "│ ❯ 2. Haiku ✓  small                  │");
         a.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
         // Ctrl+R shows the search and the match in the input box.
@@ -2844,7 +2847,12 @@ mod tests {
 
         a.queued.push_back("next prompt".into());
         let queued_row = status_row(&a, 140).split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(queued_row.contains("take the queued message back") && queued_row.contains("ctrl+o thoughts"));
+        assert!(
+            queued_row.contains("enter force next")
+                && queued_row.contains("take back")
+                && queued_row.contains("ctrl+o thoughts"),
+            "{queued_row}"
+        );
     }
 
     #[test]

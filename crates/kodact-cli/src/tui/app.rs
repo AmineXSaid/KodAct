@@ -216,7 +216,7 @@ pub const KEYS: &[(&str, &str, &[&str])] = &[
     ("Shift+Enter, Alt+Enter, Ctrl+J, \\ Enter", "New line", &["newline"]),
     ("Esc", "Interrupt the turn; close a menu; cancel a dialog", &["cancel"]),
     ("Esc Esc", "On an empty prompt: rewind (/rewind)", &[]),
-    ("Ctrl+C", "Clear the input; interrupt; twice on an empty prompt: exit", &["interrupt"]),
+    ("Ctrl+C", "Clear the input; interrupt the turn; twice on an empty prompt: exit", &["interrupt"]),
     ("Ctrl+D", "Exit (empty prompt)", &["exit"]),
     ("Shift+Tab", "Cycle the permission mode: default, accept edits, plan", &["cycleMode"]),
     ("Up / Down", "Move between lines; earlier prompts", &[]),
@@ -419,6 +419,8 @@ pub struct App {
     held: Option<Dialog>,
     /// Images attached to the next prompt (`--image` or clipboard paste).
     pub pending_images: Vec<super::clipboard::AttachedImage>,
+    /// True after the user forced a queued message while waiting for `TurnEnd`.
+    pub forcing_queue: bool,
     /// Last rendered inner text width of the input box (0 = unbounded).
     pub input_width: usize,
     /// The conversation on screen was replaced: the loop starts the screen over before it
@@ -502,6 +504,7 @@ impl App {
             has_code: false,
             held: None,
             pending_images: Vec::new(),
+            forcing_queue: false,
             input_width: 0,
             reset: None,
         }
@@ -903,6 +906,7 @@ impl App {
                 }
                 self.turn_summary();
                 self.busy = false;
+                self.forcing_queue = false;
                 self.busy_since = None;
                 self.activity.clear();
             }
@@ -927,6 +931,7 @@ impl App {
         self.todo_active = None;
         self.skills_used.clear();
         self.agents_done = 0;
+        self.forcing_queue = false;
         self.title.clear();
         self.talked = !replay.is_empty();
         self.front = replay.is_empty();
@@ -1390,7 +1395,7 @@ impl App {
             DialogKind::Picker { .. } => self
                 .picker_rows()
                 .into_iter()
-                .map(|c| (if c.current { format!("{} ✔", c.label) } else { c.label.clone() }, c.detail.clone()))
+                .map(|c| (if c.current { format!("{} ✓", c.label) } else { c.label.clone() }, c.detail.clone()))
                 .collect(),
         }
     }
@@ -2258,7 +2263,7 @@ impl App {
             Span::styled("◆ ", t.mode(m_str)),
             Span::styled(format!("{} mode", mode.label()), t.mode(m_str).add_modifier(Modifier::BOLD)),
             Span::styled(format!(" · {}", mode.short_rule()), t.subtle()),
-            Span::styled(format!(" — {}", mode.definition()), t.dim()),
+            Span::styled(format!(" - {}", mode.definition()), t.dim()),
         ];
         if busy {
             spans.push(Span::styled(" (active immediately)", t.subtle()));
@@ -2441,6 +2446,22 @@ impl App {
             }
             KeyCode::Char('j') if ctrl => self.editor.insert("\n"),
             KeyCode::Char('c') if alt && !ctrl => return vec![Action::Send("/copy code last".into())],
+            KeyCode::Enter if ctrl && self.busy && menu_len == 0 => {
+                let text = self.editor.text();
+                if !text.trim().is_empty() {
+                    let text = self.editor.take();
+                    let actions = self.submit(text);
+                    if !actions.is_empty() {
+                        return actions;
+                    }
+                }
+                if !self.queued.is_empty() && !self.forcing_queue {
+                    self.forcing_queue = true;
+                    self.flash_hint("Stopping current turn to send queued message");
+                    return vec![Action::Interrupt];
+                }
+                return vec![];
+            }
             KeyCode::Enter => {
                 if menu_len > 0 {
                     let c = self.menu()[self.menu_selected.min(menu_len - 1)].clone();
@@ -2466,6 +2487,11 @@ impl App {
                     return vec![];
                 }
                 if text.trim().is_empty() {
+                    if self.busy && !self.queued.is_empty() && !self.forcing_queue {
+                        self.forcing_queue = true;
+                        self.flash_hint("Stopping current turn to send queued message");
+                        return vec![Action::Interrupt];
+                    }
                     return vec![];
                 }
                 let text = self.editor.take();
@@ -2489,6 +2515,9 @@ impl App {
             KeyCode::Up if self.editor.is_empty() && !self.queued.is_empty() => {
                 if let Some(text) = self.queued.pop_back() {
                     self.editor.set(&text);
+                    if self.queued.is_empty() {
+                        self.forcing_queue = false;
+                    }
                 }
             }
             KeyCode::Up => {
@@ -2768,6 +2797,25 @@ mod tests {
         assert_eq!(a.next_queued().as_deref(), Some("first queued"));
         a.busy = false;
         assert_eq!(a.next_queued(), None, "the withdrawn one is never sent");
+
+        // Pressing Enter on an empty prompt with a queued message forces it by interrupting.
+        a.busy = true;
+        typed(&mut a, "urgent");
+        assert!(a.on_key(key(KeyCode::Enter)).is_empty());
+        assert_eq!(a.on_key(key(KeyCode::Enter)), vec![Action::Interrupt]);
+        assert!(a.forcing_queue);
+        assert!(a.on_key(key(KeyCode::Enter)).is_empty(), "idempotent while stopping");
+        a.on_event(UiEvent::Idle);
+        assert!(!a.forcing_queue);
+        assert_eq!(a.next_queued().as_deref(), Some("urgent"));
+
+        // Ctrl+Enter while busy with typed text queues it and immediately interrupts.
+        typed(&mut a, "right now");
+        assert_eq!(a.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)), vec![Action::Interrupt]);
+        assert!(a.forcing_queue);
+        assert_eq!(a.queued.front().map(String::as_str), Some("right now"));
+        a.queued.clear();
+        a.forcing_queue = false;
         // A trailing backslash, Shift+Enter or Ctrl+J start a new line instead.
         a.on_event(UiEvent::Idle);
         typed(&mut a, "one\\");
@@ -3788,7 +3836,7 @@ mod tests {
         let mut a = app();
         a.on_event(UiEvent::Picker(picker()));
         assert_eq!(a.dialog_selected(), 1, "the current choice is selected");
-        assert_eq!(a.dialog_options()[1].0, "Haiku ✔");
+        assert_eq!(a.dialog_options()[1].0, "Haiku ✓");
         typed(&mut a, "op");
         assert_eq!(a.dialog_options().len(), 1);
         assert_eq!(a.dialog_text().1, ["❯ op▏"]);
