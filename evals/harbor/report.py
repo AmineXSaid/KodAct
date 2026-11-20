@@ -216,6 +216,12 @@ def short_exception(message: str) -> str:
 # about the agent; each is listed in the report to run again.
 INVALID = ("api error", "verifier error", "didn't run")
 
+# Docker had no address range left for the trial's network (2026-11-19: 11 of 12 trials of one
+# job, run beside another job, while networks of earlier, killed trials were still there). The
+# machine's state, not the agent's: named, so the report can say how to clear it.
+DOCKER_NO_NETWORKS = "all predefined address pools have been fully subnetted"
+NO_NETWORKS_VERDICT = "didn't run (Docker out of networks)"
+
 
 # KodAct's own reminders (`system` events). Each is either needed or a false positive, so a change
 # that makes fewer of them is only better if the pass rate holds.
@@ -412,6 +418,8 @@ class Trial:
         # The agent never ran: Harbor records no `agent_execution` when the container didn't start
         # (EnvironmentStartTimeoutError) or the agent's setup failed or ran out of time.
         if self.exception and "agent_execution" in self.result and not self.result["agent_execution"]:
+            if DOCKER_NO_NETWORKS in self.exception_message:
+                return NO_NETWORKS_VERDICT
             return f"didn't run ({self.exception})"
         # Out of time: killed by Harbor at the limit, or stopped by KodAct itself (`--max-time`).
         if self.exception == "AgentTimeoutError" or self.stop_reason == "max_time":
@@ -694,6 +702,18 @@ class Job:
             ]
             out += [f"- {t.task}: {t.verdict}" for t in again]
             out.append("")
+            if any(t.verdict == NO_NETWORKS_VERDICT for t in again):
+                out += [
+                    "Docker ran out of address ranges for task networks. Remove the networks left by "
+                    "earlier trials (run.sh now does this for ones over 10 minutes old with nothing "
+                    "attached), run one job at a time, or give Docker more ranges "
+                    "(`default-address-pools` in /etc/docker/daemon.json):",
+                    "",
+                    "```bash",
+                    "docker network ls --filter name=__env_default -q | xargs -r docker network rm",
+                    "```",
+                    "",
+                ]
         out += [
             "## Trials",
             "",

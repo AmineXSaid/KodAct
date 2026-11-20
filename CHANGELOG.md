@@ -2,6 +2,16 @@
 
 ## 0.1.0 (unreleased)
 
+### Harbor: Docker running out of networks is named, and cleared before a run
+- **A trial Docker couldn't give a network to reads "didn't run (Docker out
+  of networks)"**, stays outside the score, and the report says how to clear
+  it. On 2026-11-19, 11 of 12 trials of a baseline job never started ("all
+  predefined address pools have been fully subnetted") while a second job ran
+  beside it, so its 1/12 said nothing about the agent.
+- **run.sh removes task networks left by earlier trials** (nothing attached,
+  over 10 minutes old) before it starts, so a job starting beside it keeps
+  the networks it is still setting up.
+
 ### Shift+Tab notes one mode; `kodact setup` is a card
 - **Cycling permission modes with Shift+Tab no longer prints a banner for
   every mode it passes.** The status line names the mode at once; the
