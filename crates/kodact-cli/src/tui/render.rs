@@ -405,7 +405,9 @@ pub fn full_view_at(
     now: Instant,
 ) -> (LiveView, usize) {
     let h = (height as usize).max(1);
-    app.cards_drawn.set(false);
+    // Whether the last frame drew the cards: the status line below is built with it, and built
+    // again if this frame decides otherwise, so its "tab suggestions" hint never lags a frame.
+    let cards_before = app.cards_drawn.get();
     // The front page has room for a note or two under it (a warning at start, the answer
     // to /clear). An answer longer than that takes the page's place: `?` or /status on
     // the front page showed only its last six rows, or none on a short window.
@@ -416,7 +418,8 @@ pub fn full_view_at(
         let fb = FrontBox { left: page.box_left, w: page.box_w, under: page.under };
         let live = live_view_inner(app, width, height, now, Some(fb));
         let mut input = live.lines;
-        let status = input.pop().unwrap_or_default();
+        let mut status = input.pop().unwrap_or_default();
+        app.cards_drawn.set(false);
         let room = h.saturating_sub(1);
         // Each row in `rows` starts with `TRANSCRIPT_INDENT` (2 spaces), which lines its
         // `❯` up with a boxed input's `│ ❯` when the box starts at column 0. On the front
@@ -523,10 +526,14 @@ pub fn full_view_at(
         }
         out.truncate(room);
         out.resize(room, Line::default());
+        if app.cards_drawn.get() != cards_before {
+            status = live_view_inner(app, width, height, now, Some(fb)).lines.pop().unwrap_or_default();
+        }
         out.push(status);
         let cursor = live.cursor.map(|(x, y)| (x, y + box_at as u16)).filter(|(_, y)| (*y as usize) < room);
         return (LiveView { lines: out, cursor }, 0);
     }
+    app.cards_drawn.set(false);
     let live = live_view_at(app, width, height, now);
     // The status style: a bar of the session's readouts across the top.
     let bar: Vec<Line<'static>> =
@@ -2778,6 +2785,22 @@ mod tests {
         // Degenerate narrow terminal never panics or exceeds w.
         let tiny = cornered(Line::from("Title"), vec![Line::from("Body")], 3, a.theme.accent(), a.theme.hairline());
         assert!(tiny.iter().all(|l| text_width(&text::plain(l)) <= 3));
+    }
+
+    #[test]
+    fn the_first_frame_offers_the_cards_it_draws() {
+        let mut a = app(false);
+        a.look = crate::tui::look::Look::Frame;
+        a.front = true;
+        let page = crate::tui::front::front_page(&a.theme, a.look, &Default::default(), 120);
+        // The very first frame: the cards are drawn, and the status line says how to reach them.
+        let (v, _) = full_view(&a, 120, 40, &[], &page, 0);
+        let status = draw(&v, 120).0.pop().unwrap();
+        assert!(a.cards_drawn.get() && status.contains("suggestions"), "{status}");
+        // Too short for them: neither the cards nor the hint.
+        let (v, _) = full_view(&a, 120, 16, &[], &page, 0);
+        let status = draw(&v, 120).0.pop().unwrap();
+        assert!(!a.cards_drawn.get() && !status.contains("suggestions"), "{status}");
     }
 
     #[test]

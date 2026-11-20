@@ -471,7 +471,7 @@ fn frame(t: &Theme, info: &FrontInfo, cols: usize) -> FrontPage {
     let room = fw.saturating_sub(4);
     above.push(Line::default());
     above.push(centred(Line::from(Span::styled(SHORT_TAGLINE, t.dim())), cols));
-    above.push(Line::default());
+    // One row of air over the box, as under it: the name, the box and the cards read as one block.
     above.push(Line::default());
     let mut below = vec![Line::default()];
     below.extend(cards(t, info.card, m, fw));
