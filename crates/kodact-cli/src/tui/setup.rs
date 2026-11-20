@@ -715,6 +715,16 @@ fn keycap(t: &Theme, key: &str) -> Span<'static> {
     Span::styled(format!(" {key} "), style)
 }
 
+/// The brightest text, bold: a heading on the card's faint edge, which would otherwise take
+/// the edge's colour.
+fn strong(t: &Theme) -> Style {
+    if t.color && t.depth != Depth::Ansi16 {
+        t.bold().fg(palette::STRONG.color(t.depth, t.light))
+    } else {
+        t.bold()
+    }
+}
+
 /// The filled call to action on the review step.
 fn button(t: &Theme, label: &str) -> Span<'static> {
     let style = if t.color {
@@ -1101,7 +1111,8 @@ fn body(state: &SetupState, t: &Theme, w: usize, room: usize) -> Body {
             if room >= 8 {
                 b.blank();
             }
-            b.push(vec![Span::raw("  "), button(t, "Save & start  ⏎")], w);
+            // The plain span after it keeps the button's colour from filling the rest of the row.
+            b.push(vec![Span::raw("  "), button(t, "Save & start  ⏎"), Span::raw(" ")], w);
             if let Some(err) = &state.error {
                 b.blank();
                 b.wrapped("✗ ", err, t.error(), w);
@@ -1168,7 +1179,7 @@ pub fn draw(f: &mut Frame, state: &SetupState, t: &Theme) {
         .border_style(t.hairline())
         .title(Line::from(vec![
             Span::styled(" ◆ ", t.accent()),
-            Span::styled(format!("{} ", state.step.heading()), t.bold()),
+            Span::styled(format!("{} ", state.step.heading()), strong(t)),
         ]))
         .padding(ratatui::widgets::Padding::new(pad_x, pad_x, pad_y, pad_y));
     if card_w >= 30 {
