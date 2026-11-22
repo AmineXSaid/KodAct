@@ -2,6 +2,14 @@
 
 ## 0.1.0 (unreleased)
 
+### Read says what it left out
+- **"Showing lines X-Y of Z" comes whenever lines remain after the range,**
+  also when the model passed `limit`: a range read gave no sign the file went
+  on.
+- **A range stops at 256 KB of lines** (on a whole line, with the same note),
+  the size a whole-file read may have: 2,000 lines of 2,000 characters could
+  bring in 4 MB at once.
+
 ### A last-stage time warning
 - **In the last twelfth of `--max-time` (at least 90 seconds), the model is
   told once more, more firmly:** start nothing new, make sure every file the

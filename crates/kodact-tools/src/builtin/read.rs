@@ -220,10 +220,21 @@ impl Tool for Read {
                 }
             })
             .collect();
+        // Whole lines up to the size a whole-file read may have, with or without `limit`: a range
+        // of long lines can't bring in more than the file-size rule lets a file.
+        let mut slice = slice;
+        let mut total = 0usize;
+        if let Some(cut) = slice.iter().position(|l| {
+            total += l.len() + 1;
+            total > MAX_TEXT_BYTES as usize
+        }) {
+            slice.truncate(cut.max(1));
+        }
         let refs: Vec<&str> = slice.iter().map(String::as_str).collect();
         let mut out = number_lines(&refs, start);
         let shown_end = start - 1 + slice.len();
-        if shown_end < all.len() && limit.is_none() {
+        // Said whenever lines remain, `limit` or not: a range read is no reason to think it was all.
+        if shown_end < all.len() {
             out.push_str(&format!(
                 "\n<system-reminder>Showing lines {start}-{shown_end} of {}. Use offset/limit to read more.</system-reminder>",
                 all.len()

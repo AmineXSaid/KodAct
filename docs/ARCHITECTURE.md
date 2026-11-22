@@ -1238,7 +1238,11 @@ asks for a draft in progress to be written to its file. Tests:
 ## Read limits
 
 - **Text:** reads 2,000 lines by default and cuts lines at 2,000 characters.
-  `offset` and `limit` select a range.
+  `offset` and `limit` select a range. A file over 256 KB needs a range, and a
+  range stops, on a whole line, before its lines pass 256 KB (line numbers not
+  counted). Whenever lines are
+  left out after the range, with or without `limit`, the result ends with
+  "Showing lines X-Y of Z".
 - **Images** (png, jpg, gif, webp): sent as image blocks, up to 5 MB. Larger
   images are rejected with a message.
 - **PDFs:** sent as `document` blocks, up to 32 MB. A PDF over 10 pages needs a

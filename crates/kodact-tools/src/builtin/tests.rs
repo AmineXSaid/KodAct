@@ -448,11 +448,33 @@ async fn read_numbers_lines_and_pages() {
     std::fs::write(d.path().join("a.txt"), body).unwrap();
     let c = ctx(d.path());
     let out = Read.call(json!({"file_path": p(d.path(), "a.txt"), "offset": 3, "limit": 2}), &c).await;
-    assert_eq!(out.text_content(), "     3\tline 3\n     4\tline 4\n");
+    // A range that leaves lines out says so, `limit` or not.
+    assert_eq!(
+        out.text_content(),
+        "     3\tline 3\n     4\tline 4\n\n<system-reminder>Showing lines 3-4 of 10. Use offset/limit to read \
+         more.</system-reminder>"
+    );
+    let out = Read.call(json!({"file_path": p(d.path(), "a.txt"), "offset": 9, "limit": 5}), &c).await;
+    assert!(!out.text_content().contains("Showing lines"), "the end of the file: nothing left out");
     let out = Read.call(json!({"file_path": p(d.path(), "missing.txt")}), &c).await;
     assert!(out.is_error);
     let out = Read.call(json!({"file_path": c.project_dir.display().to_string()}), &c).await;
     assert!(out.is_error && out.text_content().contains("directory"));
+}
+
+/// A range of long lines stops at the size a whole-file read may have (256 KB), on a line
+/// boundary, and says where it stopped.
+#[tokio::test]
+async fn a_range_read_is_capped_at_the_whole_file_size() {
+    let d = tempfile::tempdir().unwrap();
+    let line = "x".repeat(1_900);
+    let body: String = (0..400).map(|_| format!("{line}\n")).collect();
+    std::fs::write(d.path().join("wide.txt"), body).unwrap();
+    let c = ctx(d.path());
+    let out = Read.call(json!({"file_path": p(d.path(), "wide.txt"), "offset": 1, "limit": 400}), &c).await;
+    let text = out.text_content();
+    assert!(text.len() < 280 * 1024, "{}", text.len());
+    assert!(text.contains("Showing lines 1-137 of 400"), "{}", &text[text.len() - 200..]);
 }
 
 /// stop-at-target (2026-11-16): `cat pack.py` at the first step, an Edit at the fourth, refused as
