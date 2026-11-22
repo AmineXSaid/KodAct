@@ -2,6 +2,16 @@
 
 ## 0.1.0 (unreleased)
 
+### WebFetch: the page itself on request, error pages quoted, scheme-less URLs
+- **`prompt` is optional.** Without one, WebFetch returns the page itself
+  (cut when long, saved in full to a file) and makes no second model call:
+  the small model's answer loses exact code, flags and versions.
+- **A failed fetch quotes the start of the error page** (up to 2,000
+  characters): an API's 4xx usually says what was wrong.
+- **A URL without a scheme is taken as https** (http for `localhost` or a
+  loopback address). A host that only looks local (`127.evil.example`) is
+  now always upgraded to https, written with `http://` or not.
+
 ### Loop guard: a reworded description is the same call
 - **The same command with a different Bash `description` counts as a
   repeat.** The description is free text; a model that rewords it each time

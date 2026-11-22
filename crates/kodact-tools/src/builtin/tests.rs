@@ -891,6 +891,16 @@ async fn web_fetch_converts_summarizes_and_reports_redirects() {
     let summarized = WebFetch::new(Some(Arc::new(FakeWeb)));
     let out = summarized.call(json!({"url": format!("{base}/page"), "prompt": "how to install"}), &c).await;
     assert_eq!(out.text_content(), format!("summary of {base}/page for \"how to install\": # Docs"));
+    // Without a prompt: the page itself, no second model, for exact text.
+    assert!(summarized.validate(&json!({"url": format!("{base}/page")}), &c).is_ok());
+    let out = summarized.call(json!({"url": format!("{base}/page")}), &c).await;
+    assert_eq!(out.text_content(), "# Docs\n\n# Install\n\nRun `kodact init`.");
+    // An error keeps the start of the body it came with.
+    let out = plain.call(json!({"url": format!("{base}/nope")}), &c).await;
+    assert!(
+        out.is_error && out.text_content().contains("404") && out.text_content().ends_with("began:\nno"),
+        "{out:?}"
+    );
     let search = WebSearch { backend: Arc::new(FakeWeb) };
     assert!(search.call(json!({"query": "kodact cli"}), &c).await.text_content().contains("results for kodact cli"));
     assert!(search.call(json!({"query": "x"}), &c).await.is_error);

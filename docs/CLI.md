@@ -195,6 +195,10 @@ the files as they are then). Other slash commands and `!shell` lines aren't scan
 - **Web:**
   - `WebFetch` answers its `prompt` from the page with the small model
     (`smallFastModel` setting), so whole pages stay out of the context.
+    Without a `prompt` it returns the page itself (cut when long, and saved in
+    full to a file), for exact text such as code or flags. A failed fetch
+    quotes the start of the error page; a URL without a scheme is taken as
+    https (http for localhost or a loopback address).
   - `WebSearch` uses the provider's web-search server tool.
   - Both need permission. Allow sites with rules like
     `WebFetch(domain:docs.rs)`.

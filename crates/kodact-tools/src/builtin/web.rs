@@ -43,6 +43,8 @@ const MAX_BYTES: usize = 10 * 1024 * 1024;
 const KEEP_CHARS: usize = 50_000;
 const SUMMARIZE_CHARS: usize = 100_000;
 const CACHE_FOR: Duration = Duration::from_secs(15 * 60);
+/// How much of an error response's body a failed fetch quotes.
+const ERROR_BODY_BYTES: usize = 2_000;
 
 /// Hosts never fetched: cloud metadata endpoints (SSRF).
 fn forbidden_host(host: &str) -> bool {
@@ -106,7 +108,24 @@ impl WebFetch {
             ));
         }
         if !status.is_success() {
-            return Err(format!("{url} returned HTTP {status}."));
+            // The page an error comes with often says why (a missing parameter, a rate limit, a
+            // moved API): its first lines, never the whole of it.
+            let mut body: Vec<u8> = vec![];
+            let mut stream = resp.bytes_stream();
+            use futures::StreamExt;
+            while let Some(Ok(chunk)) = stream.next().await {
+                body.extend_from_slice(&chunk);
+                if body.len() >= ERROR_BODY_BYTES {
+                    break;
+                }
+            }
+            let text: String = String::from_utf8_lossy(&body).chars().take(ERROR_BODY_BYTES).collect();
+            let text = text.trim();
+            return Err(if text.is_empty() {
+                format!("{url} returned HTTP {status}.")
+            } else {
+                format!("{url} returned HTTP {status}. The response began:\n{text}")
+            });
         }
         let ctype = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_ascii_lowercase();
         let final_url = resp.url().to_string();
@@ -149,15 +168,24 @@ fn kodact_api_error(e: &reqwest::Error) -> String {
     msg
 }
 
-/// Parse and normalize the URL: `http` becomes `https` except for local hosts.
+/// Parse and normalize the URL: `http` becomes `https` except for local hosts, and a URL
+/// written without a scheme is taken as `https://` (`docs.rs/serde`), or `http://` for a local host
+/// (`localhost:8080`).
 pub fn normalize_url(raw: &str) -> Result<reqwest::Url, String> {
-    let mut url = reqwest::Url::parse(raw.trim()).map_err(|e| format!("Invalid URL {raw:?}: {e}"))?;
+    let trimmed = raw.trim();
+    // A scheme is letters (and `+-.`) right before the first `://`; one inside a path or query isn't.
+    let has_scheme = trimmed.find("://").is_some_and(|i| {
+        !trimmed[..i].is_empty() && trimmed[..i].chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+    });
+    let with_scheme = if has_scheme || trimmed.is_empty() { trimmed.to_string() } else { format!("https://{trimmed}") };
+    let mut url = reqwest::Url::parse(&with_scheme).map_err(|e| format!("Invalid URL {raw:?}: {e}"))?;
     match url.scheme() {
+        "https" if !has_scheme && is_loopback(&url) => {
+            let _ = url.set_scheme("http");
+        }
         "https" => {}
         "http" => {
-            let host = url.host_str().unwrap_or_default();
-            let local = host == "localhost" || host.starts_with("127.") || host == "[::1]";
-            if !local {
+            if !is_loopback(&url) {
                 let _ = url.set_scheme("https");
             }
         }
@@ -170,6 +198,19 @@ pub fn normalize_url(raw: &str) -> Result<reqwest::Url, String> {
     Ok(url)
 }
 
+/// This machine, by name or address: `localhost`, or a loopback IP (`127.0.0.1`, `[::1]`). A name
+/// that only starts like one (`127.evil.example`, `localhost.evil.example`) is a public host.
+fn is_loopback(url: &reqwest::Url) -> bool {
+    let host = url.host_str().unwrap_or_default();
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<std::net::Ipv4Addr>().is_ok_and(|a| a.is_loopback())
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok_and(|a| a.is_loopback())
+}
+
 #[async_trait::async_trait]
 impl Tool for WebFetch {
     fn name(&self) -> &str {
@@ -177,9 +218,12 @@ impl Tool for WebFetch {
     }
 
     fn description(&self) -> String {
-        "Fetch a web page and get an answer about it.\n\n\
-         - Give the full `url` and a `prompt` saying what you need from the page; a small model reads the page and \
-           answers, so the whole page does not enter the conversation.\n\
+        "Fetch a web page, or get an answer about it.\n\n\
+         - With a `prompt` saying what you need from the page, a small model reads the page and answers, so the \
+           whole page does not enter the conversation. Without one, you get the page itself (a long page is cut, and \
+           saved in full to a file you can Read or Grep): use that when you need exact text, such as code, flags or \
+           a version number.\n\
+         - A URL without a scheme is taken as https (http for localhost).\n\
          - HTML is converted to Markdown; plain text and JSON are kept as they are. http URLs are upgraded to https.\n\
          - A redirect to another host is reported, not followed: fetch the new URL yourself.\n\
          - Results are cached for 15 minutes. Pages larger than 10 MB, and binary files, are refused.\n\
@@ -192,9 +236,9 @@ impl Tool for WebFetch {
             "type": "object",
             "properties": {
                 "url": {"type": "string", "description": "The URL to fetch"},
-                "prompt": {"type": "string", "description": "What to find out from the page"}
+                "prompt": {"type": "string", "description": "What to find out from the page; omit it to get the page itself"}
             },
-            "required": ["url", "prompt"],
+            "required": ["url"],
             "additionalProperties": false
         })
     }
@@ -323,6 +367,17 @@ mod tests {
         assert!(normalize_url("http://169.254.169.254/latest/meta-data").unwrap_err().contains("not allowed"));
         assert!(normalize_url("file:///etc/passwd").unwrap_err().contains("Unsupported URL scheme"));
         assert!(normalize_url("not a url").is_err());
+        // No scheme: https, or http for a local host (a dev server).
+        assert_eq!(normalize_url("docs.rs/serde").unwrap().as_str(), "https://docs.rs/serde");
+        assert_eq!(normalize_url("localhost:8080/x").unwrap().as_str(), "http://localhost:8080/x");
+        assert_eq!(normalize_url("127.0.0.1:3000").unwrap().as_str(), "http://127.0.0.1:3000/");
+        // Names that only look local are public hosts: https, written or not.
+        assert_eq!(normalize_url("127.evil.example/x").unwrap().scheme(), "https");
+        assert_eq!(normalize_url("http://127.evil.example/x").unwrap().scheme(), "https");
+        assert_eq!(normalize_url("http://localhost.evil.example/").unwrap().scheme(), "https");
+        // A URL in the query isn't the scheme.
+        assert_eq!(normalize_url("docs.rs/r?u=http://x").unwrap().as_str(), "https://docs.rs/r?u=http://x");
+        assert_eq!(normalize_url("localhost:8080/?u=http://x").unwrap().as_str(), "http://localhost:8080/?u=http://x");
         assert!(same_site("www.example.com", "example.com") && !same_site("evil.com", "example.com"));
     }
 }
