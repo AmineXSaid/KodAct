@@ -44,6 +44,11 @@ pub(crate) const RECEIVED: &str = "Received.";
 const NOT_ALONE: &str = "Finish was not accepted: it was called together with other tools, whose results you have \
                          not read yet. Read them, then call Finish on its own.";
 
+/// The answer to an unattended reply that ends in plain text after doing work.
+pub(crate) const FINISH_MISSING: &str = "<system-reminder>\nThis run ends with the Finish tool, and your reply \
+     didn't call it. If the work is done, call Finish on its own: your summary, each requirement the request states \
+     with the check that shows it met, and `verified`. If it isn't done, carry on with the next step.\n</system-reminder>";
+
 /// Requirements the note names; the rest are counted.
 const NOTE_ITEMS: usize = 8;
 /// Characters of a requirement, or of its evidence, the note quotes.
@@ -135,12 +140,16 @@ pub(crate) fn claim(input: &Value) -> Value {
                     r.get("met").and_then(Value::as_bool).unwrap_or(false),
                 ),
             };
+            // Met with no evidence is a claim, not a requirement shown met.
+            let met = met && !evidence.trim().is_empty();
             let text = text.trim();
             (!text.is_empty())
                 .then(|| json!({"requirement": text, "scope": scope.trim(), "evidence": evidence.trim(), "met": met}))
         })
         .collect();
-    let all_met = requirements.iter().all(|r| r["met"] == true);
+    // An empty list shows nothing met: `verified` with no requirements listed is a claim with no
+    // parts (2026-11-16 audit: `all` over an empty list is true, so it passed for verified).
+    let all_met = !requirements.is_empty() && requirements.iter().all(|r| r["met"] == true);
     json!({
         "summary": input.get("summary").and_then(Value::as_str).unwrap_or_default(),
         "requirements": requirements,
@@ -187,6 +196,25 @@ pub(crate) fn unmet_note(unmet: &[(String, String, String)], clock: Option<&str>
     lines.join("\n")
 }
 
+/// The answer to the first Finish of a turn that lists no requirements: nothing in it shows what
+/// was asked for, so `verified` can't be true.
+pub(crate) fn unlisted_note(clock: Option<&str>) -> String {
+    let mut lines = vec![
+        "<system-reminder>".to_string(),
+        "Your Finish lists no requirements, so nothing in it shows the request met.".to_string(),
+    ];
+    if let Some(clock) = clock {
+        lines.push(clock.to_string());
+    }
+    lines.push(
+        "List what the request asks for, in its words (each file, interface, format, value or limit), each with the \
+         check that shows it met, then call Finish again."
+            .into(),
+    );
+    lines.push("</system-reminder>".into());
+    lines.join("\n")
+}
+
 /// `text` on one line, cut to [`NOTE_CHARS`] characters.
 fn clip(text: &str) -> String {
     let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -222,7 +250,7 @@ mod tests {
     }
 
     /// `verified` holds only while every requirement listed is met; one not met, without `met`,
-    /// or named with no evidence makes it false. A claim without the list is read as before.
+    /// or met with no evidence makes it false, and so does an empty or missing list.
     #[test]
     fn verified_claims_no_more_than_its_requirements() {
         let all_met = json!({"summary": "s", "verified": true, "requirements": [
@@ -236,6 +264,7 @@ mod tests {
             json!({"requirement": "a list of x", "evidence": "printed a tuple", "met": false}),
             json!({"requirement": "a list of x", "evidence": "printed a tuple"}),
             json!("a list of x"),
+            json!({"requirement": "a list of x", "evidence": "  ", "met": true}),
         ] {
             let c = claim(&json!({"summary": "s", "verified": true, "requirements": [
                 {"requirement": "out.json exists", "evidence": "ls", "met": true}, not_shown,
@@ -245,12 +274,12 @@ mod tests {
             assert_eq!(unmet(&c)[0].0, "a list of x");
         }
 
-        // An empty or missing list: the model's word, as before the list existed.
-        for old in
+        // An empty or missing list shows nothing met: `verified` is recorded false.
+        for unlisted in
             [json!({"summary": "s", "verified": true}), json!({"summary": "s", "verified": true, "requirements": []})]
         {
-            let c = claim(&old);
-            assert_eq!(c["verified"], true);
+            let c = claim(&unlisted);
+            assert_eq!(c["verified"], false, "{c}");
             assert_eq!(c["requirements"], json!([]));
         }
         // Items with no text are dropped, and the rest kept trimmed.

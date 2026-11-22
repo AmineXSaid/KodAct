@@ -2458,6 +2458,16 @@ fn retrying(time_limit: Option<TimeLimit>) -> EngineConfig {
     EngineConfig { autonomous: true, api_retry_wait: Duration::from_millis(1), time_limit, ..Default::default() }
 }
 
+/// The Finish call that ends an unattended run, with one requirement shown met.
+fn finish_turn(summary: &str) -> MockTurn {
+    MockTurn::tool(
+        "Finish",
+        json!({"summary": summary, "verified": true, "requirements": [
+            {"requirement": "the task", "scope": "all of it", "evidence": "`echo ok` printed ok", "met": true},
+        ]}),
+    )
+}
+
 #[tokio::test]
 async fn unattended_runs_retry_failed_model_calls() {
     // Rate limit, server error and a stream that broke mid-reply: each is tried again.
@@ -2467,7 +2477,7 @@ async fn unattended_runs_retry_failed_model_calls() {
         MockTurn::http_error(503, "api_error"),
         broken,
         MockTurn::tool("Bash", json!({"command": "echo ok"})),
-        MockTurn::text("done"),
+        finish_turn("done"),
     ]);
     let mut e = h.engine_with(retrying(None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     let r = e.submit(prompt("task")).await;
@@ -2928,7 +2938,7 @@ async fn an_endpoint_outage_mid_run_is_waited_out() {
         http(400, "error", "{\"detail\":\"Model not found\"}"),
         http(403, "maintenance", maintenance),
         http(403, "maintenance", maintenance),
-        MockTurn::text("done"),
+        finish_turn("done"),
     ]);
     let mut e = h.engine_with(retrying(None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     let r = e.submit(prompt("task")).await;
@@ -2962,7 +2972,7 @@ async fn api_retries_stop_at_their_limits() {
     let mut turns: Vec<MockTurn> = (0..10).map(|_| MockTurn::http_error(503, "api_error")).collect();
     turns.push(MockTurn::tool("Bash", json!({"command": "echo ok"})));
     turns.extend((0..10).map(|_| MockTurn::http_error(503, "api_error")));
-    turns.push(MockTurn::text("done"));
+    turns.push(finish_turn("done"));
     let h = Harness::new(turns);
     let mut e = h.engine_with(retrying(None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("done"));
@@ -3050,7 +3060,7 @@ async fn unattended_runs_finish_announced_steps_and_open_todos() {
         MockTurn::tool("Bash", json!({"command": "ls"})),
         MockTurn::text("Let me examine the context around those markers."),
         MockTurn::tool("Bash", json!({"command": "echo ok"})),
-        MockTurn::text("Done: checked with echo."),
+        finish_turn("Done: checked with echo."),
     ]);
     let mut e = h.engine_with(unattended(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("Done: checked with echo."));
@@ -3069,14 +3079,19 @@ async fn unattended_runs_finish_announced_steps_and_open_todos() {
         MockTurn::text("Let me look at a."),
         MockTurn::text("Let me look at b."),
         MockTurn::text("Let me look at c."),
+        MockTurn::text("Stopping here."),
     ]);
     let mut e = h.engine_with(unattended(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-    assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("Let me look at c."));
-    assert_eq!(h.provider.requests().len(), 4);
-    let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "ls"})), MockTurn::text("Done. Let me know.")]);
+    assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("Stopping here."));
+    assert_eq!(h.provider.requests().len(), 5, "two step reminders, then the one request for Finish");
+    let h = Harness::new(vec![
+        MockTurn::tool("Bash", json!({"command": "ls"})),
+        MockTurn::text("Done. Let me know."),
+        MockTurn::text("Done."),
+    ]);
     let mut e = h.engine_with(unattended(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     e.submit(prompt("task")).await;
-    assert_eq!(h.provider.requests().len(), 2);
+    assert_eq!(h.provider.requests().len(), 3, "no step reminder; asked for Finish once");
 
     // Open todos are listed before the run may end.
     let h = Harness::new(vec![
@@ -3089,7 +3104,7 @@ async fn unattended_runs_finish_announced_steps_and_open_todos() {
             "TodoWrite",
             json!({"todos": [todo("write model.c", "completed"), todo("read the files", "completed")]}),
         ),
-        MockTurn::text("Done: model.c written."),
+        finish_turn("Done: model.c written."),
     ]);
     let mut e = h.engine_with(unattended(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("Done: model.c written."));
@@ -3111,7 +3126,7 @@ async fn unattended_runs_attempt_before_giving_up() {
     let h = Harness::new(vec![
         MockTurn::text("That isn't practical."),
         MockTurn::tool("Bash", json!({"command": "ls"})),
-        MockTurn::text("Done after trying."),
+        finish_turn("Done after trying."),
     ]);
     let cfg = EngineConfig { autonomous: true, ..Default::default() };
     let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
@@ -3133,8 +3148,9 @@ async fn unattended_runs_attempt_before_giving_up() {
     assert_eq!(e.submit(prompt("x")).await.result.as_deref(), Some("Still no."));
     assert_eq!(h.provider.requests().len(), 2);
 
-    // A turn that used tools, or a run that isn't unattended, ends as it always did.
-    let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "ls"})), MockTurn::text("done")]);
+    // A turn that used tools gets no attempt reminder (only the request for Finish), and a run
+    // that isn't unattended ends as it always did.
+    let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "ls"})), finish_turn("done")]);
     let cfg = EngineConfig { autonomous: true, ..Default::default() };
     let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     e.submit(prompt("x")).await;
@@ -3265,6 +3281,7 @@ async fn an_unattended_run_is_told_its_background_commands_will_be_stopped() {
             MockTurn::tool("Bash", json!({"command": "sleep 30", "run_in_background": true})),
             MockTurn::text("The package server is running on port 8080."),
             MockTurn::text("It was only for the check; it can stop."),
+            finish_turn("It was only for the check; it can stop."),
         ]
     };
     let unattended = EngineConfig { autonomous: true, ..Default::default() };
@@ -4385,7 +4402,7 @@ async fn an_unattended_run_ends_with_the_finish_tool_and_records_its_claim() {
     let unattended = EngineConfig { autonomous: true, ..Default::default() };
     let h = Harness::new(vec![
         MockTurn::tool("Bash", json!({"command": "echo ok"})),
-        MockTurn::tool("Finish", json!({"summary": "Fixed both bugs; the tests pass.", "verified": true})),
+        finish_turn("Fixed both bugs; the tests pass."),
     ]);
     let mut e = h.engine_with(unattended, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     let r = e.submit(prompt("task")).await;
@@ -4407,16 +4424,20 @@ async fn the_finish_tool_is_offered_only_in_unattended_runs_and_a_plain_reply_st
     e.submit(prompt("hi")).await;
     assert!(!tool_names(&h.provider.requests()[0]).contains(&"Finish".to_string()), "a person ends the turn");
 
-    // Unattended, a reply without the tool is handled as today (sent back once to attempt).
+    // Unattended, a reply without the tool is sent back once to attempt, and a reply that did
+    // work and ends in plain text is asked once for Finish. A second plain reply ends the run.
     let unattended = EngineConfig { autonomous: true, ..Default::default() };
     let h = Harness::new(vec![
         MockTurn::text("That isn't practical."),
         MockTurn::tool("Bash", json!({"command": "ls"})),
         MockTurn::text("Done."),
+        MockTurn::text("Done, really."),
     ]);
     let mut e = h.engine_with(unattended, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
-    assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("Done."));
-    assert_eq!(h.provider.requests().len(), 3);
+    assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("Done, really."));
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 4);
+    assert!(last_user_text(&reqs[3]).contains("didn't call it"), "{}", last_user_text(&reqs[3]));
     assert!(system_events(&h, "finish").is_empty());
 }
 
@@ -4542,7 +4563,12 @@ async fn finish_with_other_tools_is_refused_and_unchecked_changes_send_the_model
             ("Bash", json!({"command": "echo ok"})),
             ("Finish", json!({"summary": "too early", "requirements": [], "verified": true})),
         ]),
-        MockTurn::tool("Finish", json!({"summary": "done after reading", "verified": false})),
+        MockTurn::tool(
+            "Finish",
+            json!({"summary": "done after reading", "verified": false, "requirements": [
+                {"requirement": "the task", "scope": "", "evidence": "read the output", "met": true},
+            ]}),
+        ),
     ]);
     let mut e = h.engine_with(unattended(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     let r = e.submit(prompt("task")).await;
@@ -4760,4 +4786,58 @@ async fn replies_without_tools_count_and_the_reminder_goes_with_the_next_prompt(
         .filter(|r| last_user_text(r).contains("The task list (TodoWrite) is empty"))
         .count();
     assert_eq!(empty_told, 1, "only as the conversation starts");
+}
+
+/// A Finish that lists no requirements shows nothing met: it is recorded unverified, and the
+/// first one of a turn, with time left, is answered with a request for the list (2026-11-22
+/// audit: an empty list passed for verified). Near the end of the time it ends the run as is.
+#[tokio::test]
+async fn a_finish_with_no_requirements_is_unverified_and_asked_for_them() {
+    let unattended = |time_limit| EngineConfig { autonomous: true, time_limit, ..Default::default() };
+    let bare = || MockTurn::tool("Finish", json!({"summary": "Done.", "requirements": [], "verified": true}));
+    let h =
+        Harness::new(vec![MockTurn::tool("Bash", json!({"command": "echo ok"})), bare(), finish_turn("Done, listed.")]);
+    let mut e = h.engine_with(unattended(None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    let reqs = h.provider.requests();
+    assert_eq!(reqs.len(), 3, "the bare Finish was answered");
+    assert!(last_user_text(&reqs[2]).contains("lists no requirements"), "{}", last_user_text(&reqs[2]));
+    assert_eq!(r.result.as_deref(), Some("Done, listed."));
+    assert_eq!(r.finish.as_ref().unwrap()["verified"], true);
+
+    // In the last fifth of the time: no note, and the claim is recorded unverified.
+    let late = TimeLimit { started: Instant::now() - Duration::from_secs(900), total: Duration::from_secs(1000) };
+    let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "echo ok"})), bare()]);
+    let mut e =
+        h.engine_with(unattended(Some(late)), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("task")).await;
+    assert_eq!(h.provider.requests().len(), 2);
+    assert_eq!(r.finish.as_ref().unwrap()["verified"], false, "no requirements, nothing shown met");
+}
+
+/// The request for Finish comes once a turn, only after the turn did work, and not near the end
+/// of the time or in a sub-agent.
+#[tokio::test]
+async fn a_plain_ending_is_asked_for_finish_once_and_only_when_it_helps() {
+    // No tool call this turn: the attempt reminder's case, not this one.
+    let h = Harness::new(vec![MockTurn::text("No."), MockTurn::text("Still no.")]);
+    let cfg = EngineConfig { autonomous: true, ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("x")).await;
+    assert!(!h.transcript_text().contains("didn't call it"));
+
+    // Near the end of the time: the run ends on the plain reply.
+    let late = TimeLimit { started: Instant::now() - Duration::from_secs(900), total: Duration::from_secs(1000) };
+    let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "ls"})), MockTurn::text("done")]);
+    let cfg = EngineConfig { autonomous: true, time_limit: Some(late), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("x")).await.result.as_deref(), Some("done"));
+    assert_eq!(h.provider.requests().len(), 2);
+
+    // A sub-agent reports to its parent, which has no Finish to read.
+    let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "ls"})), MockTurn::text("found it")]);
+    let cfg = EngineConfig { autonomous: true, is_subagent: true, ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("x")).await.result.as_deref(), Some("found it"));
+    assert_eq!(h.provider.requests().len(), 2);
 }

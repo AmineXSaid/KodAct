@@ -926,6 +926,8 @@ pub struct Engine {
     passing_told: bool,
     /// A Finish that listed requirements it didn't show met was answered with them this turn.
     unmet_told: bool,
+    /// An unattended reply that ended without Finish was sent back for it this turn.
+    finish_asked: bool,
     /// The limits this turn's request states (`nudges.limitVerdicts`, `nudges.staleDeliverables`).
     limits: crate::limits::Limits,
     /// A measurement that met every limit for its row, with the files the request asks for
@@ -1095,6 +1097,7 @@ impl Engine {
             passing: None,
             passing_told: false,
             unmet_told: false,
+            finish_asked: false,
             limits: Default::default(),
             unsaved: None,
             stale_told: 0,
@@ -3037,6 +3040,7 @@ impl Engine {
         self.constraints_told = false;
         self.passing_told = false;
         self.unmet_told = false;
+        self.finish_asked = false;
         let n = &self.cfg.nudges;
         self.limits = if n.limit_verdicts || n.stale_deliverables {
             crate::limits::Limits::from_request(&prompt_text)
@@ -3864,6 +3868,16 @@ impl Engine {
             {
                 if let Some(text) = self.background_reminder() {
                     background_reminded = true;
+                    self.push_user(Message::user_text(text), true, None, true);
+                    continue;
+                }
+            }
+
+            // Unattended, a reply that did work and ends in plain text skips the claim a script
+            // reads: asked once for Finish, after every other check (9 of 16 quick-thinking false
+            // successes, 2026-11-17, ended this way).
+            if reply_has_text && stop_reason != Some(StopReason::Refusal) {
+                if let Some(text) = self.finish_missing_note(refused, turn.tool_calls) {
                     self.push_user(Message::user_text(text), true, None, true);
                     continue;
                 }
@@ -4917,8 +4931,10 @@ impl Engine {
         if !self.cfg.reminders || !self.cfg.autonomous || self.cfg.is_subagent || refused || self.unmet_told {
             return None;
         }
-        let unmet = crate::finish::unmet(self.pending_finish.as_ref()?);
-        if unmet.is_empty() {
+        let claim = self.pending_finish.as_ref()?;
+        let unlisted = claim["requirements"].as_array().is_none_or(|r| r.is_empty());
+        let unmet = crate::finish::unmet(claim);
+        if unmet.is_empty() && !unlisted {
             return None;
         }
         let clock = match self.cfg.time_limit.as_ref() {
@@ -4935,10 +4951,39 @@ impl Engine {
             None => None,
         };
         self.unmet_told = true;
+        if unlisted {
+            self.system_event("verification", json!({"kind": "no_requirements"}));
+            self.notice(NoticeLevel::Info, "The finish lists no requirements: asking the model to list them.");
+            return Some(crate::finish::unlisted_note(clock.as_deref()));
+        }
         let listed: Vec<&str> = unmet.iter().map(|(r, _, _)| r.as_str()).collect();
         self.system_event("verification", json!({"kind": "unmet_requirements", "unmet": listed}));
         self.notice(NoticeLevel::Info, "The finish lists requirements not shown met: asking the model to meet them.");
         Some(crate::finish::unmet_note(&unmet, clock.as_deref()))
+    }
+
+    /// The note for an unattended reply that ends in plain text after the turn did work: once a
+    /// turn, while more than the last fifth of the time is left, and only where Finish is offered.
+    fn finish_missing_note(&mut self, refused: bool, tool_calls: u32) -> Option<String> {
+        if !self.cfg.reminders
+            || !self.cfg.autonomous
+            || self.cfg.is_subagent
+            || refused
+            || self.finish_asked
+            || self.pending_finish.is_some()
+            || tool_calls == 0
+            || self.shared.tools.get(crate::finish::NAME).is_none()
+        {
+            return None;
+        }
+        if let Some(t) = self.cfg.time_limit.as_ref() {
+            if t.remaining() <= (t.total / 5).max(Duration::from_secs(60)) {
+                return None;
+            }
+        }
+        self.finish_asked = true;
+        self.system_event("verification", json!({"kind": "no_finish"}));
+        Some(crate::finish::FINISH_MISSING.to_string())
     }
 
     /// The reminder to send before the turn may end, if one is due.

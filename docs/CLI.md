@@ -406,20 +406,23 @@ its last command (`pytest | tail` ends 0 whatever the tests did), and a check
 that does pass may test one case of many. To gate on a check, run it yourself
 after `kodact` exits.
 
-An unattended run (`--autonomous`) ends with the Finish tool, and the
-result says so in `finish`: the model's summary, the requirements it read in
-the request, each with what it covers (`scope`: every size, input, file or
-output it names, and whether a limit counts them one by one or together),
-its evidence and whether it is met, and its claim of
-whether this run's tool output showed them met. Evidence is a check run
-after the last change that would have failed had the requirement not been
-met, run in the form the request describes; a guess no check could tell
-apart is named in the summary, and a check of some of the cases a requirement
-covers shows only those. `verified` is false whenever a requirement is
-listed as not met. The first Finish of a run that lists one, while more than
-the last fifth of its `--max-time` is left (or with no limit), is answered
-with those requirements and the time left, and the run goes on. `verified`
-is still the model's word, not a check KodAct ran:
+An unattended run (`--autonomous`) ends with the Finish tool, and the result
+says so in `finish`: the model's summary, the requirements it read in the
+request, each with what it covers (`scope`: every size, input, file or output
+it names, and whether a limit counts them one by one or together), its
+evidence and whether it is met, and its claim of whether this run's tool
+output showed them met. Evidence is a check run after the last change that
+would have failed had the requirement not been met, run in the form the
+request describes; a guess no check could tell apart is named in the summary,
+and a check of some of the cases a requirement covers shows only those.
+`verified` is false whenever a requirement is listed as not met, marked met
+with no evidence, or none is listed at all. The first Finish of a run that
+lists one, while more than the last fifth of its `--max-time` is left (or with
+no limit), is answered with those requirements and the time left, and the run
+goes on; a Finish that lists none is asked for the list the same way. A reply
+that ends in plain text after the turn did work is asked once to call Finish,
+with the same time limit, so the result has a claim to read. `verified` is
+still the model's word, not a check KodAct ran:
 
 ```json
 "finish": {"summary": "Fixed both bugs; the tests pass.", "verified": true, "requirements": [

@@ -2,6 +2,18 @@
 
 ## 0.1.0 (unreleased)
 
+### Finish: no claim of verified without its parts
+- **A Finish that lists no requirements is recorded `verified: false`,** and
+  so is a requirement marked met with no evidence. An empty list counted as
+  every requirement met, so `verified: true` with nothing listed passed. The
+  first such Finish of a turn, with more than the last fifth of the time
+  left, is answered with a request for the list.
+- **An unattended run that did work and ends in plain text is asked once for
+  Finish,** after every other check, so the result carries the claim a
+  script reads. 9 of the 16 false successes of the quick-thinking run of
+  2026-11-17 ended this way. A second plain reply still ends the run; near
+  the end of the time, and in sub-agents, nothing is asked.
+
 ### Burgundy palette and a welcome page with suggestion cards
 - **Lime is gone: KodAct's colours are a painter's palette around one wine.**
   Rose (lit burgundy) is the brand: the prompt mark, selections, keys and the
