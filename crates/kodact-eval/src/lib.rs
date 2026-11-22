@@ -56,6 +56,11 @@ pub struct TaskSpec {
     /// A message sent while the agent works, as a desktop host sends one.
     #[serde(default)]
     pub steer: Option<SteerSpec>,
+    /// Messages sent one at a time, each once the previous turn has ended, as a person in a
+    /// chat sends their next request: the same session, the conversation so far still there
+    /// (or summarized, on a small window). The check runs after the last one.
+    #[serde(default)]
+    pub followups: Vec<String>,
     /// Kill kodact mid-turn, then continue the session in a new process.
     #[serde(default)]
     pub crash: Option<CrashSpec>,
@@ -582,18 +587,21 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
 
     let steer = task.spec.steer.as_ref();
     let crash = task.spec.crash.as_ref();
+    let mut followups = task.spec.followups.iter();
+    // A task that steers, or chats on, talks to kodact over stdin, as a host does.
+    let talks = steer.is_some() || !task.spec.followups.is_empty();
     let mut cmd = Command::new(&opts.kodact);
     cmd.arg("-p");
-    // A task that steers talks to kodact over stdin, as a host does.
-    match steer {
-        Some(_) => cmd.args(["--input-format", "stream-json"]),
-        None => cmd.arg(&task.spec.instruction),
-    };
+    if talks {
+        cmd.args(["--input-format", "stream-json"]);
+    } else {
+        cmd.arg(&task.spec.instruction);
+    }
     cmd.args(["--output-format", "stream-json", "--verbose"])
         .args(&opts.args)
         .args(&task.spec.args)
         .current_dir(&ws)
-        .stdin(if steer.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if talks { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -611,6 +619,8 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
     let transcript_path = run_dir.join("transcript.jsonl");
     let mut transcript = tokio::fs::File::create(&transcript_path).await?;
     let mut killed = false;
+    let mut steer_sent = false;
+    let mut followups_left = task.spec.followups.len();
     let collect = async {
         let mut lines = tokio::io::BufReader::new(stdout).lines();
         let mut parsed = vec![];
@@ -625,13 +635,28 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
                     break;
                 }
                 // The steer goes once the agent is that far in, or as the next turn if the
-                // turn ended first; then stdin closes and kodact exits when the work is done.
-                if let (Some(s), Some(mut w)) = (steer, stdin.take()) {
-                    let ended = v["type"] == "result";
-                    if calls >= s.after_tool_calls || ended {
-                        let _ = w.write_all(user_line(&s.text, !ended).as_bytes()).await;
-                    } else {
-                        stdin = Some(w);
+                // turn ended first. Each follow-up goes once a turn has ended. With nothing
+                // left to send, stdin closes and kodact exits when the work is done.
+                // An immediate command's answer (`/status` mid-turn) is a result line too, but
+                // no turn ended with it.
+                let ended = v["type"] == "result" && v["immediate"] != true;
+                if let Some(w) = stdin.as_mut() {
+                    let mut took_turn = false;
+                    if let Some(s) = steer.filter(|_| !steer_sent) {
+                        if calls >= s.after_tool_calls || ended {
+                            let _ = w.write_all(user_line(&s.text, !ended).as_bytes()).await;
+                            steer_sent = true;
+                            took_turn = ended;
+                        }
+                    }
+                    if ended && !took_turn && (steer.is_none() || steer_sent) {
+                        if let Some(next) = followups.next() {
+                            let _ = w.write_all(user_line(next, false).as_bytes()).await;
+                            followups_left -= 1;
+                        }
+                    }
+                    if (steer.is_none() || steer_sent) && followups_left == 0 {
+                        stdin = None;
                     }
                 }
                 parsed.push(v);
@@ -1023,6 +1048,54 @@ pub fn render_compare(a: &Report, b: &Report) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A task with follow-ups sends the instruction, then each follow-up once the previous turn's
+    /// result has come, in order, in one session; then stdin closes. A fake kodact answers each
+    /// message with a result and logs what it got.
+    #[tokio::test]
+    async fn follow_ups_go_one_turn_at_a_time() {
+        let d = tempfile::tempdir().unwrap();
+        let fake = d.path().join("kodact");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nwhile IFS= read -r line; do\n  printf '%s\\n' \"$line\" >> received.jsonl\n  \
+             echo '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":1,\"total_cost_usd\":0}'\ndone\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let task_dir = d.path().join("chat");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        let spec: TaskSpec = serde_json::from_value(json!({
+            "id": "chat", "instruction": "first", "followups": ["second", "third"],
+            "check": "[ \"$(wc -l < received.jsonl)\" -eq 3 ]",
+        }))
+        .unwrap();
+        let task = Task { spec, dir: task_dir };
+        let opts = RunOptions {
+            kodact: fake,
+            args: vec![],
+            env: vec![],
+            label: "t".into(),
+            out_dir: d.path().join("out"),
+            repeat: 1,
+            jobs: 1,
+        };
+        let r =
+            tokio::time::timeout(std::time::Duration::from_secs(30), run_task(&task, 1, &opts)).await.unwrap().unwrap();
+        assert!(r.passed, "three messages, one per turn");
+        let got = std::fs::read_to_string(d.path().join("out/chat-1/workspace/received.jsonl")).unwrap();
+        let texts: Vec<String> = got
+            .lines()
+            .map(|l| {
+                serde_json::from_str::<Value>(l).unwrap()["message"]["content"][0]["text"].as_str().unwrap().to_string()
+            })
+            .collect();
+        assert_eq!(texts, ["first", "second", "third"]);
+    }
 
     #[test]
     fn a_steer_is_a_user_line_for_the_next_step() {

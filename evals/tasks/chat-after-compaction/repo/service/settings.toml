@@ -1,0 +1,22 @@
+# Service settings
+
+listen_port = 8080
+worker_threads = 40
+request_timeout_ms = 15000
+pool_max_connections = 8
+pool_idle_timeout_s = 300
+cache_size_mb = 256
+cache_ttl_s = 600
+log_level = "info"
+log_rotate_mb = 50
+retry_attempts = 3
+retry_backoff_ms = 250
+max_body_kb = 1024
+gzip_level = 6
+metrics_port = 9100
+health_interval_s = 10
+session_ttl_min = 30
+upload_dir = "/var/lib/svc/uploads"
+queue_depth = 512
+shutdown_grace_s = 20
+tls_min_version = "1.2"

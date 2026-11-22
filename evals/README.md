@@ -20,6 +20,14 @@ run's own (a small window with `KODACT_CONTEXT_WINDOW`).
 `chrome` on `PATH`. Without one the task is skipped by `run` and `validate` (and
 by the test that validates every task), with the reason, instead of failing.
 
+`"followups": ["...", "..."]` makes the task a chat: kodact runs over
+stream-json, gets the instruction, and each follow-up is sent as the next turn
+once the previous turn's result has come, in one session, as a person sends
+their next request. The check runs after the last one. With a small window
+(`"env": {"KODACT_CONTEXT_WINDOW": "32000"}`) the conversation is compacted on
+the way, so a later turn tests what an earlier one left behind
+(`chat-after-compaction`).
+
 `"crash": {"after_tool_calls": N, "resume": "Continue."}` kills kodact once
 the agent has made N tool calls, as a crash or a closed terminal does, then
 runs `kodact -p <resume> --continue` in the same workspace; both parts go to
@@ -54,6 +62,15 @@ independent parts (A with it, B without)?
 target/release/kodact-eval run --label task-on --repeat 3 --only three-reports --only parallel-plugins --only trace-discount -- --model sonnet --dangerously-skip-permissions
 target/release/kodact-eval run --label task-off --repeat 3 --only three-reports --only parallel-plugins --only trace-discount -- --model sonnet --dangerously-skip-permissions --disallowedTools Task
 target/release/kodact-eval compare evals/results/task-on evals/results/task-off
+```
+
+Keeping the latest steps word for word after compaction (`compaction.keepRecent`),
+on the chat and small-window tasks (A off, B on):
+
+```bash
+target/release/kodact-eval run --label keep-off --repeat 3 --only chat-after-compaction --only deliverable-small-window --only notes-across-compaction -- --model sonnet --dangerously-skip-permissions
+KODACT_KEEP_RECENT=1 target/release/kodact-eval run --label keep-on --repeat 3 --only chat-after-compaction --only deliverable-small-window --only notes-across-compaction -- --model sonnet --dangerously-skip-permissions
+target/release/kodact-eval compare evals/results/keep-off evals/results/keep-on
 ```
 
 The Notes tool, on the task whose project turns it on (A off, B on):
