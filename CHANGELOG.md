@@ -2,6 +2,16 @@
 
 ## 0.1.0 (unreleased)
 
+### Chat evals, and keeping the latest steps through compaction
+- **`kodact-eval` tasks can be chats:** `"followups": [...]` sends each as
+  the next turn once the previous one has ended, in one session. New task
+  `chat-after-compaction`: four turns on a 32k window, the last needing facts
+  from the first two (the setting, its old value, the failures before).
+- **`compaction.keepRecent`** (off until measured, `KODACT_KEEP_RECENT=1`):
+  an automatic compaction keeps the most recent complete steps, up to a tenth
+  of the window, word for word after the summary. evals/README.md has the
+  A/B command.
+
 ### Unattended runs: no stop-and-ask rule, no scheduling tools, no TodoWrite push
 - **The attended rule "tell the user what is missing" is left out of
   unattended runs,** which were also told to install what is missing: two

@@ -311,6 +311,12 @@ what follows it.
   reasons before writing anyway, and asked to think the whole conversation
   through first it spent its reply doing so (the 34 cut-off summaries above).
   A model without reasoning keeps the pass.
+- With `compaction.keepRecent` (off until measured), an automatic compaction
+  keeps the most recent complete steps, up to a tenth of the window, word for
+  word after the summary, as a held summary does (`install_with_tail`): the cut
+  is at an assistant message, so each kept tool call keeps its result, and the
+  kept messages lose their reasoning. The summary still covers them. Event
+  `system/recent_kept` `{keptMessages}`.
 - After any compaction, the first message lists the files the session read or
   wrote that still exist (at most 60 by name and 3,000 characters, the rest
   counted), so a path the

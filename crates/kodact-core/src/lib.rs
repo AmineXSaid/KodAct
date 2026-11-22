@@ -299,6 +299,16 @@ pub(crate) fn background_summary(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// Whether an automatic compaction keeps the most recent steps word for word after its summary:
+/// `compaction.keepRecent`, or `KODACT_KEEP_RECENT` (for A/B runs). Off until measured (task
+/// `chat-after-compaction`).
+pub(crate) fn keep_recent(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_KEEP_RECENT") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/compaction/keepRecent").unwrap_or(false),
+    }
+}
+
 /// Which nudges are on: `KODACT_NUDGES` (a list such as `shellEdit,constraints`, or `all`, for
 /// A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
 /// measured it; `reminders: false` still turns them all off.
@@ -1198,6 +1208,7 @@ pub fn build_session(
             autocompact_window,
             auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
             background_summary: background_summary(&settings),
+            keep_recent: keep_recent(&settings),
             // As in the session: a sub-agent on the same endpoint gets its reasoning back too.
             carry_reasoning: carry_reasoning(&settings),
             ..Default::default()
@@ -1236,6 +1247,7 @@ pub fn build_session(
         autocompact_window,
         auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
         background_summary: background_summary(&settings),
+        keep_recent: keep_recent(&settings),
         is_subagent: false,
         edit_diagnostics: edit_diagnostics(&settings, verify.is_some()),
         language_servers: language_servers(&settings, verify.is_some()),

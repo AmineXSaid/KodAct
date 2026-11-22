@@ -5006,3 +5006,34 @@ async fn summaries_of_a_reasoning_model_skip_the_analysis_pass_and_files_come_ba
     let (ask, _) = run(false).await;
     assert!(ask.contains("<analysis> tags"), "a model that doesn't reason keeps the pass: {ask}");
 }
+
+/// `compaction.keepRecent`: after an automatic compaction the latest complete step stays word for
+/// word after the summary, tool call with its result; without it only the summary (and the
+/// person's requests) remain.
+#[tokio::test]
+async fn keep_recent_keeps_the_latest_steps_word_for_word_after_the_summary() {
+    let run = |keep: bool| async move {
+        let h = responding(
+            vec![
+                MockTurn::tool("Bash", json!({"command": "echo first-step"})).with_usage(usage(9_000)),
+                MockTurn::tool("Bash", json!({"command": "echo second-step"})).with_usage(usage(16_000)),
+                MockTurn::text("done"),
+            ],
+            "<summary>what happened so far</summary>",
+        );
+        let cfg = EngineConfig { keep_recent: keep, ..small_window() };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        assert_eq!(e.submit(prompt("run the steps")).await.result.as_deref(), Some("done"));
+        assert!(h.transcript_text().contains("compact_boundary"), "compacted");
+        let last = h.provider.requests().into_iter().rfind(|r| r.tool_choice.is_none()).unwrap();
+        (serde_json::to_string(&last.messages).unwrap(), h.transcript_text())
+    };
+    let (kept, log) = run(true).await;
+    assert!(kept.contains("what happened so far"), "{kept}");
+    assert!(kept.contains("echo second-step"), "the latest step, word for word: {kept}");
+    assert!(log.contains("recent_kept"));
+    let (only, log) = run(false).await;
+    assert!(only.contains("what happened so far"));
+    assert!(!only.contains("echo second-step"), "without the setting, only the summary: {only}");
+    assert!(!log.contains("recent_kept"));
+}

@@ -352,6 +352,10 @@ pub struct EngineConfig {
     /// Write that summary ahead, in the background, and hold it until compaction is due
     /// (`compaction.background`, off until measured): see `crate::held`.
     pub background_summary: bool,
+    /// Keep the most recent complete steps word for word after an automatic compaction, up to a
+    /// tenth of the window, instead of only the summary (`compaction.keepRecent`, off until
+    /// measured). The summary still covers them.
+    pub keep_recent: bool,
     /// Runs as a sub-agent: SubagentStop instead of Stop, no session hooks.
     pub is_subagent: bool,
     /// The verification loop; `None` turns it off. Never runs in sub-agents.
@@ -476,6 +480,7 @@ impl Default for EngineConfig {
             autocompact_window: None,
             auto_compact: true,
             background_summary: false,
+            keep_recent: false,
             is_subagent: false,
             verify: None,
             finish_check: false,
@@ -2120,7 +2125,7 @@ impl Engine {
                     self.system_event("summary_ahead_failed", json!({"reason": "empty_summary"}));
                     return false;
                 }
-                self.install_held(summary, at, continue_work, model);
+                self.install_with_tail("auto", summary, at, continue_work, model, "summary_ahead_applied");
                 true
             }
             Err(reason) => {
@@ -2131,10 +2136,39 @@ impl Engine {
         }
     }
 
+    /// Where the most recent complete steps that fit in `budget` tokens start: the index of an
+    /// assistant message, so each kept tool call keeps its result and the summary (a user
+    /// message) is followed by the model's turn. `None` when no step fits, or when the cut would
+    /// keep everything.
+    fn recent_cut(&self, budget: u64) -> Option<usize> {
+        let msgs = &self.state.messages;
+        let mut used = 0u64;
+        let mut cut = None;
+        for i in (1..msgs.len()).rev() {
+            used += kodact_compact::estimate_tokens(std::slice::from_ref(&msgs[i]));
+            if used > budget {
+                break;
+            }
+            if msgs[i].role == kodact_types::Role::Assistant {
+                cut = Some(i);
+            }
+        }
+        cut
+    }
+
     /// Replace `state.messages[..at]` with `summary` and keep the messages after it word for
     /// word. Their reasoning is left out: it was written about the part now replaced, and a
-    /// provider that checks reasoning against what came before it would refuse it.
-    fn install_held(&mut self, summary: String, at: usize, continue_work: bool, model: &str) -> CompactInfo {
+    /// provider that checks reasoning against what came before it would refuse it. `event` names
+    /// the system event that records it.
+    fn install_with_tail(
+        &mut self,
+        trigger: &str,
+        summary: String,
+        at: usize,
+        continue_work: bool,
+        model: &str,
+        event: &str,
+    ) -> CompactInfo {
         let pre_tokens = self.projected_context_tokens();
         let tail = self.state.messages.split_off(at);
         let tail_uuids = self.state.uuids.split_off(at);
@@ -2148,7 +2182,7 @@ impl Engine {
             .collect();
         let cleared: Vec<String> =
             self.state.microcompacted.iter().filter(|id| tail_ids.contains(*id)).cloned().collect();
-        let info = self.install_summary_from(pre_tokens, "auto", summary, continue_work, model);
+        let info = self.install_summary_from(pre_tokens, trigger, summary, continue_work, model);
         for (uuid, mut msg) in tail_uuids.into_iter().zip(tail) {
             msg.content.retain(|b| !matches!(b, ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }));
             if msg.content.is_empty() {
@@ -2161,7 +2195,7 @@ impl Engine {
         self.state.microcompacted.extend(cleared);
         self.state.context_tokens = self.estimate_sent(&self.state.messages);
         self.state.counted = self.state.messages.len();
-        self.system_event("summary_ahead_applied", json!({"keptMessages": self.state.messages.len() - 1}));
+        self.system_event(event, json!({"keptMessages": self.state.messages.len() - 1}));
         info
     }
 
@@ -2310,6 +2344,12 @@ impl Engine {
                 }
             }
             return Err(EMPTY_SUMMARY.into());
+        }
+        // `compaction.keepRecent`: the latest steps stay as they were, after the summary.
+        if self.cfg.keep_recent && trigger == "auto" {
+            if let Some(at) = self.recent_cut(self.compact_window(model) / 10) {
+                return Ok(self.install_with_tail(trigger, summary, at, continue_work, model, "recent_kept"));
+            }
         }
         Ok(self.install_summary(trigger, summary, continue_work, model))
     }
