@@ -223,6 +223,20 @@ fn language_servers_are_opt_in() {
 }
 
 #[test]
+fn the_finish_check_is_on_unless_a_setting_turns_it_off() {
+    use kodact_config::{LoadedSettings, SettingSource};
+    let mut s = LoadedSettings::default();
+    assert!(crate::finish_check(&s), "on by default");
+    s.apply(
+        SettingSource::Flag,
+        std::path::Path::new(""),
+        &["verification", "finishCheck"],
+        Some(serde_json::json!(false)),
+    );
+    assert!(!crate::finish_check(&s));
+}
+
+#[test]
 fn unattended_runs_get_a_second_verification_reminder() {
     use kodact_config::{LoadedSettings, SettingSource};
     let dir = tempfile::tempdir().unwrap();

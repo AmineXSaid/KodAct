@@ -466,6 +466,17 @@ fix it or say plainly that it fails. Each reminder:
 - comes once per set of changes: after one, another comes only when a file
   was written, or the worktree changed through the shell, since.
 
+**The Finish check (unattended):** a Finish that claims `verified`, with no
+other reminder due, is checked by a separate request: `kodact_engine::judge`,
+the evaluator `/goal` uses (C18), with the turn's request as the goal, the
+conversation as evidence and the harness's own record of unchecked changes.
+Once a turn, while more than the last fifth of `--max-time` is left, never in
+sub-agents. Only an explicit `not_met` sends the model back (with the reason,
+as `system/verification` `{kind: "finish_check", verdict, reason}`); `met`,
+`impossible`, an answer that can't be read and a failed request let the claim
+stand. `verification.finishCheck` (default on; off too with `reminders`
+off), `goalCheckModel` for its model.
+
 **No reminder when:**
 - the stop reason is `refusal`;
 - the turn is in a sub-agent;

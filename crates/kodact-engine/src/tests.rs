@@ -4841,3 +4841,103 @@ async fn a_plain_ending_is_asked_for_finish_once_and_only_when_it_helps() {
     assert_eq!(e.submit(prompt("x")).await.result.as_deref(), Some("found it"));
     assert_eq!(h.provider.requests().len(), 2);
 }
+
+/// A harness whose model answers the Finish check (a request with no tools whose system prompt is
+/// the checker's) with `verdict`, and every other request with the next of `turns`.
+fn checked(turns: Vec<MockTurn>, verdict: &'static str) -> Harness {
+    let queue = Arc::new(Mutex::new(std::collections::VecDeque::from(turns)));
+    let provider = MockProvider::with_responder(move |req| {
+        if req.tools.is_empty() && serde_json::to_string(&req.system).unwrap().contains("independent checker") {
+            return MockTurn::text(verdict);
+        }
+        queue.lock().unwrap().pop_front().unwrap_or_else(|| MockTurn::text("(script exhausted)"))
+    });
+    Harness {
+        dir: tempfile::tempdir().unwrap(),
+        provider: Arc::new(provider),
+        sink: Arc::new(VecSink::default()),
+        log: Arc::new(Mutex::new(vec![])),
+        spill: false,
+    }
+}
+
+fn check_requests(h: &Harness) -> Vec<kodact_types::MessagesRequest> {
+    h.provider.requests().into_iter().filter(|r| r.tools.is_empty()).collect()
+}
+
+/// A Finish claiming `verified` gets a separate check against the request: "not met" sends the
+/// model back once with the reason, and its next Finish ends the run unchecked.
+#[tokio::test]
+async fn a_verified_finish_is_checked_and_not_met_sends_the_model_back() {
+    let checking = EngineConfig { autonomous: true, finish_check: true, ..Default::default() };
+    let not_met =
+        r#"{"verdict": "not_met", "evidence": [], "reason": "coords_x holds tuples; the request asks for lists"}"#;
+    let h = checked(
+        vec![
+            MockTurn::tool("Bash", json!({"command": "echo ok"})),
+            finish_turn("Wrote out.csv."),
+            MockTurn::tool("Bash", json!({"command": "echo fixed"})),
+            finish_turn("Wrote out.csv with lists."),
+        ],
+        not_met,
+    );
+    let mut e = h.engine_with(checking, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("Write out.csv; coords_x is a list of x coordinates.")).await;
+    assert_eq!(r.result.as_deref(), Some("Wrote out.csv with lists."));
+    let checks = check_requests(&h);
+    assert_eq!(checks.len(), 1, "once a turn");
+    let asked = serde_json::to_string(&checks[0].messages).unwrap();
+    assert!(asked.contains("coords_x is a list of x coordinates"), "the request is the goal: {asked}");
+    assert!(asked.contains("echo ok"), "the transcript is the evidence");
+    let work: Vec<_> = h.provider.requests().into_iter().filter(|r| !r.tools.is_empty()).collect();
+    assert_eq!(work.len(), 4);
+    let note = last_user_text(&work[2]);
+    assert!(note.contains("separate check") && note.contains("tuples"), "{note}");
+    assert_eq!(system_events(&h, "finish").len(), 1, "only the claim that ended the run");
+}
+
+/// "met", an answer that can't be read, a failed check, an unverified claim or a run near its end:
+/// the claim stands and the run ends on it.
+#[tokio::test]
+async fn the_finish_check_never_holds_back_a_run_it_cannot_judge() {
+    let checking = |time_limit| EngineConfig { autonomous: true, finish_check: true, time_limit, ..Default::default() };
+    for verdict in [
+        r#"{"verdict": "met", "evidence": ["`echo ok` printed ok"], "reason": "done"}"#,
+        "I think it is probably fine",
+        r#"{"verdict": "not_met", "evidence": [], "reason": "the output is cut o"#,
+        r#"{"verdict": "met", "evidence": [], "reason": "looks done"}"#,
+        r#"{"verdict": "unsure", "reason": "?"}"#,
+        r#"{"verdict": "impossible", "evidence": [], "reason": "needs network"}"#,
+    ] {
+        let h = checked(vec![MockTurn::tool("Bash", json!({"command": "echo ok"})), finish_turn("Done.")], verdict);
+        let mut e = h.engine_with(checking(None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        let r = e.submit(prompt("task")).await;
+        assert_eq!(r.result.as_deref(), Some("Done."), "{verdict}");
+        assert_eq!(check_requests(&h).len(), 1, "{verdict}");
+        assert_eq!(r.finish.as_ref().unwrap()["verified"], true);
+    }
+    // A claim that isn't `verified` isn't checked: the model already says what it didn't show.
+    let unverified = MockTurn::tool(
+        "Finish",
+        json!({"summary": "Partly done.", "verified": false, "requirements": [
+            {"requirement": "the task", "scope": "", "evidence": "only half ran", "met": true},
+        ]}),
+    );
+    let h = checked(vec![MockTurn::tool("Bash", json!({"command": "echo ok"})), unverified], "{}");
+    let mut e = h.engine_with(checking(None), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("Partly done."));
+    assert!(check_requests(&h).is_empty());
+    // In the last fifth of the time: no check.
+    let late = TimeLimit { started: Instant::now() - Duration::from_secs(900), total: Duration::from_secs(1000) };
+    let h = checked(vec![MockTurn::tool("Bash", json!({"command": "echo ok"})), finish_turn("Done.")], "{}");
+    let mut e =
+        h.engine_with(checking(Some(late)), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("task")).await.result.as_deref(), Some("Done."));
+    assert!(check_requests(&h).is_empty());
+    // Off (the engine's default): no check.
+    let h = checked(vec![MockTurn::tool("Bash", json!({"command": "echo ok"})), finish_turn("Done.")], "{}");
+    let unattended = EngineConfig { autonomous: true, ..Default::default() };
+    let mut e = h.engine_with(unattended, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("task")).await;
+    assert!(check_requests(&h).is_empty());
+}

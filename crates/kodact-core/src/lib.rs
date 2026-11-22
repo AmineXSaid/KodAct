@@ -441,6 +441,15 @@ pub(crate) fn verify_config(
     })
 }
 
+/// Whether an unattended run's Finish is checked by a separate request
+/// (`verification.finishCheck`, or `KODACT_FINISH_CHECK` for A/B runs). On by default.
+pub(crate) fn finish_check(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_FINISH_CHECK") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/verification/finishCheck").unwrap_or(true),
+    }
+}
+
 fn env_nonempty(k: &str) -> Option<String> {
     std::env::var(k).ok().filter(|v| !v.trim().is_empty())
 }
@@ -1229,6 +1238,8 @@ pub fn build_session(
         language_servers: language_servers(&settings, verify.is_some()),
         formatters: formatters(&settings, verify.is_some()),
         one_shot: opts.one_shot,
+        finish_check: autonomous && finish_check(&settings),
+        check_model: settings.str("/goalCheckModel").map(kodact_api::resolve_model),
         verify,
         escalate_output: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").is_none(),
         fast: settings.bool("/fastMode").unwrap_or(false),

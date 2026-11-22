@@ -49,6 +49,16 @@ pub(crate) const FINISH_MISSING: &str = "<system-reminder>\nThis run ends with t
      didn't call it. If the work is done, call Finish on its own: your summary, each requirement the request states \
      with the check that shows it met, and `verified`. If it isn't done, carry on with the next step.\n</system-reminder>";
 
+/// The answer to a Finish the separate check found not met: its reason, and what to do.
+pub(crate) fn check_note(reason: &str) -> String {
+    format!(
+        "<system-reminder>\nA separate check of this run's tool output found the request not met yet: {}\n\
+         Fix what it names and check it in the form the request describes, then call Finish again. If it can't be \
+         met here, call Finish with that requirement marked not met and the reason in the summary.\n</system-reminder>",
+        clip(reason)
+    )
+}
+
 /// Requirements the note names; the rest are counted.
 const NOTE_ITEMS: usize = 8;
 /// Characters of a requirement, or of its evidence, the note quotes.

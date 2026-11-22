@@ -421,8 +421,12 @@ lists one, while more than the last fifth of its `--max-time` is left (or with
 no limit), is answered with those requirements and the time left, and the run
 goes on; a Finish that lists none is asked for the list the same way. A reply
 that ends in plain text after the turn did work is asked once to call Finish,
-with the same time limit, so the result has a claim to read. `verified` is
-still the model's word, not a check KodAct ran:
+with the same time limit, so the result has a claim to read. A Finish that
+claims `verified` is then checked by a separate request, the same check as
+`/goal`'s: it reads the run's tool output as evidence and the model's words as
+claims, and a "not met" sends the model back once with the reason
+(`verification.finishCheck`). `verified` is still the model's word, not a
+check KodAct ran:
 
 ```json
 "finish": {"summary": "Fixed both bugs; the tests pass.", "verified": true, "requirements": [
@@ -757,6 +761,7 @@ listed in the system prompt's environment section.
 | `verification.enabled` | `true` | `false` turns the loop off (as does `KODACT_VERIFY=0`) |
 | `verification.commands` | detected | The project's check commands |
 | `verification.maxReminders` | `1` | Reminders per user turn |
+| `verification.finishCheck` | `true` | Unattended runs: a Finish that claims `verified` is checked by a separate request against the run's request, once a turn, while more than the last fifth of `--max-time` is left. A "not met" sends the model back with the reason; a check that fails or can't be read lets the claim stand. `goalCheckModel` picks its model. `false` (or `KODACT_FINISH_CHECK=0`) turns it off, as does `reminders: false` |
 | `verification.syntaxCheck` | `true` | `false` stops the parse check after edits (off too with the loop off) |
 | `verification.languageServer` | `false` | `true` asks a language server for the errors after an edit (below) |
 | `verification.languageServers` | built-in | Extension to command, tried before the built-in ones: `{"py": ["pylsp"]}` |

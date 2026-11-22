@@ -2,6 +2,18 @@
 
 ## 0.1.0 (unreleased)
 
+### Finish: a separate check before an unattended run ends verified
+- **A Finish that claims `verified` is checked by a separate request,** the
+  same evaluator `/goal` uses: it reads the run's tool output as evidence and
+  the model's own words as claims, against the run's request. A "not met"
+  sends the model back once with the reason; anything else lets the claim
+  stand, so the check can't cost a run that would have passed. Once a turn,
+  while more than the last fifth of `--max-time` is left.
+  `verification.finishCheck` (or `KODACT_FINISH_CHECK=0`) turns it off. All
+  13 false successes of the deep-thinking run of 2026-11-16 claimed
+  `verified`: the model graded its own work.
+- The evaluator moved to `kodact_engine::judge`; `/goal` uses it unchanged.
+
 ### Finish: no claim of verified without its parts
 - **A Finish that lists no requirements is recorded `verified: false`,** and
   so is a requirement marked met with no evidence. An empty list counted as

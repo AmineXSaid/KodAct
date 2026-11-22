@@ -296,6 +296,9 @@ const API_RETRY_RESERVE: Duration = Duration::from_secs(60);
 /// Retries of a `-p` run whose endpoint never answered and can't be reached.
 const FIRST_CONTACT_RETRIES: u32 = 3;
 
+/// Output tokens the Finish check may use: room for a reasoning model to think before its verdict.
+const CHECK_MAX_TOKENS: u32 = 8_000;
+
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     /// KodAct's own nudges to the model: the verification reminder, the loop guard, the
@@ -345,6 +348,13 @@ pub struct EngineConfig {
     pub is_subagent: bool,
     /// The verification loop; `None` turns it off. Never runs in sub-agents.
     pub verify: Option<crate::verify::VerifyConfig>,
+    /// Unattended: a Finish that claims `verified` is checked by a separate request that reads
+    /// the conversation as evidence ([`crate::judge`]), once a turn while time is left, and a
+    /// "not met" sends the model back with the reason (`verification.finishCheck`). Off by
+    /// default here; the CLI turns it on for unattended runs.
+    pub finish_check: bool,
+    /// The model that checks (`goalCheckModel`); `None` uses the session's model.
+    pub check_model: Option<String>,
     /// Tell the model, with an edit's result, when the file it wrote no longer parses
     /// (`verification.syntaxCheck`, on with the verification loop). Sub-agents keep it.
     pub edit_diagnostics: bool,
@@ -460,6 +470,8 @@ impl Default for EngineConfig {
             background_summary: false,
             is_subagent: false,
             verify: None,
+            finish_check: false,
+            check_model: None,
             edit_diagnostics: false,
             language_servers: None,
             formatters: None,
@@ -928,6 +940,10 @@ pub struct Engine {
     unmet_told: bool,
     /// An unattended reply that ended without Finish was sent back for it this turn.
     finish_asked: bool,
+    /// A Finish was checked by the separate check this turn.
+    finish_checked: bool,
+    /// This turn's request, as the person sent it: what the Finish check judges against.
+    turn_request: String,
     /// The limits this turn's request states (`nudges.limitVerdicts`, `nudges.staleDeliverables`).
     limits: crate::limits::Limits,
     /// A measurement that met every limit for its row, with the files the request asks for
@@ -1098,6 +1114,8 @@ impl Engine {
             passing_told: false,
             unmet_told: false,
             finish_asked: false,
+            finish_checked: false,
+            turn_request: String::new(),
             limits: Default::default(),
             unsaved: None,
             stale_told: 0,
@@ -3041,6 +3059,8 @@ impl Engine {
         self.passing_told = false;
         self.unmet_told = false;
         self.finish_asked = false;
+        self.finish_checked = false;
+        self.turn_request = prompt_text.clone();
         let n = &self.cfg.nudges;
         self.limits = if n.limit_verdicts || n.stale_deliverables {
             crate::limits::Limits::from_request(&prompt_text)
@@ -3834,6 +3854,15 @@ impl Engine {
             // A Finish whose claim lists requirements it doesn't show met: answered with them.
             if let Some(text) = self.unmet_note(refused) {
                 notes.push(text);
+            }
+
+            // A Finish that claims the work verified, with nothing else to say: a separate check
+            // reads the conversation as evidence (the 13 deep-thinking false successes of
+            // 2026-11-16 all claimed verified; the model grades its own work kindly).
+            if notes.is_empty() && !refused {
+                if let Some(text) = self.finish_check_note(&model, &cancel, &mut turn).await {
+                    notes.push(text);
+                }
             }
 
             if !notes.is_empty() {
@@ -4960,6 +4989,91 @@ impl Engine {
         self.system_event("verification", json!({"kind": "unmet_requirements", "unmet": listed}));
         self.notice(NoticeLevel::Info, "The finish lists requirements not shown met: asking the model to meet them.");
         Some(crate::finish::unmet_note(&unmet, clock.as_deref()))
+    }
+
+    /// The separate check of a Finish that claims `verified`: once a turn, unattended, while more
+    /// than the last fifth of the time is left. Only an explicit "not met" sends the model back;
+    /// a check that fails or can't be read lets the claim stand (the check must never cost a run
+    /// that would have passed).
+    async fn finish_check_note(
+        &mut self,
+        model: &str,
+        cancel: &CancellationToken,
+        turn: &mut TurnAcc,
+    ) -> Option<String> {
+        if !self.cfg.finish_check
+            || !self.cfg.reminders
+            || !self.cfg.autonomous
+            || self.cfg.is_subagent
+            || self.finish_checked
+            || self.turn_request.trim().is_empty()
+        {
+            return None;
+        }
+        if self.pending_finish.as_ref()?["verified"] != true {
+            return None;
+        }
+        if let Some(t) = self.cfg.time_limit.as_ref() {
+            if t.remaining() <= (t.total / 5).max(Duration::from_secs(60)) {
+                return None;
+            }
+        }
+        self.finish_checked = true;
+        let transcript = crate::judge::evaluator_transcript(&self.state.messages);
+        let state = self.verification_state().await;
+        let harness = crate::judge::harness_note(state.as_ref(), &self.watched.still_missing());
+        let user = format!(
+            "Goal: the request below is done as stated, every requirement it names met.\n\nRequest:\n{}\n\n\
+             Transcript:\n{transcript}{harness}",
+            self.turn_request.trim()
+        );
+        let check_model = self.cfg.check_model.clone().unwrap_or_else(|| model.to_string());
+        let req = MessagesRequest {
+            model: check_model.clone(),
+            max_tokens: CHECK_MAX_TOKENS,
+            messages: vec![Message::user(vec![ContentBlock::text(user)])],
+            system: vec![kodact_types::SystemBlock::text(crate::judge::EVALUATOR_PROMPT)],
+            tools: vec![],
+            tool_choice: None,
+            thinking: None,
+            temperature: None,
+            metadata: None,
+            output_config: None,
+            speed: None,
+            stream: true,
+            betas: vec![],
+            carry_reasoning: false,
+        };
+        let t0 = Instant::now();
+        let answer = kodact_api::complete(self.shared.provider.as_ref(), req, cancel).await;
+        turn.api_ms += t0.elapsed().as_millis() as u64;
+        let msg = match answer {
+            Ok(m) => m,
+            Err(e) => {
+                self.system_event(
+                    "verification",
+                    json!({"kind": "finish_check", "verdict": "error", "reason": e.to_string()}),
+                );
+                return None;
+            }
+        };
+        self.record_usage(&check_model, &msg.usage, turn);
+        let text: String = msg.content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join("");
+        // Only the checker's explicit "not met" sends the model back. A parse fallback (an answer
+        // cut off by the cap, a met without evidence) is recorded and lets the claim stand.
+        let Some(reason) = crate::judge::explicit_not_met(&text) else {
+            let (verdict, reason) = crate::judge::parse_verdict(&text);
+            let label = match verdict {
+                crate::judge::Verdict::Met => "met",
+                crate::judge::Verdict::Impossible => "impossible",
+                crate::judge::Verdict::NotMet => "unclear",
+            };
+            self.system_event("verification", json!({"kind": "finish_check", "verdict": label, "reason": reason}));
+            return None;
+        };
+        self.system_event("verification", json!({"kind": "finish_check", "verdict": "not_met", "reason": reason}));
+        self.notice(NoticeLevel::Info, format!("The finish check found the request not met yet: {reason}"));
+        Some(crate::finish::check_note(&reason))
     }
 
     /// The note for an unattended reply that ends in plain text after the turn did work: once a
