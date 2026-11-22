@@ -1415,3 +1415,44 @@ fn a_miss_says_when_the_new_text_is_already_in_the_file() {
     let e = apply_edit("a = 1\n", "a = 2", "a", false).unwrap_err();
     assert!(!e.contains("already in the file"), "{e}");
 }
+
+/// A timeout under a second is seconds written as milliseconds: refused with the value to pass,
+/// before anything runs. A real one passes.
+#[tokio::test]
+async fn a_timeout_in_seconds_is_refused_with_the_milliseconds_to_pass() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let err = Bash::default().validate(&json!({"command": "make", "timeout": 30}), &c).unwrap_err();
+    assert!(err.contains("milliseconds") && err.contains("30000"), "{err}");
+    let err = Bash::default().validate(&json!({"command": "make", "timeout": 0.5}), &c).unwrap_err();
+    assert!(err.contains("at least 1000"), "{err}");
+    assert!(Bash::default().validate(&json!({"command": "make", "timeout": 30000}), &c).is_ok());
+    assert!(Bash::default().validate(&json!({"command": "make"}), &c).is_ok());
+}
+
+/// Commands run with no pager and no git credential prompt: nobody can answer either.
+#[tokio::test]
+async fn commands_run_without_a_pager_or_a_credential_prompt() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let out = Bash::default().call(json!({"command": "echo $PAGER $GIT_PAGER $GIT_TERMINAL_PROMPT"}), &c).await;
+    assert_eq!(out.text_content(), "cat cat 0");
+}
+
+/// BashOutput saves long output in full, as Bash does, and says where.
+#[tokio::test]
+async fn background_output_too_long_to_show_is_saved_in_full() {
+    let d = tempfile::tempdir().unwrap();
+    let mut c = ctx(d.path());
+    c.spill_dir = Some(d.path().join("spill"));
+    c.max_output_chars = 1_000;
+    Bash::default().call(json!({"command": "seq 1 5000", "run_in_background": true}), &c).await;
+    let sh = c.shells.get("bash_1").unwrap();
+    tokio::time::timeout(Duration::from_secs(10), sh.wait()).await.unwrap();
+    let c = c.for_call("toolu_out", CancellationToken::new());
+    let o = BashOutput.call(json!({"bash_id": "bash_1"}), &c).await;
+    let text = o.text_content();
+    assert!(text.contains("is saved at"), "{text}");
+    let saved = std::fs::read_dir(d.path().join("spill")).unwrap().count();
+    assert!(saved >= 1);
+}

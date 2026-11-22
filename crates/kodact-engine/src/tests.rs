@@ -3263,7 +3263,7 @@ async fn c8_headless_questions_and_plans_are_answered_by_contract() {
 #[tokio::test]
 async fn the_turn_waits_for_commands_that_outlived_their_timeout() {
     let h = Harness::new(vec![]);
-    h.provider.push(MockTurn::tool("Bash", json!({"command": "echo compiling; sleep 1; echo built", "timeout": 100})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "echo compiling; sleep 2; echo built", "timeout": 1000})));
     h.provider.push(MockTurn::text("The build is still running."));
     h.provider.push(MockTurn::text("Built."));
     let mut e = h.engine();
@@ -3344,7 +3344,7 @@ async fn a_check_that_finishes_in_the_background_counts() {
     let h = Harness::new(vec![]);
     let f = h.cwd().join("a.txt");
     h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "x"})));
-    h.provider.push(MockTurn::tool("Bash", json!({"command": "sleep 1; true", "timeout": 100})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "sleep 2; true", "timeout": 1000})));
     h.provider.push(MockTurn::text("Waiting for the tests."));
     h.provider.push(MockTurn::text("Tests pass."));
     let mut e = verifying_engine(&h, &["true", "false"]);
@@ -3355,14 +3355,14 @@ async fn a_check_that_finishes_in_the_background_counts() {
 
     // One that fails counts as failed, not as passed when it moved to the background.
     h.provider.push(MockTurn::tool("Write", json!({"file_path": f, "content": "y"})));
-    h.provider.push(MockTurn::tool("Bash", json!({"command": "sleep 1; false", "timeout": 100})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "sleep 2; false", "timeout": 1000})));
     h.provider.push(MockTurn::text("Waiting for the tests."));
     h.provider.push(MockTurn::text("Done."));
     h.provider.push(MockTurn::text("Not verified: the check fails."));
     let r = e.submit(prompt("write a again")).await;
     assert_eq!((r.num_turns, r.result.as_deref()), (5, Some("Not verified: the check fails.")));
     let reminder = last_user_text(h.provider.requests().last().unwrap());
-    assert!(reminder.contains("`sleep 1; false`"), "{reminder}");
+    assert!(reminder.contains("`sleep 2; false`"), "{reminder}");
 }
 
 #[tokio::test]

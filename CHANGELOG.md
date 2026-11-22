@@ -2,6 +2,17 @@
 
 ## 0.1.0 (unreleased)
 
+### Bash: seconds caught, no pagers, background output saved
+- **A `timeout` under 1,000 is refused with the milliseconds to pass.** A
+  model that writes seconds (`timeout: 30`) sent its command to the
+  background after 30 ms and then polled it.
+- **Commands run with `PAGER=cat`, `GIT_PAGER=cat` and
+  `GIT_TERMINAL_PROMPT=0`** (the session's own variables still win): with no
+  terminal and stdin closed, a pager or a credential prompt waited until the
+  timeout.
+- **BashOutput saves long output in full and says where,** as Bash does; it
+  used to cut the middle out with no copy kept.
+
 ### Read says what it left out
 - **"Showing lines X-Y of Z" comes whenever lines remain after the range,**
   also when the model passed `limit`: a range read gave no sign the file went

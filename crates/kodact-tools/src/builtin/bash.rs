@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::str_arg;
 use crate::shells::{BackgroundShell, ShellChoice, ShellKind, ShellStatus, StartError, Stop};
-use crate::{fit_output, truncate_middle, Tool, ToolContext, ToolOutput, INTERRUPTED};
+use crate::{fit_output, Tool, ToolContext, ToolOutput, INTERRUPTED};
 use kodact_platform::shell::Os;
 
 pub const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -229,7 +229,20 @@ impl Tool for Bash {
         if let Err(m) = &ctx.shell {
             return Err(unavailable(&m.to_string()));
         }
-        crate::validate_required(&self.input_schema(), input)
+        crate::validate_required(&self.input_schema(), input)?;
+        // A timeout under a second is seconds written as milliseconds (`30` for 30 s): it would
+        // send the command to the background at once.
+        if let Some(t) = input.get("timeout").and_then(Value::as_f64).filter(|t| *t < 1000.0) {
+            let hint = if t >= 1.0 {
+                format!("For {t} seconds, pass {}.", (t * 1000.0).round() as u64)
+            } else {
+                "Pass at least 1000.".to_string()
+            };
+            return Err(format!(
+                "timeout is in milliseconds (1000 to {MAX_TIMEOUT_MS}): {t} is under a second. {hint}"
+            ));
+        }
+        Ok(())
     }
 
     fn sandboxed(&self, input: &Value, ctx: &ToolContext) -> bool {
@@ -599,8 +612,8 @@ impl Tool for BashOutput {
         ToolOutput::text(format!(
             "<status>{}</status>{code}\n<stdout>\n{}\n</stdout>\n<stderr>\n{}\n</stderr>{hint}",
             status.label(),
-            truncate_middle(out.trim_end(), ctx.max_output_chars),
-            truncate_middle(err.trim_end(), ctx.max_output_chars)
+            fit_output(ctx, out.trim_end(), ctx.max_output_chars, "stdout"),
+            fit_output(ctx, err.trim_end(), ctx.max_output_chars, "stderr")
         ))
     }
 }

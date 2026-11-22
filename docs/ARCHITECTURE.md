@@ -1153,6 +1153,13 @@ wait. They are not killed for it.
   (`bash_N`), as if started with `run_in_background`. The call returns its ID
   and the output so far (structured: `backgroundTaskId`, `stdout`, `stderr`,
   `interrupted: false`), not an error. Its working directory is not carried over.
+- **Seconds caught:** a `timeout` under 1,000 is refused before the command
+  runs, with the milliseconds to pass. It is seconds written as milliseconds
+  (`30`), and would move the command to the background at once.
+- **No waiting on a person:** every command runs with `PAGER=cat`,
+  `GIT_PAGER=cat` and `GIT_TERMINAL_PROMPT=0` (the session's own variables
+  win). Output goes to a pipe and stdin is closed, so a pager or a credential
+  prompt could only wait for the timeout.
 - **Interrupts** still kill the command's process group (C3), and so does a
   call that goes away mid-command (the session ends) unless the command moved
   to the background. `!command`, hooks and other commands KodAct runs itself
