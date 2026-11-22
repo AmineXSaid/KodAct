@@ -552,14 +552,14 @@ async fn edit_preserves_crlf_and_multiedit_is_atomic() {
     filetime_bump(&f);
     Read.call(json!({"file_path": f}), &c).await;
     let edits = json!([{"old_string": "a\nb", "new_string": "A\nB\nB2"}, {"old_string": "d", "new_string": "D"}]);
-    let out = MultiEdit.call(json!({"file_path": f, "edits": edits}), &c).await;
+    let out = MultiEdit::default().call(json!({"file_path": f, "edits": edits}), &c).await;
     assert!(!out.is_error, "{out:?}");
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "A\r\nB\r\nB2\r\nc\r\nD\r\n");
 
     std::fs::write(&f, "x y z").unwrap();
     filetime_bump(&f);
     Read.call(json!({"file_path": f}), &c).await;
-    let out = MultiEdit
+    let out = MultiEdit::default()
         .call(json!({"file_path": f, "edits": [{"old_string": "x", "new_string": "X"}, {"old_string": "nope", "new_string": "?"}]}), &c)
         .await;
     assert!(out.is_error && out.text_content().contains("Edit 2 of 2"));
@@ -1455,4 +1455,94 @@ async fn background_output_too_long_to_show_is_saved_in_full() {
     assert!(text.contains("is saved at"), "{text}");
     let saved = std::fs::read_dir(d.path().join("spill")).unwrap().count();
     assert!(saved >= 1);
+}
+
+/// MultiEdit follows Edit's `edit.withoutRead`: a file never read may be changed when every
+/// `old_string` is its exact text; one that isn't, or an option left off, still needs a Read.
+#[tokio::test]
+async fn multi_edit_without_a_read_takes_text_the_file_holds() {
+    let d = tempfile::tempdir().unwrap();
+    let f = p(d.path(), "cfg.py");
+    std::fs::write(&f, "DEBUG = True\nPORT = 80\n").unwrap();
+    let c = ctx(d.path());
+    let (strict, multi) = (MultiEdit::default(), MultiEdit { unread: true });
+    let both = json!({"file_path": f, "edits": [
+        {"old_string": "DEBUG = True", "new_string": "DEBUG = False"},
+        {"old_string": "PORT = 80", "new_string": "PORT = 8080"},
+    ]});
+    assert!(strict.validate(&both, &c).is_err(), "off by default");
+    assert!(multi.validate(&both, &c).is_ok());
+    let out = multi.call(both, &c).await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "DEBUG = False\nPORT = 8080\n");
+    let d2 = tempfile::tempdir().unwrap();
+    let g = p(d2.path(), "cfg.py");
+    std::fs::write(&g, "DEBUG = True\n").unwrap();
+    let c2 = ctx(d2.path());
+    let guessed = json!({"file_path": g, "edits": [
+        {"old_string": "DEBUG = True", "new_string": "DEBUG = False"},
+        {"old_string": "PORT = 80", "new_string": "PORT = 8080"},
+    ]});
+    assert!(multi.validate(&guessed, &c2).is_err(), "one old_string the file doesn't hold: read it first");
+}
+
+/// Line endings: a file all CRLF stays CRLF and one all LF stays LF; a file with both keeps each
+/// unchanged line's ending, and the edited lines take the one most of the file uses.
+#[tokio::test]
+async fn edits_keep_each_line_ending_in_a_mixed_file() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let run = |name: &str, body: &str| {
+        let f = p(d.path(), name);
+        std::fs::write(&f, body).unwrap();
+        c.files.record_read(std::path::Path::new(&f));
+        f
+    };
+    let edit = |f: &str| json!({"file_path": f, "old_string": "b = 2", "new_string": "b = 3\nc = 4"});
+    let all_crlf = run("crlf.txt", "a = 1\r\nb = 2\r\nz = 9\r\n");
+    Edit::default().call(edit(&all_crlf), &c).await;
+    assert_eq!(std::fs::read_to_string(&all_crlf).unwrap(), "a = 1\r\nb = 3\r\nc = 4\r\nz = 9\r\n");
+    let all_lf = run("lf.txt", "a = 1\nb = 2\nz = 9\n");
+    Edit::default().call(edit(&all_lf), &c).await;
+    assert_eq!(std::fs::read_to_string(&all_lf).unwrap(), "a = 1\nb = 3\nc = 4\nz = 9\n");
+    // Mostly LF, one CRLF line kept as it is: the edited lines take LF.
+    let mixed = run("mixed.txt", "a = 1\nh = 0\r\nb = 2\nz = 9\n");
+    let out = Edit::default().call(edit(&mixed), &c).await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(&mixed).unwrap(), "a = 1\nh = 0\r\nb = 3\nc = 4\nz = 9\n");
+    // The same through MultiEdit.
+    let mixed = run("mixed2.txt", "a = 1\r\nh = 0\r\nb = 2\nz = 9\r\n");
+    let out = MultiEdit::default()
+        .call(json!({"file_path": mixed, "edits": [{"old_string": "b = 2", "new_string": "b = 3"}]}), &c)
+        .await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(&mixed).unwrap(), "a = 1\r\nh = 0\r\nb = 3\r\nz = 9\r\n");
+    // Edits far apart keep the endings of every line between them.
+    let far = run("far.txt", "a = 1\r\nm = 0\nn = 0\nb = 2\r\n");
+    let out = MultiEdit::default()
+        .call(
+            json!({"file_path": far, "edits": [
+                {"old_string": "a = 1", "new_string": "a = 2"},
+                {"old_string": "b = 2", "new_string": "b = 3"},
+            ]}),
+            &c,
+        )
+        .await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(&far).unwrap(), "a = 2\nm = 0\nn = 0\nb = 3\n", "a tie takes LF");
+    let far = run("far2.txt", "a = 1\r\nm = 0\nb = 2\r\nz = 0\r\n");
+    MultiEdit::default()
+        .call(
+            json!({"file_path": far, "edits": [
+                {"old_string": "a = 1", "new_string": "a = 2"},
+                {"old_string": "b = 2", "new_string": "b = 3"},
+            ]}),
+            &c,
+        )
+        .await;
+    assert_eq!(std::fs::read_to_string(&far).unwrap(), "a = 2\r\nm = 0\nb = 3\r\nz = 0\r\n");
+    // A stray CR before a CRLF is an unchanged line, kept as it was.
+    let stray = run("stray.txt", "x\r\r\ny = 1\nz\n");
+    Edit::default().call(json!({"file_path": stray, "old_string": "y = 1", "new_string": "y = 2"}), &c).await;
+    assert_eq!(std::fs::read_to_string(&stray).unwrap(), "x\r\r\ny = 2\nz\n");
 }

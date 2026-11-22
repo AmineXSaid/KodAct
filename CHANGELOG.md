@@ -2,6 +2,16 @@
 
 ## 0.1.0 (unreleased)
 
+### Edit and MultiEdit: mixed line endings kept; MultiEdit without a Read
+- **A file with both CRLF and LF lines keeps the ending of every line a line
+  diff finds unchanged,** wherever the edits are; the lines an edit wrote take
+  the ending most of the file uses. One CRLF line used
+  to turn every line of the file to CRLF, a whole-file diff for a one-line
+  change. Files all CRLF or all LF are written as before.
+- **`edit.withoutRead` covers MultiEdit too:** a file never read may be
+  changed when every `old_string` is in it exactly. MultiEdit used to keep the
+  read-first rule even with the option on.
+
 ### Bash: seconds caught, no pagers, background output saved
 - **A `timeout` under 1,000 is refused with the milliseconds to pass.** A
   model that writes seconds (`timeout: 30`) sent its command to the

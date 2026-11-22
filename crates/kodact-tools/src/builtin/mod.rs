@@ -44,7 +44,7 @@ pub fn register_core(reg: &mut ToolRegistry) {
     reg.register(Arc::new(Ls));
     reg.register(Arc::new(Read));
     reg.register(Arc::new(Edit::default()));
-    reg.register(Arc::new(MultiEdit));
+    reg.register(Arc::new(MultiEdit::default()));
     reg.register(Arc::new(Write));
     reg.register(Arc::new(NotebookEdit));
     reg.register(Arc::new(TodoWrite));
@@ -75,6 +75,9 @@ pub fn set_memory_tools(reg: &mut ToolRegistry, notes: bool, checkpoint: bool) {
 pub fn set_edit_options(reg: &mut ToolRegistry, line_ranges: bool, unread: bool) {
     if line_ranges || unread {
         reg.wrap("Edit", move |_| Arc::new(Edit { line_ranges, unread }));
+    }
+    if unread {
+        reg.wrap("MultiEdit", move |_| Arc::new(MultiEdit { unread }));
     }
 }
 
