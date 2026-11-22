@@ -10,7 +10,9 @@ its own system prompt and tool descriptions.
 ## Goal
 
 `docs/GOALS.md` defines what KodAct optimizes: the best measured task success
-per model, cost and time. Every feature is built against it and measured with
+per model, cost and time. The target is a top-3 harness on Terminal-Bench, as
+the proof of the real aim: the best everyday CLI for a person's daily and
+complex problems. Every feature is built against it and measured with
 `kodact-eval` (see `KODACT.md`).
 
 ## Status
