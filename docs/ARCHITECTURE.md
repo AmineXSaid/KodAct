@@ -672,7 +672,12 @@ one reminder per turn when 3 calls (or 15% of the budget) are left. With
 `--max-time`, the first prompt states the time left, and the same reminder
 comes when a fifth of the time (at least a minute) is left. The reminder asks
 first to put back a better earlier version if the one in place tested worse,
-then to finish and report. The limit is counted from the start of the
+then to finish and report. In the last twelfth of the time (at least 90
+seconds), a last stage replaces it, once a turn (`system/time_warning`
+`{stage: "final"}`): start nothing new, make sure every file the request asks
+for is on disk in the best working version, run one quick check, then end
+(unattended: call Finish, marking what isn't met). When both are due at once,
+only the last stage is said. The limit is counted from the start of the
 session; the engine never stops on it.
 
 Tests:

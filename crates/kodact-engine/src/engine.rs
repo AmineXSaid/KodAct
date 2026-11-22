@@ -296,6 +296,9 @@ const API_RETRY_RESERVE: Duration = Duration::from_secs(60);
 /// Retries of a `-p` run whose endpoint never answered and can't be reached.
 const FIRST_CONTACT_RETRIES: u32 = 3;
 
+/// The least time the last-stage time warning leaves: room for one check and the end of the run.
+const FINAL_WARNING_FLOOR: Duration = Duration::from_secs(90);
+
 /// Files the message after compaction lists by name; the rest are counted.
 const FILES_LISTED: usize = 60;
 /// Characters those paths may take, whatever their depth.
@@ -3167,6 +3170,7 @@ impl Engine {
         let mut reasoning_cutoffs = 0;
         let mut continuing = false;
         let mut budget_warned = false;
+        let mut final_warned = false;
         let mut attempt_reminded = false;
         let mut next_step_reminders = 0u32;
         let mut todo_reminders = 0u32;
@@ -3749,8 +3753,16 @@ impl Engine {
                         self.push_user(Message::user_text(text), true, None, true);
                     }
                 }
+                if self.cfg.reminders && !final_warned && !interrupted {
+                    if let Some(text) = self.final_time_warning() {
+                        // The last stage says all the first stage's time warning would, more firmly.
+                        final_warned = true;
+                        self.system_event("time_warning", json!({"stage": "final"}));
+                        self.push_user(Message::user_text(text), true, None, true);
+                    }
+                }
                 if self.cfg.reminders && !budget_warned && !interrupted {
-                    if let Some(text) = self.budget_warning(turn.api_calls) {
+                    if let Some(text) = self.budget_warning(turn.api_calls, final_warned) {
                         budget_warned = true;
                         self.push_user(Message::user_text(text), true, None, true);
                     }
@@ -4125,9 +4137,34 @@ impl Engine {
         self.todo_reminder_due()
     }
 
+    /// The last stage of the time warning: a twelfth of `--max-time` left, and at least 90
+    /// seconds. Past the first warning's "wrap up", a run still mid-change when the clock stops it
+    /// keeps whatever is on disk then: 24 of the 41 failures of the quick-thinking Harbor run of
+    /// 2026-11-17 were timeouts. Said once a turn.
+    fn final_time_warning(&self) -> Option<String> {
+        let t = self.cfg.time_limit.as_ref()?;
+        let left = t.remaining();
+        if left > (t.total / 12).max(FINAL_WARNING_FLOOR) || left.is_zero() {
+            return None;
+        }
+        let end = if self.cfg.autonomous && self.shared.tools.get(crate::finish::NAME).is_some() {
+            "call Finish, marking what isn't met"
+        } else {
+            "end with what is done, what was verified and what remains"
+        };
+        Some(format!(
+            "<system-reminder>\nAbout {} of the run's time left (--max-time): the run stops at the limit, wherever \
+             you are. Start nothing new. Make sure every file the request asks for is on disk now, in the best \
+             working version you have (put back a better one you tested, if the current one is worse or broken), \
+             run one quick check of it, then {end}.\n</system-reminder>",
+            about(left)
+        ))
+    }
+
     /// A heads-up when this run's turn, spending or time limit is close (GOALS pillar 5), so the model
     /// wraps up with a report instead of being cut off mid-change.
-    fn budget_warning(&self, calls: u32) -> Option<String> {
+    /// Past the last stage of the time warning (`time_told`), only the turn and spending limits.
+    fn budget_warning(&self, calls: u32, time_told: bool) -> Option<String> {
         let turns_left = self.cfg.max_turns.filter(|m| *m >= 6).map(|m| m.saturating_sub(calls)).filter(|l| *l <= 3);
         let money_left = self
             .cfg
@@ -4139,7 +4176,7 @@ impl Engine {
             .cfg
             .time_limit
             .map(|t| (t.remaining(), t.total))
-            .filter(|(left, total)| *left <= (*total / 5).max(Duration::from_secs(60)))
+            .filter(|(left, total)| !time_told && *left <= (*total / 5).max(Duration::from_secs(60)))
             .map(|(left, _)| left);
         let what = match (turns_left, money_left, time_left) {
             (Some(t), _, _) => {

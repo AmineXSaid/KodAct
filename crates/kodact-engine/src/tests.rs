@@ -2449,9 +2449,31 @@ async fn the_model_is_told_the_time_limit_and_warned_near_the_end() {
     let r = e.submit(prompt("job")).await;
     assert_eq!(r.result.as_deref(), Some("wrapped up"), "the host enforces the limit, not the engine");
     let reqs = h.provider.requests();
-    let warned: Vec<usize> = (0..reqs.len()).filter(|&i| last_user_text(&reqs[i]).contains("Wrap up")).collect();
+    // In the last twelfth (at least 90 seconds), the last stage says it instead, once.
+    let warned: Vec<usize> =
+        (0..reqs.len()).filter(|&i| last_user_text(&reqs[i]).contains("Start nothing new")).collect();
     assert_eq!(warned, vec![1], "once");
     assert!(last_user_text(&reqs[1]).contains("less than a minute of the run's time left (--max-time)"));
+    assert!(reqs.iter().all(|r| !last_user_text(r).contains("Wrap up")), "not both");
+
+    // A fifth of the time left, but more than the last stage's share: the first stage only.
+    let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "echo 1"})), MockTurn::text("wrapped up")]);
+    let limit = TimeLimit { started: Instant::now() - Duration::from_secs(850), total: Duration::from_secs(1000) };
+    let cfg = EngineConfig { time_limit: Some(limit), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("job")).await;
+    let reqs = h.provider.requests();
+    assert!(last_user_text(&reqs[1]).contains("Wrap up"));
+    assert!(reqs.iter().all(|r| !last_user_text(r).contains("Start nothing new")));
+
+    // Unattended, the last stage ends with Finish.
+    let h = Harness::new(vec![MockTurn::tool("Bash", json!({"command": "echo 1"})), finish_turn("done")]);
+    let limit = TimeLimit { started: Instant::now() - Duration::from_secs(940), total: Duration::from_secs(1000) };
+    let cfg = EngineConfig { autonomous: true, time_limit: Some(limit), ..Default::default() };
+    let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("job")).await;
+    let note = last_user_text(&h.provider.requests()[1]);
+    assert!(note.contains("Start nothing new") && note.contains("call Finish"), "{note}");
 }
 
 fn retrying(time_limit: Option<TimeLimit>) -> EngineConfig {

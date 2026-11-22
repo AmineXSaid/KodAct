@@ -2,6 +2,15 @@
 
 ## 0.1.0 (unreleased)
 
+### A last-stage time warning
+- **In the last twelfth of `--max-time` (at least 90 seconds), the model is
+  told once more, more firmly:** start nothing new, make sure every file the
+  request asks for is on disk in the best working version, check it once,
+  then end (unattended: call Finish). The run stops at the limit wherever it
+  is, and keeps only what is on disk then: 24 of the 41 failures of the
+  quick-thinking Harbor run of 2026-11-17 were timeouts. The first warning, at
+  a fifth, is unchanged; when both are due at once only the last is said.
+
 ### Compaction on reasoning models
 - **A session whose replies carry reasoning is asked for its summary
   directly,** without the written `<analysis>` pass. On 2026-11-17, 34 of 35
