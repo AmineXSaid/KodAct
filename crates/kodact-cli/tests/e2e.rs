@@ -637,7 +637,9 @@ async fn autonomous_runs_have_no_question_tools_and_attempt_first() {
     let reqs = api.requests();
     let tools: Vec<String> =
         reqs[0]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
-    for gone in ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"] {
+    for gone in
+        ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "CronCreate", "CronList", "CronDelete", "ScheduleWakeup"]
+    {
         assert!(!tools.iter().any(|t| t == gone), "{gone} in {tools:?}");
     }
     assert!(tools.iter().any(|t| t == "Bash"));

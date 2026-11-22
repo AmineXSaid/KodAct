@@ -170,7 +170,9 @@ the files as they are then). Other slash commands and `!shell` lines aren't scan
   - `--max-budget-usd X` caps spend; it fails closed when the model's pricing
     is unknown;
   - `--autonomous` (or `KODACT_AUTONOMOUS=1`) is for runs nobody watches. It
-    removes the question and plan-approval tools, tells the model to finish
+    removes the question, plan-approval and scheduling tools (Cron*,
+    ScheduleWakeup: `/loop` and scheduled prompts need a run without
+    `--autonomous`), tells the model to finish
     without asking, reminds it once to make a real attempt if it tries to
     end a turn without using any tool, and retries model calls that fail for a
     reason that passes (rate limit, overload, server error, lost connection)

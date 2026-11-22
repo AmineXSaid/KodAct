@@ -2,6 +2,18 @@
 
 ## 0.1.0 (unreleased)
 
+### Unattended runs: no stop-and-ask rule, no scheduling tools, no TodoWrite push
+- **The attended rule "tell the user what is missing" is left out of
+  unattended runs,** which were also told to install what is missing: two
+  rules that disagreed.
+- **CronCreate, CronList, CronDelete and ScheduleWakeup are left out:**
+  nobody comes back after the run. On 2026-11-17 a quick-thinking run
+  scheduled a wake-up to check its background job and hit the time limit
+  waiting. So `/loop` and scheduled prompts aren't available with
+  `--autonomous`; run them without it.
+- **The unattended section no longer asks for TodoWrite;** TodoWrite stays
+  available.
+
 ### WebFetch: the page itself on request, error pages quoted, scheme-less URLs
 - **`prompt` is optional.** Without one, WebFetch returns the page itself
   (cut when long, saved in full to a file) and makes no second model call:

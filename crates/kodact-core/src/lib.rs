@@ -1016,6 +1016,9 @@ pub fn build_session(
     if autonomous {
         // Nobody answers questions or approves plans in an unattended run.
         removed.extend(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"].map(String::from));
+        // Nor does anyone come back later: a task scheduled for after the run never runs, and a
+        // wake-up waits out the clock (rstan-to-pystan, 2026-11-17: one ScheduleWakeup, then the time limit).
+        removed.extend(["CronCreate", "CronList", "CronDelete", "ScheduleWakeup"].map(String::from));
     }
     tools.retain(|n| !removed.iter().any(|r| Rule::parse(r).map(|rule| rule.covers_tool(n)).unwrap_or(false)));
 

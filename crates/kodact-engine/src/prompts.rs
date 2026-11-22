@@ -17,6 +17,13 @@ const BUILTIN: &[(&str, &str)] = &[
 /// (docs/research/harness-study); this one is measured against the full one before it replaces it.
 const SHORT: &str = include_str!("../prompts/short.md");
 
+/// The rule of `03-tools.md` that sends an attended run back to the user when the environment
+/// lacks something; left out of unattended runs.
+const ATTENDED_MISSING_RULE: &str =
+    "- When a tool reports that the environment can't do something (no shell, a missing \
+program, no permission), don't keep trying variations: tell the user what is missing and how to fix it, and continue \
+with what still works.\n";
+
 /// The section added for unattended runs (`--autonomous`).
 pub const AUTONOMOUS: &str = include_str!("../prompts/05-autonomous.md");
 /// The task-list section (`nudges.todoTracking`): the reference CLI asks for the list on work with
@@ -161,6 +168,9 @@ pub fn build_system(opts: &SystemPromptOptions, env: &EnvInfo) -> (Vec<SystemBlo
         base.push_str(&format!("\n\n# Output style\n\n{style}"));
     }
     if opts.autonomous {
+        // Nobody can fix the environment for an unattended run: the attended rule to stop and say
+        // what is missing contradicts the unattended section's "install it".
+        base = base.replace(ATTENDED_MISSING_RULE, "");
         base.push_str("\n\n");
         base.push_str(AUTONOMOUS.trim());
     }
@@ -268,6 +278,20 @@ mod tests {
             assert!(t.contains("build a large file in parts, rather than composing all of it in your reasoning"));
             assert!(t.contains("that output holds exactly it: no extra lines"));
         }
+    }
+
+    #[test]
+    fn an_unattended_run_is_not_told_to_stop_at_a_missing_program() {
+        assert!(
+            BUILTIN.iter().any(|(_, t)| t.contains(ATTENDED_MISSING_RULE)),
+            "the rule is in 03-tools.md as written"
+        );
+        let (b, _) = build_system(&SystemPromptOptions::default(), &env());
+        assert!(b[0].text.contains("tell the user what is missing"));
+        let (b, _) = build_system(&SystemPromptOptions { autonomous: true, ..Default::default() }, &env());
+        assert!(!b[0].text.contains("tell the user what is missing"), "{}", b[0].text);
+        assert!(b[0].text.contains("Install them"));
+        assert!(!b[0].text.contains("Plan multi-step work with TodoWrite"));
     }
 
     /// A run (231fd6b): one approach lost every game in seven tries (replies 44 to 79),

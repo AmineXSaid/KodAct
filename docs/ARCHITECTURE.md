@@ -1084,12 +1084,16 @@ and the reloads keep them. Session end gives them 3 s, then aborts them.
 For runs nobody watches: benchmarks, CI, scripts. Turned on by `--autonomous`,
 `KODACT_AUTONOMOUS=1` or the `autonomous` setting.
 - **Tools:** AskUserQuestion, EnterPlanMode and ExitPlanMode are removed, since
-  nobody answers questions or approves plans.
+  nobody answers questions or approves plans, and so are CronCreate, CronList,
+  CronDelete and ScheduleWakeup: nobody comes back after the run, and a
+  wake-up waits out the clock.
 - **Prompt:** the system prompt gains a "Running unattended" section
-  (`prompts/05-autonomous.md`):
+  (`prompts/05-autonomous.md`), and loses the attended rule of
+  `03-tools.md` to stop and tell the user what the environment lacks (the
+  unattended section says to install it):
   - pick a reasonable reading and go on, instead of asking;
   - make a real attempt before concluding something can't be done;
-  - plan with TodoWrite and finish every step;
+  - finish every step;
   - when improving something by trial, keep the best tested version in place
     (try new ones on a copy) and put it back if a change made things worse;
     note each attempt's result, and after three attempts in a row at one idea
