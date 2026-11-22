@@ -82,7 +82,9 @@ Each pillar lists what KodAct does about it and what shows that it works.
     model (task `layer-order`);
   - no repeated reads: reading the same range of unchanged content returns a
     short note. That stops once the earlier result was cleared by compaction;
-  - memory files and the task list re-attached after compaction;
+  - memory files, the task list and the files read or written re-attached
+    after compaction; a model whose replies carry reasoning is asked for its
+    summary without the written analysis pass;
   - the person's requests carried word for word through every compaction and
     a resume, within a tenth of the model's window, whatever the summary kept
     (task `deliverable-after-compaction`);

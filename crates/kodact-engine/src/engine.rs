@@ -296,6 +296,11 @@ const API_RETRY_RESERVE: Duration = Duration::from_secs(60);
 /// Retries of a `-p` run whose endpoint never answered and can't be reached.
 const FIRST_CONTACT_RETRIES: u32 = 3;
 
+/// Files the message after compaction lists by name; the rest are counted.
+const FILES_LISTED: usize = 60;
+/// Characters those paths may take, whatever their depth.
+const FILES_CHARS: usize = 3_000;
+
 /// Output tokens the Finish check may use: room for a reasoning model to think before its verdict.
 const CHECK_MAX_TOKENS: u32 = 8_000;
 
@@ -942,6 +947,9 @@ pub struct Engine {
     finish_asked: bool,
     /// A Finish was checked by the separate check this turn.
     finish_checked: bool,
+    /// A reply of this session carried reasoning: its summaries are asked for directly, without
+    /// the written analysis pass (`kodact_compact::summary_instruction_for`).
+    reasoning_seen: bool,
     /// This turn's request, as the person sent it: what the Finish check judges against.
     turn_request: String,
     /// The limits this turn's request states (`nudges.limitVerdicts`, `nudges.staleDeliverables`).
@@ -1115,6 +1123,7 @@ impl Engine {
             unmet_told: false,
             finish_asked: false,
             finish_checked: false,
+            reasoning_seen: false,
             turn_request: String::new(),
             limits: Default::default(),
             unsaved: None,
@@ -1405,6 +1414,56 @@ impl Engine {
             notes
         };
         Some(format!("Your notes (the Notes tool) at the time of compaction. Keep them up to date:\n{body}"))
+    }
+
+    /// The files this session read or wrote that still exist, for the message after compaction:
+    /// a summary may drop a path, and the model then guesses it or searches again. Paths only,
+    /// at most [`FILES_LISTED`], relative to the project where they are inside it.
+    fn files_context(&self) -> Option<String> {
+        let root = &self.shared.tool_ctx.project_dir;
+        let mut files: Vec<String> = self
+            .shared
+            .tool_ctx
+            .files
+            .touched()
+            .into_iter()
+            .filter(|p| p.is_file())
+            .map(|p| p.strip_prefix(root).map(|r| r.to_path_buf()).unwrap_or(p).display().to_string())
+            .collect();
+        if files.is_empty() {
+            return None;
+        }
+        files.sort();
+        // At most FILES_LISTED paths and FILES_CHARS characters, whichever comes first.
+        let mut kept = 0;
+        let mut chars = 0;
+        for f in &files {
+            if kept == FILES_LISTED || chars + f.len() > FILES_CHARS {
+                break;
+            }
+            chars += f.len() + 3;
+            kept += 1;
+        }
+        let more = files.len() - kept;
+        files.truncate(kept);
+        if files.is_empty() {
+            return None;
+        }
+        let mut text = format!(
+            "Files you read or wrote before compaction (they are on disk; Read one again before editing it):\n- {}",
+            files.join("\n- ")
+        );
+        if more > 0 {
+            text.push_str(&format!("\n- and {more} more"));
+        }
+        Some(text)
+    }
+
+    /// Do this session's replies carry reasoning? Seen in a reply, or in the history a resumed
+    /// session brought back.
+    fn reasons(&self) -> bool {
+        self.reasoning_seen
+            || self.state.messages.iter().any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::Thinking { .. })))
     }
 
     /// The current task list, for re-attaching after compaction (GOALS pillar 5).
@@ -1998,7 +2057,7 @@ impl Engine {
     /// Start writing the summary of the conversation as it stands (see `crate::held`).
     fn start_held(&mut self, model: &str) {
         let mut req = self.build_request(model);
-        let ask = ContentBlock::text(kodact_compact::summary_instruction(None));
+        let ask = ContentBlock::text(kodact_compact::summary_instruction_for(None, self.reasons()));
         match req.messages.last_mut() {
             Some(last) if last.role == kodact_types::Role::User => last.content.push(ask),
             _ => req.messages.push(Message::user(vec![ask])),
@@ -2187,8 +2246,9 @@ impl Engine {
         if let Some(n) = notes {
             req.messages = vec![Message::user(vec![ContentBlock::text(n)])];
         }
-        let ask = ContentBlock::text(kodact_compact::summary_instruction(
+        let ask = ContentBlock::text(kodact_compact::summary_instruction_for(
             Some(extra.as_str()).filter(|e| !e.trim().is_empty()),
+            self.reasons(),
         ));
         match req.messages.last_mut() {
             Some(last) if last.role == kodact_types::Role::User => last.content.push(ask),
@@ -2313,6 +2373,7 @@ impl Engine {
             .iter()
             .cloned()
             .chain(self.plan_context())
+            .chain(self.files_context())
             .chain(self.notes_context(self.compact_window(model)))
             .chain(self.handle.skills_context())
             .collect();
@@ -2681,8 +2742,10 @@ impl Engine {
         let cancel = self.new_turn_token();
         let mut req = self.build_request(&model);
         let mut slice = normalize(&self.state.messages[from..to], &self.state.microcompacted);
-        let ask =
-            ContentBlock::text(kodact_compact::summary_instruction(instructions.filter(|i| !i.trim().is_empty())));
+        let ask = ContentBlock::text(kodact_compact::summary_instruction_for(
+            instructions.filter(|i| !i.trim().is_empty()),
+            self.reasons(),
+        ));
         match slice.last_mut() {
             Some(last) if last.role == kodact_types::Role::User => last.content.push(ask),
             _ => slice.push(Message::user(vec![ask])),
@@ -3448,6 +3511,7 @@ impl Engine {
                     _ => 0,
                 })
                 .sum();
+            self.reasoning_seen |= self.last_thought > 0;
             if tool_uses.is_empty() && !reply_has_text {
                 self.effort_step(crate::effort_loop::Step::AllThinking);
             } else {

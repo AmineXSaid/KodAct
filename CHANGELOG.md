@@ -2,6 +2,16 @@
 
 ## 0.1.0 (unreleased)
 
+### Compaction on reasoning models
+- **A session whose replies carry reasoning is asked for its summary
+  directly,** without the written `<analysis>` pass. On 2026-11-17, 34 of 35
+  summaries of a 100k-window reasoning model reasoned to the output cap and
+  wrote nothing, 10 to 15 minutes lost each time; the prompt had asked it to
+  think the whole conversation through first. Models without reasoning keep
+  the pass.
+- **The files read or written come back by name after compaction** (at most
+  60, the rest counted), so a path the summary dropped isn't guessed again.
+
 ### Finish: a separate check before an unattended run ends verified
 - **A Finish that claims `verified` is checked by a separate request,** the
   same evaluator `/goal` uses: it reads the run's tool output as evidence and

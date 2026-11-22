@@ -4941,3 +4941,46 @@ async fn the_finish_check_never_holds_back_a_run_it_cannot_judge() {
     e.submit(prompt("task")).await;
     assert!(check_requests(&h).is_empty());
 }
+
+/// A session whose replies carry reasoning is asked for its summary directly; one without keeps
+/// the written analysis pass. After compaction, the files read or written are listed by name.
+#[tokio::test]
+async fn summaries_of_a_reasoning_model_skip_the_analysis_pass_and_files_come_back_by_name() {
+    use kodact_types::StopReason;
+    let run = |reasons: bool| async move {
+        let step = |cmd: &str, used: u64| {
+            let mut blocks = vec![];
+            if reasons {
+                blocks.push(ContentBlock::Thinking { thinking: "think about the step".into(), signature: "s".into() });
+            }
+            blocks.push(ContentBlock::ToolUse {
+                id: format!("toolu_{used}"),
+                name: "Bash".into(),
+                input: json!({"command": cmd}),
+                cache_control: None,
+                provider: None,
+            });
+            MockTurn::blocks(blocks, StopReason::ToolUse).with_usage(usage(used))
+        };
+        let h = responding(vec![], "<summary>what happened</summary>");
+        std::fs::create_dir_all(h.cwd()).unwrap();
+        let notes = h.cwd().join("notes.txt");
+        std::fs::write(&notes, "data\n").unwrap();
+        h.provider.push(MockTurn::tool("Read", json!({"file_path": notes})));
+        h.provider.push(step("echo first-step", 12_500));
+        h.provider.push(step("echo second-step", 15_500));
+        h.provider.push(MockTurn::text("done"));
+        let mut e = h.engine_with(small_window(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        e.submit(prompt("run the steps")).await;
+        let reqs = h.provider.requests();
+        let summary = reqs.iter().find(|r| r.tool_choice == Some(json!({"type": "none"}))).expect("a summary").clone();
+        let after = reqs.iter().rfind(|r| r.tool_choice.is_none()).unwrap().clone();
+        (last_user_text(&summary), serde_json::to_string(&after.messages).unwrap())
+    };
+    let (ask, after) = run(true).await;
+    assert!(!ask.contains("<analysis> tags"), "{ask}");
+    assert!(ask.contains("keeping your reasoning short"), "{ask}");
+    assert!(after.contains("Files you read or wrote before compaction") && after.contains("notes.txt"), "{after}");
+    let (ask, _) = run(false).await;
+    assert!(ask.contains("<analysis> tags"), "a model that doesn't reason keeps the pass: {ask}");
+}

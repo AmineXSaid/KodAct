@@ -136,12 +136,30 @@ pub fn estimate_sent_tokens(messages: &[Message], with_reasoning: bool) -> u64 {
 
 /// The instruction appended to the conversation to ask for a summary.
 pub fn summary_instruction(custom: Option<&str>) -> String {
+    summary_instruction_for(custom, false)
+}
+
+/// [`summary_instruction`], for a model whose replies carry reasoning (`reasons`): it is asked for
+/// the summary directly, without the written `<analysis>` pass. Such a model already reasons
+/// before it writes, and asked to think the whole conversation through first it spent its reply
+/// doing so: on 2026-11-17, 34 of 35 summaries of a 100k-window reasoning model ended at the
+/// output cap with reasoning only (20k to 30k tokens each) and no summary written.
+pub fn summary_instruction_for(custom: Option<&str>, reasons: bool) -> String {
+    let start = if reasons {
+        "Write the summary now, inside <summary> tags, keeping your reasoning short: the summary is what \
+         counts, and the conversation is in front of you. Use these sections:\n\n"
+    } else {
+        "First think through the conversation in order inside <analysis> tags: what the user asked for at each \
+         point, what you did, the decisions made, the files touched, the errors met and how they were fixed, and \
+         any feedback the user gave. Then write the summary inside <summary> tags with these sections:\n\n"
+    };
     let mut s = String::from(
         "Stop working on the task for a moment. The conversation is about to be replaced by a summary of it, \
-         and you will continue from that summary alone, so write it now. Do not call any tools.\n\n\
-         First think through the conversation in order inside <analysis> tags: what the user asked for at each \
-         point, what you did, the decisions made, the files touched, the errors met and how they were fixed, and \
-         any feedback the user gave. Then write the summary inside <summary> tags with these sections:\n\n\
+         and you will continue from that summary alone, so write it now. Do not call any tools.\n\n",
+    );
+    s.push_str(start);
+    s.push_str(
+        "\
          1. Goal: what the user wants overall, and any constraints or preferences they stated.\n\
          2. Key facts: technologies, conventions and decisions that matter for continuing.\n\
          3. Files: every file read, created or changed, why it matters, and the essential code (signatures, the \

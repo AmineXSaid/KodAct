@@ -306,6 +306,15 @@ what follows it.
   this session, the task list, the last thing the model wrote, and the
   cut-off analysis when there is one), with `system/compact_fallback`. The
   person's requests come with it, as with every summary.
+- A session whose replies carry reasoning is asked for its summary directly,
+  without the written `<analysis>` pass the prompt asks of other models: it
+  reasons before writing anyway, and asked to think the whole conversation
+  through first it spent its reply doing so (the 34 cut-off summaries above).
+  A model without reasoning keeps the pass.
+- After any compaction, the first message lists the files the session read or
+  wrote that still exist (at most 60 by name and 3,000 characters, the rest
+  counted), so a path the
+  summary dropped isn't guessed or searched for again.
 - A summary asks for the lowest reasoning level (`low`) wherever a level is sent, and always
   to an OpenAI-compatible endpoint: summarizing doesn't need depth, and at full depth a
   reasoning model could spend the whole budget thinking and return no summary.
