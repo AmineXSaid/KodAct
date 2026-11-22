@@ -2,6 +2,11 @@
 
 ## 0.1.0 (unreleased)
 
+### Loop guard: a reworded description is the same call
+- **The same command with a different Bash `description` counts as a
+  repeat.** The description is free text; a model that rewords it each time
+  ran the same failing command again and again without a reminder.
+
 ### Edit and MultiEdit: mixed line endings kept; MultiEdit without a Read
 - **A file with both CRLF and LF lines keeps the ending of every line a line
   diff finds unchanged,** wherever the edits are; the lines an edit wrote take

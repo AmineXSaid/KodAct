@@ -138,7 +138,8 @@ Each pillar lists what KodAct does about it and what shows that it works.
     - Read's line-number prefixes copied into `old_string`;
     - otherwise the closest window, scored.
     Ambiguous matches name their lines.
-  - Stuck-loop detection: the same failing call three times, the same result
+  - Stuck-loop detection (a call is its tool and input, a Bash call's
+    free-text `description` left out): the same failing call three times, the same result
     three times, edits that undo each other, or five failures in a row each
     trigger a reminder to change approach, told again at 5 and at 8 when the
     repeat goes on. After the first reminder, the same
