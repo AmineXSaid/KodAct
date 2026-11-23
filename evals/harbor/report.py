@@ -214,7 +214,7 @@ def short_exception(message: str) -> str:
 # never ran ("didn't run": its container didn't start, or its setup failed or ran out of time, as
 # when endpoint_gate.py holds a trial while the model endpoint doesn't answer). None says anything
 # about the agent; each is listed in the report to run again.
-INVALID = ("api error", "verifier error", "didn't run")
+INVALID = ("api error", "verifier error", "didn't run", "not judged")
 
 # Docker had no address range left for the trial's network (2026-11-19: 11 of 12 trials of one
 # job, run beside another job, while networks of earlier, killed trials were still there). The
@@ -428,6 +428,12 @@ class Trial:
             if DOCKER_NO_NETWORKS in self.exception_message:
                 return NO_NETWORKS_VERDICT
             return f"didn't run ({self.exception})"
+        # The trial was cancelled (the job stopped, Ctrl-C) before its tests ran: no reward, so the
+        # work was never judged. It used to fall through to "false success" whenever the agent had
+        # ended cleanly (torch-pipeline-parallelism, 2026-11-23), the very count an A/B of the
+        # Finish check reads.
+        if self.reward is None and self.exception == "CancelledError":
+            return "not judged (cancelled before the tests ran)"
         # Out of time: killed by Harbor at the limit, or stopped by KodAct itself (`--max-time`).
         if self.exception == "AgentTimeoutError" or self.stop_reason == "max_time":
             return "timeout"

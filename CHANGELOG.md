@@ -2,6 +2,20 @@
 
 ## 0.1.0 (unreleased)
 
+### Measuring: a cancelled trial is not judged, and the terminal-UI cases see the UI again
+- **The Harbor report no longer counts a cancelled trial as a false success.**
+  A trial whose job was stopped after its agent ended but before its tests
+  ran has no reward, and it fell through to "false success" whenever the
+  agent had ended cleanly (torch-pipeline-parallelism, 2026-11-23): the very
+  count an A/B of the Finish check reads. It is now "not judged", outside
+  the score and listed to run again.
+- **`evals/context-window/`'s terminal-UI cases find the UI ready again.**
+  They waited for the old input box words ("Default", "Type", "Ask"); since
+  the welcome-page redesign the box reads "What shall we build?" and the
+  mode "Manual", so every case waited 40 s and reported no ready time, and
+  the 14 cases that time startup failed whatever KodAct did (the same on
+  2733223). They now find the box by its own words and key hints.
+
 ### A process lookup is not a check
 - **`pgrep`, `pkill`, `ps`, `pidof`, `kill` and the like are never checks,
   and they change no file.** The verification loop read the pattern of

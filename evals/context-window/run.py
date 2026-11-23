@@ -66,7 +66,11 @@ def tui(case, prompts=("hello",), wait=3.0):
     ready = None
     while time.time() - t0 < 40:
         s = tmux("capture-pane", "-p", "-t", "ct")
-        if "❯" in s and ("Default" in s or "Type" in s or "Ask" in s):
+        # Ready: the input box is drawn. Since the welcome-page redesign its placeholder is "What
+        # shall we build?" and the mode reads "Manual", so the older words ("Default", "Type",
+        # "Ask") never showed and every case timed out at 40 s; the key hints below the box
+        # ("shift+tab  mode") are drawn with it.
+        if "❯" in s and ("shift+tab" in s or "What shall we build" in s or "Default" in s or "Type" in s or "Ask" in s):
             ready = round(time.time() - t0, 2); break
         time.sleep(0.1)
     screen0 = tmux("capture-pane", "-p", "-t", "ct")
