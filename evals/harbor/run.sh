@@ -44,6 +44,8 @@
 #                         endpoint drops it (carryReasoning; job name gets -carry)
 #   KODACT_NUDGES          the nudges on in every task (job name gets -n-<list>, so an A/B of
 #                         nudges off and on is two jobs told apart by name)
+#   KODACT_FINISH_CHECK    0: no separate check of a Finish that claims verified (job name gets
+#                         -nofinishcheck, so its A/B is two jobs told apart by name)
 #   KODACT_*               endpoint, key and limits, passed into the containers
 # Anything after the mode goes to `harbor run` (e.g. -i 'some-task*').
 set -euo pipefail
@@ -96,6 +98,8 @@ ca=""
 [ -n "${KODACT_HARBOR_TIME_LIMIT:-}" ] && ca="${ca}-time$(printf '%s' "$KODACT_HARBOR_TIME_LIMIT" | tr -c 'A-Za-z0-9' '.')"
 # As kodact reads it: set and not 0, false, no or off.
 case "${KODACT_CARRY_REASONING:-}" in ""|0|false|no|off) ;; *) ca="${ca}-carry" ;; esac
+# As kodact reads it: 0, false, no or off turn the check off; unset or anything else leaves it on.
+case "${KODACT_FINISH_CHECK:-}" in 0|false|no|off) ca="${ca}-nofinishcheck" ;; esac
 [ -n "${KODACT_NUDGES:-}" ] && ca="${ca}-n-$(printf '%s' "$KODACT_NUDGES" | tr -c 'A-Za-z0-9' '.')"
 # The agent splits KODACT_HARBOR_ARGS as bash would (shell_args.py: '…', "…", $'…' from printf '%q',
 # backslashes). An unclosed quote crashed every trial at its start (2026-11-18, "No closing
