@@ -18,7 +18,9 @@ mod write;
 
 use std::sync::Arc;
 
-pub use bash::{exit_notice, exit_notice_with, still_running_notice, Bash, BashOutput, KillShell};
+pub use bash::{
+    command_is_read_only, exit_notice, exit_notice_with, still_running_notice, Bash, BashOutput, KillShell,
+};
 pub use edit::{apply_edit, apply_edit_near, apply_line_edit, Edit, MultiEdit};
 pub use glob::Glob;
 pub use grep::Grep;

@@ -91,6 +91,23 @@ def test_plain_wrong_answer_is_false_success(tmp_path):
     assert "flagged" not in t.details(), "nothing flagged when the result names nothing"
 
 
+def test_a_trial_cancelled_before_its_tests_is_not_judged(tmp_path):
+    # Shaped like torch-pipeline-parallelism, 2026-11-23: the agent ended cleanly, then the job was
+    # stopped before the verifier ran. No reward: not a false success, and outside the score.
+    t = make_trial(tmp_path, "torch-pipeline-parallelism", "", "", ran_tests=None)
+    (t.path / "verifier" / "reward.txt").unlink()
+    exc = {"exception_type": "CancelledError", "exception_message": "", "exception_traceback": ""}
+    (t.path / "result.json").write_text(json.dumps({"task_name": "torch-pipeline-parallelism", "exception_info": exc}))
+    t = report.Trial(t.path)
+    assert t.reward is None
+    assert t.verdict.startswith("not judged"), t.verdict
+    assert t.verdict.startswith(report.INVALID)
+    # A cancelled trial that the verifier did judge keeps its verdict.
+    j = make_trial(tmp_path / "judged", "kv-store-grpc", "1", "", ran_tests=None)
+    (j.path / "result.json").write_text(json.dumps({"task_name": "kv-store-grpc", "exception_info": exc}))
+    assert report.Trial(j.path).verdict == "passed"
+
+
 def test_a_finish_that_says_not_verified_is_an_honest_failure(tmp_path):
     # gpt2-codegolf with the clock, 2026-11-16: the run ended with Finish, `verified: false`, and
     # its summary said the output was incorrect. A failure, not a success claimed.

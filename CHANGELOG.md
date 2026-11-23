@@ -2,6 +2,36 @@
 
 ## 0.1.0 (unreleased)
 
+### Measuring: a cancelled trial is not judged, and the terminal-UI cases see the UI again
+- **The Harbor report no longer counts a cancelled trial as a false success.**
+  A trial whose job was stopped after its agent ended but before its tests
+  ran has no reward, and it fell through to "false success" whenever the
+  agent had ended cleanly (torch-pipeline-parallelism, 2026-11-23): the very
+  count an A/B of the Finish check reads. It is now "not judged", outside
+  the score and listed to run again.
+- **`evals/context-window/`'s terminal-UI cases find the UI ready again.**
+  They waited for the old input box words ("Default", "Type", "Ask"); since
+  the welcome-page redesign the box reads "What shall we build?" and the
+  mode "Manual", so every case waited 40 s and reported no ready time, and
+  the 14 cases that time startup failed whatever KodAct did (the same on
+  2733223). They now find the box by its own words and key hints.
+
+### A process lookup is not a check
+- **`pgrep`, `pkill`, `ps`, `pidof`, `kill` and the like are never checks,
+  and they change no file.** The verification loop read the pattern of
+  `pgrep -af "python3 server.py"` as a run of server.py: on kv-store-grpc
+  (Terminal-Bench, 2026-11-23) pgrep wasn't installed, the lookup ended 127,
+  and the model was told "the last check failed" after its Finish and sent
+  back to explain. Left out of the checks, a lookup also isn't taken for a
+  shell change, without touching the Bash tool's read-only list (it decides
+  permission prompts).
+- **A check whose own program isn't installed ran nothing** (exit 127 with
+  `<program>: command not found`): it neither fails the last check nor
+  unchecks the change. A program that ran and failed on a missing tool of
+  its own stays a failed check.
+- New task `verify-process-lookup` with a scripted model: 1 reminder and 6
+  turns before, 0 and 5 after, with the lookup tool present and missing.
+
 ### Small windows: a summary model, and limits kept between sessions
 - **`compaction.model`** (`KODACT_COMPACTION_MODEL` for A/B runs) names the
   model that writes compaction summaries: automatic, `/compact`, written

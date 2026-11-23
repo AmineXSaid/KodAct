@@ -192,9 +192,11 @@ When a job ends, `run.sh`, `run-forgecode.sh`, `run-ante.sh` and `run-pi.sh` wri
   data — a cert/network failure before any test ran — so it judged nothing;
   set apart like an api error, not counted as the agent failing), didn't run
   (Harbor never started the agent: its container didn't start, or its setup
-  failed or ran out of time), timeout, crashed.
+  failed or ran out of time), not judged (the job was stopped after the agent
+  but before the tests ran: no reward, set apart too, never a false success),
+  timeout, crashed.
 - **Run again:** the trials outside the score (api error, verifier error,
-  didn't run), with the command that runs them again with the same settings,
+  didn't run, not judged), with the command that runs them again with the same settings,
   one attempt each (`run.sh subset -i <task> …`, and `-l <n>` past 10 tasks).
   Harbor's `-i` must take several tasks for it; check `harbor run --help` the
   first time. The JSON data lists them as `run_again`.

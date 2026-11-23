@@ -4750,6 +4750,14 @@ impl Engine {
             }
             let command = input.get("command").and_then(Value::as_str).unwrap_or_default();
             let changed = self.shared.history.writes_since(0);
+            // A command whose own program isn't installed (exit 127) ran nothing: it checked
+            // nothing and changed nothing, so it neither fails the last check nor unchecks it.
+            let shell = r.output.structured.as_ref();
+            let exit = shell.and_then(|s| s.get("exitCode")).and_then(Value::as_i64);
+            let stderr = shell.and_then(|s| s.get("stderr")).and_then(Value::as_str).unwrap_or_default();
+            if crate::verify::program_not_found(command, exit, stderr) {
+                continue;
+            }
             // Every compile is remembered, passing or not (`gcc -o app app.c && ./test.sh` fails
             // for its test as often as for the build): a later run of its program is a check
             // while the program is newer than its sources.
@@ -4794,7 +4802,9 @@ impl Engine {
                         .map(|a| (command.to_string(), a));
                 }
                 refresh = true;
-            } else if !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true) {
+            } else if !self.shared.tools.get("Bash").map(|t| t.is_read_only(input)).unwrap_or(true)
+                && !crate::verify::leaves_files_alone(command)
+            {
                 self.verify.shell_may_have_changed = true;
             }
         }

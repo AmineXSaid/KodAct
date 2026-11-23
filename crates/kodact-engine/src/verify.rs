@@ -510,7 +510,56 @@ pub(crate) fn named_check(command: &str, root: &Path) -> bool {
 }
 
 fn not_a_check(program: &str) -> bool {
-    NOT_CHECKS.contains(&program) || (program.starts_with("sha") && program.ends_with("sum"))
+    NOT_CHECKS.contains(&program)
+        || PROCESS_TOOLS.contains(&program)
+        || (program.starts_with("sha") && program.ends_with("sum"))
+}
+
+/// Programs that look up processes or signal them. A pattern they take that names a file
+/// (`pgrep -af "python3 server.py"`) is a process to find, not a file to run, and they write no
+/// file. A Terminal-Bench run of 2026-11-23 took a `pgrep` that wasn't installed for a failed
+/// check of server.py, and sent the model back after its Finish to explain it.
+const PROCESS_TOOLS: &[&str] = &["ps", "pgrep", "pkill", "pidof", "pstree", "kill", "killall", "lsof", "fuser"];
+
+/// Does the command only look up or signal processes, or only read? Then it changed no file,
+/// though the shell tool's own read-only list leaves process tools out (it decides permission
+/// prompts too, which this doesn't touch): `pgrep -af server.py`, `ps aux | grep server`.
+pub fn leaves_files_alone(command: &str) -> bool {
+    let parts = kodact_permissions::split_compound(command);
+    !parts.is_empty()
+        && parts.iter().all(|p| {
+            if p.contains('>') || p.contains("$(") || p.contains('`') {
+                return false;
+            }
+            let all = words(p);
+            let w = skip_wrappers(&all);
+            w.first().is_some_and(|f| PROCESS_TOOLS.contains(&program(f)))
+                || kodact_tools::builtin::command_is_read_only(p)
+        })
+}
+
+/// Did the command's own program fail to start (`bash: line 1: pgrep: command not found`,
+/// `sh: 1: pgrep: not found`, exit 127)? Then nothing ran: it checked nothing and changed
+/// nothing. A program that ran and then failed on a missing tool of its own names that tool, not
+/// itself (`./run_tests.sh: line 3: foo: command not found`), and stays a failed check.
+pub fn program_not_found(command: &str, exit_code: Option<i64>, stderr: &str) -> bool {
+    if exit_code != Some(127) {
+        return false;
+    }
+    let commands = strip_heredoc_bodies(command);
+    kodact_permissions::split_compound(&commands).iter().any(|p| {
+        let all = words(p);
+        let w = skip_wrappers(&all);
+        w.first().is_some_and(|f| {
+            let prog = program(f);
+            stderr.lines().map(str::trim_end).any(|l| {
+                l.ends_with(&format!(" {prog}: command not found"))
+                    || l.ends_with(&format!(" {prog}: not found"))
+                    || l.ends_with(&format!("command not found: {prog}"))
+                    || l == format!("{prog}: command not found")
+            })
+        })
+    })
 }
 
 /// The name a command word runs: `./tools/sim` → `sim`.
@@ -1272,6 +1321,43 @@ fn list(files: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A process looked up or signalled is not a check of the file its pattern names, and changes
+    /// no file; a check whose own program isn't installed ran nothing. Shaped like kv-store-grpc,
+    /// 2026-11-23: `pgrep -af "python3 server.py"` (no pgrep: exit 127) was taken for a failed
+    /// check of server.py.
+    #[test]
+    fn process_lookups_and_missing_programs_are_not_checks() {
+        let changed = [PathBuf::from("/app/server.py")];
+        for lookup in [
+            r#"pgrep -af "python3 server.py""#,
+            "pkill -f server.py",
+            r#"ps aux | grep "[s]erver.py""#,
+            "kill $(cat server.pid)",
+            "pidof python3 && lsof -i :5328",
+        ] {
+            assert!(!is_check(lookup, &[], &changed), "{lookup}");
+        }
+        assert!(is_check("python3 server.py", &[], &changed), "running it still is one");
+        assert!(is_check("nohup python3 server.py > log 2>&1 & sleep 2 && cat log", &[], &changed));
+
+        for quiet in [r#"pgrep -af "python3 server.py""#, r#"ps aux | grep "[s]erver.py""#, "pkill -f server.py"] {
+            assert!(leaves_files_alone(quiet), "{quiet}");
+        }
+        for writes in ["ps aux > procs.txt", "pkill -f server.py && rm server.log", "python3 server.py"] {
+            assert!(!leaves_files_alone(writes), "{writes}");
+        }
+
+        let bash = "/bin/bash: line 1: pgrep: command not found";
+        assert!(program_not_found(r#"pgrep -af "python3 server.py""#, Some(127), bash));
+        assert!(program_not_found("cd /app && pytest -q", Some(127), "bash: line 1: pytest: command not found"));
+        assert!(program_not_found("pytest", Some(127), "sh: 1: pytest: not found"));
+        assert!(program_not_found("pytest", Some(127), "zsh: command not found: pytest"));
+        // The program ran and failed on a tool of its own: still a failed check.
+        assert!(!program_not_found("./run_tests.sh", Some(127), "./run_tests.sh: line 3: foo: command not found"));
+        assert!(!program_not_found("pytest", Some(1), "bash: line 1: pytest: command not found"));
+        assert!(!program_not_found("pytest", None, ""));
+    }
 
     /// A compile that builds a program, and the commands that run it.
     #[test]
