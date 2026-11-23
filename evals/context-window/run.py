@@ -10,9 +10,11 @@ CONFIG, LOG = f"{WORK}/config.json", f"{WORK}/requests.jsonl"
 
 os.makedirs(f"{WORK}/proj", exist_ok=True)
 
-def env_for(case):
+def env_for(case, fresh=True):
     home = f"{WORK}/home-{case['name']}"
-    shutil.rmtree(home, ignore_errors=True); os.makedirs(f"{home}/kodact", exist_ok=True)
+    if fresh:  # A later session of the same case keeps the home, and what KodAct kept in it.
+        shutil.rmtree(home, ignore_errors=True)
+    os.makedirs(f"{home}/kodact", exist_ok=True)
     if "settings" in case:
         json.dump(case["settings"], open(f"{home}/kodact/settings.json", "w"))
     e = {k: v for k, v in os.environ.items() if not k.startswith(("KODACT_", "ANTHROPIC_", "OPENAI_"))}
@@ -29,9 +31,9 @@ def setup(case):
 def requests():
     return [json.loads(l) for l in open(LOG) if l.strip()]
 
-def print_context(case):
+def print_context(case, fresh=True):
     t0 = time.time()
-    p = subprocess.run([BIN, "-p", "/context"], cwd=f"{WORK}/proj", env=env_for(case), capture_output=True, text=True, timeout=90, stdin=subprocess.DEVNULL)
+    p = subprocess.run([BIN, "-p", "/context"], cwd=f"{WORK}/proj", env=env_for(case, fresh), capture_output=True, text=True, timeout=90, stdin=subprocess.DEVNULL)
     el = time.time() - t0
     out = p.stdout + p.stderr
     w = re.search(r"of ([\d,]+) tokens", out); a = re.search(r"Auto-compact runs at about ([\d,]+)", out)
@@ -45,6 +47,13 @@ def print_prompt(case, prompt="hello"):
     posts = [r for r in requests() if r["method"] == "POST"]
     mt = [r.get("max_tokens") or r.get("max_completion_tokens") for r in posts]
     return {"max_tokens": mt, "posts": len(posts), "summaries": sum(r["summary"] for r in posts), "secs": round(el, 2), "exit": p.returncode, "out": (p.stdout + p.stderr)[-600:]}
+
+def learn_then_context(case):
+    """A prompt (the first session, which may learn a limit from a refusal), then `/context` in a
+    second session on the same endpoint, in the same home: which window it starts with."""
+    first = print_prompt(case)
+    second = print_context(case, fresh=False)
+    return {**second, "first_max_tokens": first["max_tokens"]}
 
 def tmux(*a): return subprocess.run(["tmux", *a], capture_output=True, text=True).stdout
 
@@ -135,6 +144,14 @@ case("refusal-learned-print-prompt", "print_prompt", {"models": {"fields": {}}, 
 case("refusal-at-least-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"window": 100000, "prompt_tokens": 66000, "real_extra": 6000, "at_least": True}}, {"max_tokens_eq": [32000, 29999, 14999], "summaries": 0, "exit": 0})
 # A large model that is never refused keeps the whole cap.
 case("no-refusal-large-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"window": 1000000, "prompt_tokens": 68001}}, {"max_tokens_eq": [32000], "summaries": 0, "exit": 0})
+# 6c. The window a refusal stated is kept for the next session on the same endpoint and model:
+# quick-thinking, 2026-11-17, 36 of 89 trials sent a too-long request before learning it, each
+# session anew. The next session starts with it (and no unknown-model notice); with
+# KODACT_LEARNED_LIMITS=off nothing is kept; a large model that is never refused keeps nothing.
+refused_100k = {"models": {"fields": {}}, "chat": {"window": 100000, "prompt_tokens": 68001}}
+case("learned-window-kept-print", "learn_then_context", refused_100k, {"window": 100000, "notice": False, "first_max_tokens_eq": [32000, 29999]})
+case("learned-window-off-print", "learn_then_context", refused_100k, {"window": 1000000, "notice": True, "first_max_tokens_eq": [32000, 29999]}, env={"KODACT_LEARNED_LIMITS": "off"})
+case("learned-window-large-print", "learn_then_context", {"models": {"fields": {}}, "chat": {"window": 1000000, "prompt_tokens": 68001}}, {"window": 1000000, "notice": True, "first_max_tokens_eq": [32000]})
 # 7. The reply limit.
 case("max-output-4096-print-prompt", "print_prompt", fields(max_model_len=W, max_output_tokens=4096), {"max_tokens_le": 4096})
 case("max-output-over-window-print-prompt", "print_prompt", fields(max_model_len=8192, max_output_tokens=100000), {"max_tokens_le": 8192})
@@ -166,6 +183,7 @@ def check(res, exp):
     if "max_tokens_eq" in exp and res.get("max_tokens") != exp["max_tokens_eq"]: bad.append(f"max_tokens {res.get('max_tokens')} != {exp['max_tokens_eq']}")
     if "exit" in exp and res.get("exit") != exp["exit"]: bad.append(f"exit {res.get('exit')} != {exp['exit']}")
     if "summaries_ge" in exp and (res.get("summaries") or 0) < exp["summaries_ge"]: bad.append(f"summaries {res.get('summaries')} < {exp['summaries_ge']}")
+    if "first_max_tokens_eq" in exp and res.get("first_max_tokens") != exp["first_max_tokens_eq"]: bad.append(f"first session's max_tokens {res.get('first_max_tokens')} != {exp['first_max_tokens_eq']}")
     return bad
 
 only = sys.argv[1:]
@@ -176,7 +194,7 @@ results = []
 for c in CASES:
     if only and not any(o in c["name"] for o in only): continue
     setup(c)
-    r = {"tui": lambda: tui(c, c.get("prompts", ("hello",)), c.get("wait", 3.0)), "print_context": lambda: print_context(c), "print_prompt": lambda: print_prompt(c)}[c["mode"]]()
+    r = {"tui": lambda: tui(c, c.get("prompts", ("hello",)), c.get("wait", 3.0)), "print_context": lambda: print_context(c), "print_prompt": lambda: print_prompt(c), "learn_then_context": lambda: learn_then_context(c)}[c["mode"]]()
     bad = check(r, c["expect"])
     keep = {k: v for k, v in r.items() if k != "out"}
     print(f"{'PASS' if not bad else 'FAIL'}  {c['name']:<40} {json.dumps(keep)}{'  <-- ' + '; '.join(bad) if bad else ''}", flush=True)

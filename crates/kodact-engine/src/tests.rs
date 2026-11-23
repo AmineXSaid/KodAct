@@ -4510,6 +4510,85 @@ async fn on_a_small_window_the_summary_is_written_ahead_and_applied_when_compact
     assert!(text.contains("run the two steps"), "the person's request is carried word for word");
 }
 
+/// `compaction.model` writes the summary: a session's model that reasons until its cap and
+/// writes nothing (quick-thinking, 2026-11-17: 34 empty summaries) no longer decides whether the
+/// run compacts. A summary that model can't write is written by the session's model, as without
+/// the setting; on a large window nothing is written at all (docs/goal.md, rule 5).
+#[tokio::test]
+async fn compaction_summaries_are_written_by_the_summary_model() {
+    use kodact_types::StopReason;
+    let steps = || {
+        vec![
+            MockTurn::tool("Bash", json!({"command": "echo first-step"})).with_usage(usage(12_500)),
+            MockTurn::tool("Bash", json!({"command": "echo second-step"})).with_usage(usage(15_500)),
+            MockTurn::text("done"),
+        ]
+    };
+    // Summaries: the session's model reasons to its cap and writes nothing; `summarizer` writes
+    // one, unless `broken` makes it fail too.
+    let harness = |broken: bool| {
+        let queue = Arc::new(Mutex::new(std::collections::VecDeque::from(steps())));
+        let provider = MockProvider::with_responder(move |req| {
+            if req.tool_choice == Some(json!({"type": "none"})) {
+                if req.model == "summarizer" && !broken {
+                    return MockTurn::text("<summary>written by the summarizer</summary>");
+                }
+                let thinking = ContentBlock::Thinking { thinking: "analysis".into(), signature: "s".into() };
+                return MockTurn::blocks(vec![thinking], StopReason::MaxTokens);
+            }
+            queue.lock().unwrap().pop_front().unwrap_or_else(|| MockTurn::text("(script exhausted)"))
+        });
+        Harness {
+            dir: tempfile::tempdir().unwrap(),
+            provider: Arc::new(provider),
+            sink: Arc::new(VecSink::default()),
+            log: Arc::new(Mutex::new(vec![])),
+            spill: false,
+        }
+    };
+    let summaries = |h: &Harness| -> Vec<String> {
+        h.provider
+            .requests()
+            .into_iter()
+            .filter(|r| r.tool_choice == Some(json!({"type": "none"})))
+            .map(|r| r.model)
+            .collect()
+    };
+    let with = |window: u64| EngineConfig {
+        autocompact_window: Some(window),
+        summary_model: Some("summarizer".into()),
+        ..Default::default()
+    };
+
+    // Small window: one summary, by the summarizer, and it is the one in the conversation.
+    let h = harness(false);
+    let mut e = h.engine_with(with(24_000), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("run the two steps")).await.result.as_deref(), Some("done"));
+    assert_eq!(summaries(&h), ["summarizer"]);
+    let last = h.provider.requests().into_iter().rfind(|r| r.tool_choice.is_none()).unwrap();
+    let text = serde_json::to_string(&last.messages).unwrap();
+    assert!(text.contains("written by the summarizer") && text.contains("run the two steps"), "{text}");
+    assert!(!h.transcript_text().contains("compact_failed"));
+
+    // The summarizer fails too: its failure is named, then the session's model takes over as
+    // without the setting (two tries, then KodAct's own note), and the run goes on.
+    let h = harness(true);
+    let mut e = h.engine_with(with(24_000), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("run the two steps")).await.result.as_deref(), Some("done"));
+    let asked = summaries(&h);
+    assert_eq!(asked[0], "summarizer");
+    assert!(asked[1..].iter().all(|m| m != "summarizer") && asked.len() == 3, "{asked:?}");
+    let failed = system_events(&h, "compact_failed");
+    assert_eq!(failed[0]["model"], "summarizer", "{failed:?}");
+    assert!(failed[1..].iter().all(|f| f.get("model").is_none()), "the session's own tries name no model");
+
+    // Large window: nothing is due, so no summary is written by either model.
+    let h = harness(false);
+    let mut e = h.engine_with(with(1_000_000), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("run the two steps")).await.result.as_deref(), Some("done"));
+    assert!(summaries(&h).is_empty());
+}
+
 #[tokio::test]
 async fn on_a_large_window_the_same_conversation_writes_no_summary() {
     let h = responding(

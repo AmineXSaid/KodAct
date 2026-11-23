@@ -265,7 +265,12 @@ sends such a block back is refused (400) or answered from text that is gone.
 - **What it does:**
   1. runs `PreCompact` hooks with `trigger: "auto"`;
   2. asks the model for a structured summary, with no tools and a reply's
-     whole output budget (a model that reasons spends it before the summary);
+     whole output budget (a model that reasons spends it before the summary).
+     With `compaction.model` set to another model, that model is asked first,
+     the request built, sized and priced for it; a summary it can't write (cut
+     off, refused, unreachable) is asked of the session's model, as without the
+     setting. `/compact`, a summary written ahead and `/rewind` summarize use it
+     too;
   3. starts a new message chain: a compact-boundary `system` entry, then a user
      message holding the person's requests and the summary, then the most recent
      user turn if one is still pending.
@@ -291,6 +296,7 @@ what follows it.
 - Every failed attempt emits `system/compact_failed` with `{trigger, reason}`,
   and for a reply that came back without a summary, its `stop_reason`,
   `output_tokens` and `reasoning_only` (the reply had reasoning but no text).
+  An attempt by `compaction.model` names it (`model`).
   The attempt isn't part of the conversation, so this is the only record of
   why it failed.
 - A summary that came back empty is never sent again unchanged. It is tried a

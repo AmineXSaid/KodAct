@@ -353,6 +353,12 @@ pub struct EngineConfig {
     /// tenth of the window, instead of only the summary (`compaction.keepRecent`, off until
     /// measured). The summary still covers them.
     pub keep_recent: bool,
+    /// The model that writes compaction summaries (`compaction.model`); `None` uses the session's
+    /// model. A reasoning model can spend a summary's whole reply budget reasoning and write
+    /// nothing, and an endpoint may not let its level be turned down: another model can write
+    /// the summary instead. One it can't write (cut off, refused, unreachable) is written by the
+    /// session's model, as without the setting.
+    pub summary_model: Option<String>,
     /// Runs as a sub-agent: SubagentStop instead of Stop, no session hooks.
     pub is_subagent: bool,
     /// The verification loop; `None` turns it off. Never runs in sub-agents.
@@ -478,6 +484,7 @@ impl Default for EngineConfig {
             auto_compact: true,
             background_summary: false,
             keep_recent: false,
+            summary_model: None,
             is_subagent: false,
             verify: None,
             finish_check: false,
@@ -2074,7 +2081,8 @@ impl Engine {
 
     /// Start writing the summary of the conversation as it stands (see `crate::held`).
     fn start_held(&mut self, model: &str) {
-        let mut req = self.build_request(model);
+        let writer = self.summary_writer(model).unwrap_or_else(|| model.to_string());
+        let mut req = self.build_request(&writer);
         let ask = ContentBlock::text(kodact_compact::summary_instruction_for(None, self.reasons()));
         match req.messages.last_mut() {
             Some(last) if last.role == kodact_types::Role::User => last.content.push(ask),
@@ -2095,6 +2103,7 @@ impl Engine {
             at,
             anchor: at.checked_sub(1).and_then(|i| self.state.uuids.get(i)).cloned(),
             model: model.to_string(),
+            writer,
             task: Some(task),
             cancel,
         });
@@ -2124,12 +2133,13 @@ impl Engine {
             return false;
         }
         let at = held.at;
+        let writer = held.writer.clone();
         let t0 = Instant::now();
         let outcome = held.take().await;
         turn.api_ms += t0.elapsed().as_millis() as u64;
         match outcome {
             Ok((summary, usage)) => {
-                self.record_usage(model, &usage, turn);
+                self.record_usage(&writer, &usage, turn);
                 if summary.is_empty() {
                     self.held_failures += 1;
                     self.system_event("summary_ahead_failed", json!({"reason": "empty_summary"}));
@@ -2209,13 +2219,26 @@ impl Engine {
         info
     }
 
+    /// The model that writes this compaction's summary when `compaction.model` names one other
+    /// than the session's `model`; `None` when the session's own model writes it.
+    fn summary_writer(&self, model: &str) -> Option<String> {
+        self.cfg.summary_model.clone().filter(|m| !m.trim().is_empty() && !same_model(m, model))
+    }
+
     /// Summarize the conversation now (`/compact [instructions]`).
     pub async fn compact(&mut self, instructions: Option<&str>) -> Result<CompactInfo, String> {
         self.adopt_model();
         let cancel = self.new_turn_token();
         let model = self.handle.model();
         let mut turn = TurnAcc::default();
-        self.compact_inner(instructions, None, "manual", false, &model, &cancel, &mut turn).await
+        // `compaction.model` writes it first; a summary it can't write, the session's model does.
+        if let Some(writer) = self.summary_writer(&model) {
+            let r = self.compact_inner(instructions, None, "manual", false, &model, &writer, &cancel, &mut turn).await;
+            if r.is_ok() || matches!(&r, Err(e) if e == "interrupted") {
+                return r;
+            }
+        }
+        self.compact_inner(instructions, None, "manual", false, &model, &model, &cancel, &mut turn).await
     }
 
     /// Compact to make room: the conversation is nearly full, or (`overflowed`) no longer fits.
@@ -2234,15 +2257,24 @@ impl Engine {
         turn: &mut TurnAcc,
     ) -> Result<CompactInfo, String> {
         let again = |r: &Result<CompactInfo, String>| matches!(r, Err(e) if e != "interrupted" && (overflowed || e == EMPTY_SUMMARY));
+        // `compaction.model`: another model writes the summary first. One it can't write (cut off,
+        // refused, unreachable) costs that one call, and the session's model writes it as before.
+        if let Some(writer) = self.summary_writer(model) {
+            self.cut_summary = None;
+            let r = self.compact_inner(None, None, "auto", continue_work, model, &writer, cancel, turn).await;
+            if r.is_ok() || matches!(&r, Err(e) if e == "interrupted") {
+                return r;
+            }
+        }
         self.cut_summary = None;
-        let mut compacted = self.compact_inner(None, None, "auto", continue_work, model, cancel, turn).await;
+        let mut compacted = self.compact_inner(None, None, "auto", continue_work, model, model, cancel, turn).await;
         // Cut off at the output cap while still analyzing: the conversation again would only be
         // analyzed again, so the second try summarizes from that analysis instead.
         let analysis = self.cut_summary.take();
         if again(&compacted) {
             let notes = analysis.as_deref().map(|a| self.summary_notes(a, model));
             compacted = self
-                .compact_inner(Some(SUMMARY_RETRY), notes.as_deref(), "auto", continue_work, model, cancel, turn)
+                .compact_inner(Some(SUMMARY_RETRY), notes.as_deref(), "auto", continue_work, model, model, cancel, turn)
                 .await;
         }
         let analysis = analysis.or_else(|| self.cut_summary.take());
@@ -2254,7 +2286,9 @@ impl Engine {
 
     /// Summarize the conversation and put the summary in its place. With `notes`, the request
     /// carries those notes instead of the conversation (`summary_notes`: the model's own analysis
-    /// from an attempt the output cap cut off).
+    /// from an attempt the output cap cut off). `writer` writes the summary: the session's
+    /// `model`, or `compaction.model`; the request is built, priced and sized for it, while the
+    /// summary is installed for the session's model.
     #[allow(clippy::too_many_arguments)]
     async fn compact_inner(
         &mut self,
@@ -2263,9 +2297,12 @@ impl Engine {
         trigger: &str,
         continue_work: bool,
         model: &str,
+        writer: &str,
         cancel: &CancellationToken,
         turn: &mut TurnAcc,
     ) -> Result<CompactInfo, String> {
+        // The writer, named in a failure's event only when it isn't the session's model.
+        let other = (writer != model).then_some(writer);
         if self.state.messages.is_empty() {
             return Err("nothing to compact yet".into());
         }
@@ -2289,7 +2326,7 @@ impl Engine {
             extra.push('\n');
             extra.push_str(c);
         }
-        let mut req = self.build_request(model);
+        let mut req = self.build_request(writer);
         if let Some(n) = notes {
             req.messages = vec![Message::user(vec![ContentBlock::text(n)])];
         }
@@ -2325,18 +2362,18 @@ impl Engine {
             }
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
-                self.record_compact_failure(trigger, &reason, None);
+                self.record_compact_failure(trigger, &reason, None, other);
                 // The next attempt, sized to the window it states or with half the reply.
-                if !self.learn_from_refusal(model, &e, false) {
-                    self.shrink_reply(model, &e, sent);
+                if !self.learn_from_refusal(writer, &e, false) {
+                    self.shrink_reply(writer, &e, sent);
                 }
                 return Err(reason);
             }
         };
-        self.record_usage(model, &msg.usage.clone(), turn);
+        self.record_usage(writer, &msg.usage.clone(), turn);
         let summary = kodact_compact::extract_summary(&msg.to_message().text());
         if summary.is_empty() {
-            self.record_compact_failure(trigger, "empty_summary", Some(&msg));
+            self.record_compact_failure(trigger, "empty_summary", Some(&msg), other);
             // All the output went to analysis, and the cap stopped it: keep that analysis.
             if msg.stop_reason == Some(kodact_types::StopReason::MaxTokens) {
                 let reasoning: String = msg
@@ -2569,8 +2606,12 @@ impl Engine {
     /// A summary attempt that failed, recorded as `system/compact_failed`: why, and what the reply
     /// looked like. The attempt isn't part of the conversation, so without this a failure can't be
     /// told apart afterwards (a reply that reasoned until its limit and wrote nothing, or an error).
-    fn record_compact_failure(&self, trigger: &str, reason: &str, reply: Option<&ApiMessage>) {
+    fn record_compact_failure(&self, trigger: &str, reason: &str, reply: Option<&ApiMessage>, writer: Option<&str>) {
         let mut data = json!({"trigger": trigger, "reason": reason});
+        // `compaction.model` wrote it: the session's model writes it next.
+        if let Some(w) = writer {
+            data["model"] = json!(w);
+        }
         if let Some(m) = reply {
             let msg = m.to_message();
             let reasoned = msg
@@ -2793,46 +2834,57 @@ impl Engine {
         }
         let model = self.handle.model();
         let cancel = self.new_turn_token();
-        let mut req = self.build_request(&model);
-        let mut slice = normalize(&self.state.messages[from..to], &self.state.microcompacted);
-        let ask = ContentBlock::text(kodact_compact::summary_instruction_for(
-            instructions.filter(|i| !i.trim().is_empty()),
-            self.reasons(),
-        ));
-        match slice.last_mut() {
-            Some(last) if last.role == kodact_types::Role::User => last.content.push(ask),
-            _ => slice.push(Message::user(vec![ask])),
+        // `compaction.model` writes it first; a summary it can't write, the session's model does.
+        let writers: Vec<String> = self.summary_writer(&model).into_iter().chain([model.clone()]).collect();
+        let mut written = None;
+        let mut failure = String::new();
+        for writer in &writers {
+            let other = (writer != &model).then_some(writer.as_str());
+            let mut req = self.build_request(writer);
+            let mut slice = normalize(&self.state.messages[from..to], &self.state.microcompacted);
+            let ask = ContentBlock::text(kodact_compact::summary_instruction_for(
+                instructions.filter(|i| !i.trim().is_empty()),
+                self.reasons(),
+            ));
+            match slice.last_mut() {
+                Some(last) if last.role == kodact_types::Role::User => last.content.push(ask),
+                _ => slice.push(Message::user(vec![ask])),
+            }
+            apply_cache_breakpoints(&mut slice);
+            req.messages = slice;
+            req.tool_choice = Some(json!({"type": "none"}));
+            req.output_config = req.output_config.map(|mut oc| {
+                if let Some(o) = oc.as_object_mut() {
+                    o.remove("format");
+                }
+                oc
+            });
+            self.summary_effort(&mut req);
+            // A reply's whole output budget, as for a full compaction.
+            let msg = match self.stream_inner(req, &cancel, false, false, None).await {
+                StreamOutcome::Done(m) => m,
+                // Summaries are never time-boxed (`None` above): the last case can't happen here.
+                StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) | StreamOutcome::TimeBoxed(..) => {
+                    return Err("interrupted".into())
+                }
+                StreamOutcome::Failed(e) => {
+                    failure = e.to_string();
+                    self.record_compact_failure("partial", &failure, None, other);
+                    self.learn_from_refusal(writer, &e, false);
+                    continue;
+                }
+            };
+            self.record_usage(writer, &msg.usage.clone(), &mut TurnAcc::default());
+            let summary = kodact_compact::extract_summary(&msg.to_message().text());
+            if summary.is_empty() {
+                self.record_compact_failure("partial", "empty_summary", Some(&msg), other);
+                failure = EMPTY_SUMMARY.into();
+                continue;
+            }
+            written = Some(summary);
+            break;
         }
-        apply_cache_breakpoints(&mut slice);
-        req.messages = slice;
-        req.tool_choice = Some(json!({"type": "none"}));
-        req.output_config = req.output_config.map(|mut oc| {
-            if let Some(o) = oc.as_object_mut() {
-                o.remove("format");
-            }
-            oc
-        });
-        self.summary_effort(&mut req);
-        // A reply's whole output budget, as for a full compaction.
-        let msg = match self.stream_inner(req, &cancel, false, false, None).await {
-            StreamOutcome::Done(m) => m,
-            // Summaries are never time-boxed (`None` above): the last case can't happen here.
-            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) | StreamOutcome::TimeBoxed(..) => {
-                return Err("interrupted".into())
-            }
-            StreamOutcome::Failed(e) => {
-                let reason = e.to_string();
-                self.record_compact_failure("partial", &reason, None);
-                self.learn_from_refusal(&model, &e, false);
-                return Err(reason);
-            }
-        };
-        self.record_usage(&model, &msg.usage.clone(), &mut TurnAcc::default());
-        let summary = kodact_compact::extract_summary(&msg.to_message().text());
-        if summary.is_empty() {
-            self.record_compact_failure("partial", "empty_summary", Some(&msg));
-            return Err(EMPTY_SUMMARY.into());
-        }
+        let Some(summary) = written else { return Err(failure) };
         let pre_tokens = self.estimate_sent(&self.state.messages);
         let which = if to == len { "from this point on" } else { "before this point" };
         let note = Message::user_text(format!(

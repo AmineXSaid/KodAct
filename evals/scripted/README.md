@@ -137,6 +137,22 @@ instead of two. On the 2026-11-17 run each such attempt was 20k to 32k tokens
 of reasoning, minutes on that endpoint. A real-model comparison still needs
 an API key.
 
+A request for the model `summarizer` is answered as a model that doesn't
+reason first would: the summary at once. With `compaction.model` it writes
+the summaries (A: the session's model alone; B: `KODACT_COMPACTION_MODEL=summarizer`,
+both at 2026-11-23's build, `-j 1`, since the server keeps one run's state):
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate | 3/3 | 3/3 |
+| Compactions done / failed / KodAct's note | 1 / 1 / 0 | 1 / 0 / 0 |
+| Turns per run | 4 | 4 |
+
+The attempt that reasoned to the output limit is gone: on quick-thinking
+that was 20k to 32k tokens and 10 to 15 minutes each. Whether a model that
+answers directly writes summaries as useful as the session's own still needs
+a real-model comparison.
+
 ## `openai_finish_unmet.py`: the `finish-unmet` task
 
 A model that does what 6 deep-thinking runs of 2026-11-16 and 17 did. It

@@ -516,6 +516,13 @@ the context window to compact in time, and prices to show costs.
   time the conversation overflows after growing, so a long `-p` run on a small
   window goes on. So a model's window is learned whatever its size, with no
   setting. `evals/context-window/` tests this end to end.
+- A window or reply limit learned from a refusal is kept for the next session
+  on the same endpoint and model, for a week, in `learned-limits.json` under
+  the cache directory: the next session starts with it, instead of sending one
+  request too long first. `modelLimits` still wins, and what the endpoint
+  lists in the new session replaces it. A model whose endpoint never refuses
+  keeps nothing. `KODACT_LEARNED_LIMITS=off` neither reads nor writes the file
+  (`kodact-eval` sets it, so each run starts as a first session).
 - The reply limit is learned the same way. A limit stated for the model
   (`modelLimits`' `maxOutputTokens`, the model list's `max_output_tokens`,
   `max_completion_tokens` or OpenRouter's `top_provider.max_completion_tokens`,
@@ -558,6 +565,8 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_MODEL` | Default model |
 | `KODACT_TUI` | `inline` keeps the interactive UI in an inline viewport at the bottom of the terminal, writing output into its scrollback as it happens; by default the UI takes the whole window and prints the conversation into the scrollback when it closes |
 | `KODACT_MAX_OUTPUT_TOKENS` | Per-request output cap (wins over the model's stated limit; turns off the raise after a cut-off) |
+| `KODACT_LEARNED_LIMITS` | `off` (or `0`, `false`, `no`): don't read or keep the limits endpoints stated by refusing a request in earlier sessions |
+| `KODACT_COMPACTION_MODEL` | The model that writes compaction summaries, for A/B runs (overrides `compaction.model`) |
 | `KODACT_CONTEXT_WINDOW` | Context window, in tokens, for a model with none of its own: not in `modelLimits`, the endpoint's list or the built-in table |
 | `KODACT_MAX_THINKING_TOKENS` | Thinking budget |
 | `KODACT_MAX_RETRIES` | API retries (default 3) |
@@ -780,6 +789,7 @@ listed in the system prompt's environment section.
 | `verification.languageServerWaitMs` | `3000` | How long an edit waits for the server's answer |
 | `verification.format` | `false` | `true` runs a file through its formatter after an edit and says what moved, when the file was already in that formatter's style before the edit (a new file: only with a formatter named below). Built-in, each used when installed: `rustfmt`, `ruff format` or `black`, `gofmt`, `prettier`, `clang-format` |
 | `verification.formatters` | built-in | Extension to a command that formats stdin to stdout, used instead of the built-in one: `{"py": ["black", "-q", "-"]}`. `{file}` in an argument is the file's path; an empty list turns an extension off |
+| `compaction.model` | the session's model | The model that writes compaction summaries (automatic, `/compact`, ahead, `/rewind` summarize). A reasoning model can spend a summary's whole reply budget reasoning and write nothing, on an endpoint that won't let its level be turned down: a model that answers directly can write them instead. A summary it can't write (cut off, refused, unreachable) is written by the session's model, as without the setting. `KODACT_COMPACTION_MODEL` overrides it for A/B runs |
 | `compaction.keepRecent` | `false` | `true` keeps the most recent complete steps word for word after an automatic compaction, up to a tenth of the window, after the summary (which still covers them), without their reasoning. Each kept tool call keeps its result. A long chat keeps exactly what was just done instead of a summary of it. `KODACT_KEEP_RECENT=1` or `0` overrides the setting for A/B runs. Off until measured (task `chat-after-compaction`) |
 | `compaction.background` | `false` | `true` writes the compaction summary ahead, in the background, once the conversation is within a lead of the compaction threshold (a fifth of the threshold, or twice the largest step the conversation has grown by in one request, at most half), and holds it until compaction is due. The summary request reuses the request the model just answered, so the provider reads it from its cache, and nobody waits for a summary at the limit. When compaction is due, the held summary replaces what it covers and the messages since are kept word for word, without their reasoning. A summary that falls more than two fifths of the window behind is replaced by a newer one; one for a conversation that was rewritten since (a rewind, `/compact`, `/clear`) or for another model is not used. Not with a `PreCompact` hook. `KODACT_BACKGROUND_SUMMARY=1` or `0` overrides the setting for A/B runs. Off until measured |
 | `prompt.short` | `false` | `true` uses the shorter built-in system prompt (about 2,300 characters against 6,200): facts about the harness, rules about your own work, and the rules eval tasks show models need, each with its reason. The environment, unattended, output-style and appended sections are added as with the full one; `--system-prompt` and `KODACT_PROMPTS_DIR` still replace it. `KODACT_SHORT_PROMPT=1` or `0` overrides the setting for A/B runs. Off until measured on a small and a large model |

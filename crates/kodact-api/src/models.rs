@@ -322,20 +322,32 @@ pub fn listed_limits(id: &str, l: Limits) {
 
 /// The window `id`'s endpoint stated when it refused a request as too long. It counts as the
 /// endpoint's own word, like its model list: it wins over `KODACT_CONTEXT_WINDOW`, the table
-/// and the guess, never over `modelLimits`. True when it changes the window KodAct uses.
+/// and the guess, never over `modelLimits`. True when it changes the window KodAct uses; it is
+/// then kept for the next session on this endpoint ([`crate::learned`]).
 pub fn reported_window(id: &str, window: u64) -> bool {
     let before = model_info_or_default(id).context_window;
-    listed_limits(id, Limits { context_window: Some(window), max_output: None });
-    model_info_or_default(id).context_window != before
+    let l = Limits { context_window: Some(window), max_output: None };
+    listed_limits(id, l);
+    let changed = model_info_or_default(id).context_window != before;
+    if changed {
+        crate::learned::remember(id, l);
+    }
+    changed
 }
 
 /// The most output tokens `id`'s endpoint said a request may ask for, when it refused one that
 /// asked for more. Like a listed limit it wins over the table and the guess, never over
-/// `modelLimits`. True when it changes the limit KodAct uses.
+/// `modelLimits`. True when it changes the limit KodAct uses; it is then kept for the next
+/// session on this endpoint ([`crate::learned`]).
 pub fn reported_max_output(id: &str, max_output: u32) -> bool {
     let before = model_info_or_default(id).max_output;
-    listed_limits(id, Limits { context_window: None, max_output: Some(max_output) });
-    model_info_or_default(id).max_output != before
+    let l = Limits { context_window: None, max_output: Some(max_output) };
+    listed_limits(id, l);
+    let changed = model_info_or_default(id).max_output != before;
+    if changed {
+        crate::learned::remember(id, l);
+    }
+    changed
 }
 
 /// The reply limit someone stated for `id`: the user (`modelLimits`), or its endpoint (its model

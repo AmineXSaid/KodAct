@@ -97,6 +97,10 @@ Results go to `evals/results/<label>/`, which is ignored by git. That folder
 holds `report.md`, `report.json`, and for each run its workspace, transcript
 and stderr.
 
+Each run starts as a first session on its endpoint: `kodact-eval` sets
+`KODACT_LEARNED_LIMITS=off`, so no limit an earlier run learned from a refusal
+carries over (a task's own `env` can set it back).
+
 ## Tasks
 
 | Task | Pillar | What it tests |
@@ -127,7 +131,7 @@ and stderr.
 | log-needle | context | A 330 KB log with one error line in the middle; the fix is one setting |
 | verbose-stages | context | A four-stage build that traces every record and stops at the first failing stage, with a bug in each: every run adds up to 30,000 characters, so a typical fix brings the conversation near the compaction threshold of a 100k window (`--autocompact 100k`). Compactions should happen only once the conversation is that full, and a failed summary is tried at most twice (`compactions`, `compact_failures`) |
 | deliverable-after-compaction | context | The verbose-stages build, plus a deliverable the instruction names once, at the start: `FIXES.toml` listing the stages changed, in pipeline order. Each run of the build adds up to 30,000 characters, so the conversation reaches the compaction threshold of a 100k window (`--autocompact 100k`) before the work is done; the file must still be written, in the format asked, after any compaction |
-| summary-cutoff | context | A summary cut off while reasoning: with the scripted model (`evals/scripted/openai_summary_cutoff.py`), which does what quick-thinking did on 2026-11-17 (a 100k window): asked to summarize the conversation, it reasons until the output limit and writes nothing; given its own analysis back, it writes the summary. Compactions done/failed/note: before 1/2/1 (KodAct's own note in place of a summary), after 1/1/0, 3/3 runs each |
+| summary-cutoff | context | A summary cut off while reasoning: with the scripted model (`evals/scripted/openai_summary_cutoff.py`), which does what quick-thinking did on 2026-11-17 (a 100k window): asked to summarize the conversation, it reasons until the output limit and writes nothing; given its own analysis back, it writes the summary. Compactions done/failed/note: before 1/2/1 (KodAct's own note in place of a summary), after 1/1/0, 3/3 runs each. A request for the model `summarizer` gets the summary at once: with `KODACT_COMPACTION_MODEL=summarizer` (`compaction.model`), 1/0/0 |
 | deliverable-small-window | context | The deliverable-after-compaction build at a 32k window (`env`: `KODACT_CONTEXT_WINDOW=32000`): the conversation is compacted several times before the work is done, and `FIXES.toml` must still be written as asked. The variable applies only to a model KodAct knows no window for; with a known model the task runs at that model's own window |
 | compaction-then-resume | recovery | The deliverable-after-compaction build, killed after 8 tool calls and resumed with "Continue.": each run of the build adds up to 30,000 characters, so old results are cleared (micro-compaction) and the conversation is compacted at a 100k window, and the resumed process starts under a new system prompt (the git status changed). Each changes history that earlier thinking was written on. On models that keep signed thinking between turns, a request carrying such thinking is refused or answered from text that is gone; KodAct leaves those blocks out, so the run must end in a passing check, not an API error |
 | env-default | context | Find one bug among many files from a vague report |

@@ -636,6 +636,9 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Each run starts as a first session on its endpoint: no limits learned by earlier runs (a
+    // task's own `env` can still turn them on).
+    cmd.env("KODACT_LEARNED_LIMITS", "off");
     for (k, v) in opts.env.iter().map(|(k, v)| (k, v)).chain(task.spec.env.iter()) {
         cmd.env(k, v);
     }
@@ -727,6 +730,7 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        cmd.env("KODACT_LEARNED_LIMITS", "off");
         for (k, v) in opts.env.iter().map(|(k, v)| (k, v)).chain(task.spec.env.iter()) {
             cmd.env(k, v);
         }

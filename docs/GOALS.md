@@ -159,6 +159,17 @@ Each pillar lists what KodAct does about it and what shows that it works.
     LiteLLM's `/model/info`, or a refusal for length ("maximum context length
     is N tokens"), after which the request goes again sized to fit, instead of
     compacting on a guessed window;
+  - a window or reply limit learned from a refusal is kept for a week, per
+    endpoint and model, so the next session starts with it: on 2026-11-17, 36
+    of 89 quick-thinking trials sent a 68,001-token prompt to a 100,000-token
+    window first (`evals/context-window/`, cases `learned-window-*`: before,
+    the second session started at the 1,000,000-token guess; after, at
+    100,000). A model never refused keeps nothing;
+  - a summary model (`compaction.model`): on an endpoint that won't let a
+    reasoning model's level be turned down, a model that answers directly
+    writes the summaries, and one it can't write falls back to the session's
+    model (task `summary-cutoff`, scripted: failed summaries 1 per run → 0;
+    the A/B on quick-thinking is owed);
   - each model's own reply limit: `modelLimits`, then what its endpoint states
     (its model list, LiteLLM's `/model/info`, or a refusal that names the
     limit, after which the request goes again asking no more), is the cap of

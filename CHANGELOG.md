@@ -2,6 +2,29 @@
 
 ## 0.1.0 (unreleased)
 
+### Small windows: a summary model, and limits kept between sessions
+- **`compaction.model`** (`KODACT_COMPACTION_MODEL` for A/B runs) names the
+  model that writes compaction summaries: automatic, `/compact`, written
+  ahead and `/rewind` summarize. On quick-thinking (2026-11-17, a 100k
+  window) 34 summaries came back empty, the model reasoning to its cap,
+  10 to 15 minutes each, and that gateway won't let the level be turned
+  down. A model that answers directly can write them instead. A summary it
+  can't write (cut off, refused, unreachable) is written by the session's
+  model as before, and its `compact_failed` names it. Unset by default.
+- **A window or reply limit learned from a refusal is kept for the next
+  session** on the same endpoint and model, for a week, in
+  `learned-limits.json` under the cache directory. On the same runs 36 of 89
+  trials sent a 68,001-token prompt to a 100,000-token window before
+  learning it, each session anew; the next session now starts with it, and
+  compacts on time. `modelLimits` still wins, and what the endpoint lists in
+  the new session replaces it. `KODACT_LEARNED_LIMITS=off` neither reads nor
+  writes it; `kodact-eval` sets it, so each run starts as a first session.
+- Measured: `summary-cutoff` (scripted) with the summary model, failed
+  summaries 1 → 0 per run at the same pass rate and turns;
+  `evals/context-window/` cases `learned-window-*`, the second session's
+  window 1,000,000 (the guess) → 100,000, and nothing kept with the switch
+  off or for a model never refused. The quick-thinking A/B is owed.
+
 ### The separate checks get room to answer
 - **The Finish check and `/goal`'s check reply within the checking model's
   own reply limit,** fitted to what its window leaves after the check's
