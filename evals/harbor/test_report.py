@@ -280,6 +280,25 @@ def test_kodact_reminders_are_counted_per_trial_and_job(tmp_path):
     assert "| 40m00s | 1.5 (loop_guard 1.0, verification 0.5) |" in cmp, cmp
 
 
+def test_finish_checks_are_verdicts_not_reminders(tmp_path):
+    # The separate check of a Finish claim is a `verification` event too, but it reminds the model
+    # of nothing: listed apart, with what it found, and which checks judged nothing.
+    cut = {"subtype": "verification", "kind": "finish_check", "verdict": "unclear", "max_tokens": 8000, "cut_off": True,
+           "reason": "the check wrote no answer: the reply reached its 8000-token cap before a verdict"}
+    sent_back = {"subtype": "verification", "kind": "finish_check", "verdict": "not_met", "max_tokens": 65536,
+                 "reason": "median() of an even-length list was never run"}
+    reminder = {"subtype": "verification", "kind": "unchecked", "files": ["stats.py"], "shell": False}
+    job = make_job(tmp_path, [("fix-median", 0.0, 600, [cut, reminder]), ("fix-git", 1.0, 600, [sent_back])])
+    median = next(t for t in job.trials if t.task == "fix-median")
+    assert dict(median.reminders) == {"verification:unchecked": 1}
+    assert [c["verdict"] for c in median.finish_checks] == ["unclear"]
+    assert "- finish check: unclear, reply cap 8,000 tokens: the check wrote no answer" in median.details()
+    assert median.summary()["finish_checks"] == ["unclear"]
+    text = job.report()
+    assert "- KodAct reminders: 1 in 1 of 2 trials" in text
+    assert "- finish checks: 2, 1 of them judged nothing: " in text and "not_met ×1" in text
+
+
 def test_compactions_and_failed_summaries_are_counted(tmp_path):
     # Shaped like path-tracing-reverse 9ef0955: seven empty summaries before one compaction worked,
     # then a second compaction; the other trial never compacted.

@@ -10,6 +10,7 @@ pub mod auth;
 pub mod effort_levels;
 pub mod gemini;
 pub mod gemini_rules;
+pub mod learned;
 pub mod limit;
 pub mod messages;
 pub mod mock;

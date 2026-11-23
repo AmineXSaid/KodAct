@@ -42,6 +42,9 @@ pub(crate) struct HeldSummary {
     /// rewind, a manual compaction, `/clear`), it no longer is the same conversation.
     pub anchor: Option<String>,
     pub model: String,
+    /// The model writing it: `compaction.model`, or the session's model. Its usage is priced
+    /// as that model's.
+    pub writer: String,
     pub task: Option<tokio::task::JoinHandle<Result<(String, Usage), String>>>,
     pub cancel: CancellationToken,
 }

@@ -2,6 +2,53 @@
 
 ## 0.1.0 (unreleased)
 
+### Small windows: a summary model, and limits kept between sessions
+- **`compaction.model`** (`KODACT_COMPACTION_MODEL` for A/B runs) names the
+  model that writes compaction summaries: automatic, `/compact`, written
+  ahead and `/rewind` summarize. On quick-thinking (2026-11-17, a 100k
+  window) 34 summaries came back empty, the model reasoning to its cap,
+  10 to 15 minutes each, and that gateway won't let the level be turned
+  down. A model that answers directly can write them instead. A summary it
+  can't write (cut off, refused, unreachable) is written by the session's
+  model as before, and its `compact_failed` names it. Unset by default.
+- **A window or reply limit learned from a refusal is kept for the next
+  session** on the same endpoint and model, for a week, in
+  `learned-limits.json` under the cache directory. On the same runs 36 of 89
+  trials sent a 68,001-token prompt to a 100,000-token window before
+  learning it, each session anew; the next session now starts with it, and
+  compacts on time. `modelLimits` still wins, and what the endpoint lists in
+  the new session replaces it. `KODACT_LEARNED_LIMITS=off` neither reads nor
+  writes it; `kodact-eval` sets it, so each run starts as a first session.
+- Measured: `summary-cutoff` (scripted) with the summary model, failed
+  summaries 1 → 0 per run at the same pass rate and turns;
+  `evals/context-window/` cases `learned-window-*`, the second session's
+  window 1,000,000 (the guess) → 100,000, and nothing kept with the switch
+  off or for a model never refused. The quick-thinking A/B is owed.
+
+### The separate checks get room to answer
+- **The Finish check and `/goal`'s check reply within the checking model's
+  own reply limit,** fitted to what its window leaves after the check's
+  prompt, instead of a fixed 8,000 and 800 tokens. A reasoning model reasons
+  from that budget before its verdict: on the 2026-11-17 runs a summary call
+  reasoned 20,000 to 32,000 tokens before writing a word. A verdict cut off
+  that way judged nothing, so a false `verified` claim stood, and `/goal`
+  read it as "not met" and sent the model back to work. The cap is a
+  ceiling: a check that answers in 200 tokens uses 200.
+- **A verdict that can't be read is `unclear`, never "not met".** `/goal`
+  asks once more, then pauses with the reason instead of starting another
+  turn. The Finish check still lets the claim stand; its
+  `system/verification` event now carries `max_tokens`, and `cut_off` when
+  the cap stopped it.
+- **`kodact-eval` and the Harbor report count Finish checks apart from
+  reminders.** Both counted every `verification` event as a verification
+  reminder, the check's own verdict included. Reports now give the checks
+  per run and the share that judged nothing; `compare` also shows "finished
+  as verified, check failed".
+- New task `judge-reasons-long`, with a scripted model whose checker reasons
+  10,000 tokens before its verdict (`evals/scripted/openai_judge_reasons_long.py`):
+  0/3 before, 3/3 after. The Terminal-Bench A/B on a real reasoning model is
+  owed.
+
 ### Chat evals, and keeping the latest steps through compaction
 - **`kodact-eval` tasks can be chats:** `"followups": [...]` sends each as
   the next turn once the previous one has ended, in one session. New task

@@ -4510,6 +4510,85 @@ async fn on_a_small_window_the_summary_is_written_ahead_and_applied_when_compact
     assert!(text.contains("run the two steps"), "the person's request is carried word for word");
 }
 
+/// `compaction.model` writes the summary: a session's model that reasons until its cap and
+/// writes nothing (quick-thinking, 2026-11-17: 34 empty summaries) no longer decides whether the
+/// run compacts. A summary that model can't write is written by the session's model, as without
+/// the setting; on a large window nothing is written at all (docs/goal.md, rule 5).
+#[tokio::test]
+async fn compaction_summaries_are_written_by_the_summary_model() {
+    use kodact_types::StopReason;
+    let steps = || {
+        vec![
+            MockTurn::tool("Bash", json!({"command": "echo first-step"})).with_usage(usage(12_500)),
+            MockTurn::tool("Bash", json!({"command": "echo second-step"})).with_usage(usage(15_500)),
+            MockTurn::text("done"),
+        ]
+    };
+    // Summaries: the session's model reasons to its cap and writes nothing; `summarizer` writes
+    // one, unless `broken` makes it fail too.
+    let harness = |broken: bool| {
+        let queue = Arc::new(Mutex::new(std::collections::VecDeque::from(steps())));
+        let provider = MockProvider::with_responder(move |req| {
+            if req.tool_choice == Some(json!({"type": "none"})) {
+                if req.model == "summarizer" && !broken {
+                    return MockTurn::text("<summary>written by the summarizer</summary>");
+                }
+                let thinking = ContentBlock::Thinking { thinking: "analysis".into(), signature: "s".into() };
+                return MockTurn::blocks(vec![thinking], StopReason::MaxTokens);
+            }
+            queue.lock().unwrap().pop_front().unwrap_or_else(|| MockTurn::text("(script exhausted)"))
+        });
+        Harness {
+            dir: tempfile::tempdir().unwrap(),
+            provider: Arc::new(provider),
+            sink: Arc::new(VecSink::default()),
+            log: Arc::new(Mutex::new(vec![])),
+            spill: false,
+        }
+    };
+    let summaries = |h: &Harness| -> Vec<String> {
+        h.provider
+            .requests()
+            .into_iter()
+            .filter(|r| r.tool_choice == Some(json!({"type": "none"})))
+            .map(|r| r.model)
+            .collect()
+    };
+    let with = |window: u64| EngineConfig {
+        autocompact_window: Some(window),
+        summary_model: Some("summarizer".into()),
+        ..Default::default()
+    };
+
+    // Small window: one summary, by the summarizer, and it is the one in the conversation.
+    let h = harness(false);
+    let mut e = h.engine_with(with(24_000), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("run the two steps")).await.result.as_deref(), Some("done"));
+    assert_eq!(summaries(&h), ["summarizer"]);
+    let last = h.provider.requests().into_iter().rfind(|r| r.tool_choice.is_none()).unwrap();
+    let text = serde_json::to_string(&last.messages).unwrap();
+    assert!(text.contains("written by the summarizer") && text.contains("run the two steps"), "{text}");
+    assert!(!h.transcript_text().contains("compact_failed"));
+
+    // The summarizer fails too: its failure is named, then the session's model takes over as
+    // without the setting (two tries, then KodAct's own note), and the run goes on.
+    let h = harness(true);
+    let mut e = h.engine_with(with(24_000), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("run the two steps")).await.result.as_deref(), Some("done"));
+    let asked = summaries(&h);
+    assert_eq!(asked[0], "summarizer");
+    assert!(asked[1..].iter().all(|m| m != "summarizer") && asked.len() == 3, "{asked:?}");
+    let failed = system_events(&h, "compact_failed");
+    assert_eq!(failed[0]["model"], "summarizer", "{failed:?}");
+    assert!(failed[1..].iter().all(|f| f.get("model").is_none()), "the session's own tries name no model");
+
+    // Large window: nothing is due, so no summary is written by either model.
+    let h = harness(false);
+    let mut e = h.engine_with(with(1_000_000), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    assert_eq!(e.submit(prompt("run the two steps")).await.result.as_deref(), Some("done"));
+    assert!(summaries(&h).is_empty());
+}
+
 #[tokio::test]
 async fn on_a_large_window_the_same_conversation_writes_no_summary() {
     let h = responding(
@@ -4867,10 +4946,18 @@ async fn a_plain_ending_is_asked_for_finish_once_and_only_when_it_helps() {
 /// A harness whose model answers the Finish check (a request with no tools whose system prompt is
 /// the checker's) with `verdict`, and every other request with the next of `turns`.
 fn checked(turns: Vec<MockTurn>, verdict: &'static str) -> Harness {
+    checked_by(turns, move |_| MockTurn::text(verdict))
+}
+
+/// [`checked`], with the check's answer made from its request by `check`.
+fn checked_by(
+    turns: Vec<MockTurn>,
+    check: impl Fn(&kodact_types::MessagesRequest) -> MockTurn + Send + Sync + 'static,
+) -> Harness {
     let queue = Arc::new(Mutex::new(std::collections::VecDeque::from(turns)));
     let provider = MockProvider::with_responder(move |req| {
         if req.tools.is_empty() && serde_json::to_string(&req.system).unwrap().contains("independent checker") {
-            return MockTurn::text(verdict);
+            return check(req);
         }
         queue.lock().unwrap().pop_front().unwrap_or_else(|| MockTurn::text("(script exhausted)"))
     });
@@ -4962,6 +5049,54 @@ async fn the_finish_check_never_holds_back_a_run_it_cannot_judge() {
     let mut e = h.engine_with(unattended, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
     e.submit(prompt("task")).await;
     assert!(check_requests(&h).is_empty());
+}
+
+/// The Finish check asks for the check model's own reply cap, fitted to its window, not a fixed
+/// figure: a reasoning checker reasons from that budget before its verdict. Here it needs 10,000
+/// tokens to reason. Where the model's limit holds that, its "not met" sends the model back; where
+/// it doesn't, the claim stands as before and the event says the cap cut the verdict off
+/// (docs/goal.md, rule 5: a small and a large reply limit).
+#[tokio::test]
+async fn the_finish_check_reasons_within_the_check_models_own_reply_limit() {
+    use kodact_api::models::{configure_limits, Limits};
+    use kodact_types::StopReason;
+    configure_limits("finish-check-small", Limits { context_window: Some(100_000), max_output: Some(8_192) });
+    configure_limits("finish-check-large", Limits { context_window: Some(524_288), max_output: Some(65_536) });
+    let reasoning = || ContentBlock::Thinking { thinking: "weighing each requirement".into(), signature: "s".into() };
+    for (model, cap, judged) in [("finish-check-small", 8_192u32, false), ("finish-check-large", 65_536, true)] {
+        let h = checked_by(
+            vec![
+                MockTurn::tool("Bash", json!({"command": "echo ok"})),
+                finish_turn("Fixed both."),
+                MockTurn::tool("Bash", json!({"command": "echo median-fixed"})),
+                finish_turn("Fixed both, median checked."),
+            ],
+            move |req| {
+                if req.max_tokens < 10_000 {
+                    return MockTurn::blocks(vec![reasoning()], StopReason::MaxTokens);
+                }
+                let verdict = r#"{"verdict": "not_met", "evidence": [], "reason": "median() was never run"}"#;
+                MockTurn::blocks(vec![reasoning(), ContentBlock::text(verdict)], StopReason::EndTurn)
+            },
+        );
+        let cfg = EngineConfig { model: model.into(), autonomous: true, finish_check: true, ..Default::default() };
+        let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+        let r = e.submit(prompt("Fix mean() and median().")).await;
+        let checks = check_requests(&h);
+        assert_eq!(checks.len(), 1, "{model}: once a turn");
+        assert_eq!(checks[0].max_tokens, cap, "{model}: the model's own reply limit");
+        let events = system_events(&h, "verification");
+        let check = events.iter().find(|v| v["kind"] == "finish_check").expect("the check is recorded");
+        assert_eq!(check["max_tokens"], cap, "{model}");
+        if judged {
+            assert_eq!(r.result.as_deref(), Some("Fixed both, median checked."), "{model}: sent back once");
+            assert_eq!(check["verdict"], "not_met");
+        } else {
+            assert_eq!(r.result.as_deref(), Some("Fixed both."), "{model}: the claim stands");
+            assert_eq!((check["verdict"].as_str(), check["cut_off"].as_bool()), (Some("unclear"), Some(true)));
+            assert!(check["reason"].as_str().unwrap().contains("8192-token cap"), "{check}");
+        }
+    }
 }
 
 /// A session whose replies carry reasoning is asked for its summary directly; one without keeps

@@ -137,6 +137,22 @@ instead of two. On the 2026-11-17 run each such attempt was 20k to 32k tokens
 of reasoning, minutes on that endpoint. A real-model comparison still needs
 an API key.
 
+A request for the model `summarizer` is answered as a model that doesn't
+reason first would: the summary at once. With `compaction.model` it writes
+the summaries (A: the session's model alone; B: `KODACT_COMPACTION_MODEL=summarizer`,
+both at 2026-11-23's build, `-j 1`, since the server keeps one run's state):
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate | 3/3 | 3/3 |
+| Compactions done / failed / KodAct's note | 1 / 1 / 0 | 1 / 0 / 0 |
+| Turns per run | 4 | 4 |
+
+The attempt that reasoned to the output limit is gone: on quick-thinking
+that was 20k to 32k tokens and 10 to 15 minutes each. Whether a model that
+answers directly writes summaries as useful as the session's own still needs
+a real-model comparison.
+
 ## `openai_finish_unmet.py`: the `finish-unmet` task
 
 A model that does what 6 deep-thinking runs of 2026-11-16 and 17 did. It
@@ -170,3 +186,42 @@ itself grows from about 262 to about 514 tokens in each request of an
 unattended run (1,046 → 2,056 characters). Whether real models list their
 requirements well, and meet more of them, still needs a real-model
 comparison.
+
+## `openai_judge_reasons_long.py`: the `judge-reasons-long` task
+
+A model that fixes one of two bugs, runs the visible test (which covers only
+that one) and ends with Finish claiming both fixed and `verified`. Told by
+KodAct's separate check that the request isn't met, it fixes the second bug,
+shows it working and calls Finish again. The same endpoint answers the check
+as a reasoning model does: 10,000 tokens of reasoning, then the verdict, from
+the same reply budget; a request whose cap is smaller ends while it reasons
+(`finish_reason: "length"`, no text). Its verdict reads only the tool results
+in the transcript. So what is measured is whether KodAct gives its check room
+to answer, not what the model knows.
+
+```bash
+python3 evals/scripted/openai_judge_reasons_long.py 8797 &
+export KODACT_OPENAI_BASE_URL=http://127.0.0.1:8797/v1 KODACT_OPENAI_API_KEY=sk-test0123456789
+kodact-eval run --only judge-reasons-long --kodact <kodact> --label <label> --repeat 3 -- --model m --permission-mode bypassPermissions
+```
+
+Measured on 2026-11-23. A is 2733223, before the change; B is the change that
+sizes the check's reply from the checking model's own limit.
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate | 0/3 | 3/3 |
+| Finished as verified, check failed | 3/3 | 0/3 |
+| Finish checks that judged nothing | 3/3 | 0/3 |
+| Reply cap of the check | 8,000 | 32,000 |
+| Turns per run | 4 | 7 |
+| Tokens per run | 8,001 | 10,019 |
+
+A's check was cut off while it reasoned, so the false claim stood. B's asked
+for the model's reply limit (none is stated for `m`, so KodAct's default of
+32,000) and used 10,019 of it; its "not met" sent the model back, and the 3
+more turns are the second fix and its check. A check that answers early costs
+what it uses: the cap is a ceiling. With the old counter both sides also
+showed one "verification reminder" per run, which was the check's own event;
+`kodact-eval` now counts checks apart. A real-model comparison still needs an
+API key.

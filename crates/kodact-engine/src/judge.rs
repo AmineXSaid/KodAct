@@ -18,11 +18,19 @@ pub enum Verdict {
     Met,
     NotMet,
     Impossible,
+    /// No verdict could be read: no answer at all (a reply its cap cut off while it reasoned),
+    /// text that isn't a JSON object, or a verdict it doesn't know. It says nothing about the
+    /// work, so it is never a pass, and never a "not met" that sends the model back to work.
+    Unclear,
 }
 
 /// Read the evaluator's answer: a JSON object, tolerating text around it. A
 /// `met` with no evidence is not a pass: the check has to point at tool output.
+/// An answer that holds no verdict is [`Verdict::Unclear`].
 pub fn parse_verdict(text: &str) -> (Verdict, String) {
+    if text.trim().is_empty() {
+        return (Verdict::Unclear, "the check wrote no answer".into());
+    }
     let json = text.find('{').zip(text.rfind('}')).filter(|(a, b)| a < b).map(|(a, b)| &text[a..=b]);
     if let Some(v) = json.and_then(|j| serde_json::from_str::<Value>(j).ok()) {
         let reason = v.get("reason").and_then(Value::as_str).unwrap_or("").trim().to_string();
@@ -37,11 +45,11 @@ pub fn parse_verdict(text: &str) -> (Verdict, String) {
             Some(s) if s == "met" => Verdict::Met,
             Some(s) if s == "impossible" => Verdict::Impossible,
             Some(s) if s == "not_met" || s == "not met" => Verdict::NotMet,
-            _ => return (Verdict::NotMet, "the check gave no clear verdict".into()),
+            _ => return (Verdict::Unclear, "the check gave no clear verdict".into()),
         };
         return (verdict, reason);
     }
-    (Verdict::NotMet, "the check's answer could not be read".into())
+    (Verdict::Unclear, "the check's answer could not be read".into())
 }
 
 /// The reason of an explicit "not met" verdict, and `None` for anything else: met, impossible,

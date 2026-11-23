@@ -309,6 +309,15 @@ pub(crate) fn keep_recent(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// The model that writes compaction summaries: `compaction.model`, or `KODACT_COMPACTION_MODEL`
+/// (for A/B runs; an empty value leaves the setting). Unset: the session's model writes them.
+pub(crate) fn summary_model(settings: &LoadedSettings) -> Option<String> {
+    env_nonempty("KODACT_COMPACTION_MODEL")
+        .or_else(|| settings.str("/compaction/model").map(str::to_string))
+        .filter(|m| !m.trim().is_empty())
+        .map(|m| kodact_api::resolve_model(&m))
+}
+
 /// Which nudges are on: `KODACT_NUDGES` (a list such as `shellEdit,constraints`, or `all`, for
 /// A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
 /// measured it; `reminders: false` still turns them all off.
@@ -632,6 +641,27 @@ pub fn session_shell(settings: &LoadedSettings) -> kodact_platform::shell::Shell
 /// Tools named in `--disallowedTools` without a specifier are removed outright.
 fn removed_tools(disallowed: &[String]) -> Vec<String> {
     disallowed.iter().flat_map(|s| kodact_permissions::split_rule_list(s)).filter(|r| !r.contains('(')).collect()
+}
+
+/// Keep the limits this session's endpoint states by refusing a request, and load those an
+/// earlier session learned there (`kodact_api::learned`), in `<cache>/learned-limits.json`.
+/// `KODACT_LEARNED_LIMITS=off` (or `0`, `false`, `no`) neither reads nor writes them: an eval run
+/// then starts as a first session on the endpoint does, whatever ran before it.
+fn keep_learned_limits(settings: &LoadedSettings) {
+    if matches!(env_nonempty("KODACT_LEARNED_LIMITS").as_deref(), Some("0" | "false" | "off" | "no")) {
+        return;
+    }
+    let r = endpoint::resolve(settings, &|k| std::env::var(k).ok());
+    let backend = match r.backend() {
+        kodact_api::auth::Backend::OpenAi => "openai",
+        kodact_api::auth::Backend::Gemini => "gemini",
+        kodact_api::auth::Backend::Messages => "messages",
+    };
+    let endpoint = format!("{backend} {}", r.url.as_deref().unwrap_or("default"));
+    let loaded = kodact_api::learned::keep_at(kodact_config::cache_dir().join("learned-limits.json"), &endpoint);
+    if !loaded.is_empty() {
+        tracing::debug!(?loaded, "limits learned in earlier sessions");
+    }
 }
 
 /// `modelLimits`: `{"<model id>": {"contextWindow": 131072, "maxOutputTokens": 8192}}`.
@@ -1115,6 +1145,11 @@ pub fn build_session(
         None => settings.get("/autoCompactWindow").and_then(Value::as_u64),
     };
     warnings.extend(apply_model_limits(&settings));
+    // Limits this endpoint stated by refusing a request in an earlier session: the endpoint's own
+    // word, below modelLimits. Only for the endpoint KodAct itself connects to.
+    if opts.provider.is_none() {
+        keep_learned_limits(&settings);
+    }
     // No window of the model's own: KODACT_CONTEXT_WINDOW or the guess stands in, and the
     // endpoint may still report the real one, which wins over both.
     if kodact_api::models::window_unknown(&model) && opts.provider.is_none() {
@@ -1209,6 +1244,7 @@ pub fn build_session(
             auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
             background_summary: background_summary(&settings),
             keep_recent: keep_recent(&settings),
+            summary_model: summary_model(&settings),
             // As in the session: a sub-agent on the same endpoint gets its reasoning back too.
             carry_reasoning: carry_reasoning(&settings),
             ..Default::default()
@@ -1248,6 +1284,7 @@ pub fn build_session(
         auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
         background_summary: background_summary(&settings),
         keep_recent: keep_recent(&settings),
+        summary_model: summary_model(&settings),
         is_subagent: false,
         edit_diagnostics: edit_diagnostics(&settings, verify.is_some()),
         language_servers: language_servers(&settings, verify.is_some()),

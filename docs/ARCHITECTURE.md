@@ -265,7 +265,12 @@ sends such a block back is refused (400) or answered from text that is gone.
 - **What it does:**
   1. runs `PreCompact` hooks with `trigger: "auto"`;
   2. asks the model for a structured summary, with no tools and a reply's
-     whole output budget (a model that reasons spends it before the summary);
+     whole output budget (a model that reasons spends it before the summary).
+     With `compaction.model` set to another model, that model is asked first,
+     the request built, sized and priced for it; a summary it can't write (cut
+     off, refused, unreachable) is asked of the session's model, as without the
+     setting. `/compact`, a summary written ahead and `/rewind` summarize use it
+     too;
   3. starts a new message chain: a compact-boundary `system` entry, then a user
      message holding the person's requests and the summary, then the most recent
      user turn if one is still pending.
@@ -291,6 +296,7 @@ what follows it.
 - Every failed attempt emits `system/compact_failed` with `{trigger, reason}`,
   and for a reply that came back without a summary, its `stop_reason`,
   `output_tokens` and `reasoning_only` (the reply had reasoning but no text).
+  An attempt by `compaction.model` names it (`model`).
   The attempt isn't part of the conversation, so this is the only record of
   why it failed.
 - A summary that came back empty is never sent again unchanged. It is tried a
@@ -487,10 +493,13 @@ the evaluator `/goal` uses (C18), with the turn's request as the goal, the
 conversation as evidence and the harness's own record of unchecked changes.
 Once a turn, while more than the last fifth of `--max-time` is left, never in
 sub-agents. Only an explicit `not_met` sends the model back (with the reason,
-as `system/verification` `{kind: "finish_check", verdict, reason}`); `met`,
-`impossible`, an answer that can't be read and a failed request let the claim
-stand. `verification.finishCheck` (default on; off too with `reminders`
-off), `goalCheckModel` for its model.
+as `system/verification` `{kind: "finish_check", verdict, reason, max_tokens}`);
+`met`, `impossible`, an answer that can't be read (`unclear`, with `cut_off`
+when the reply cap stopped it) and a failed request let the claim stand. Its
+reply cap is the checking model's own, fitted to what its window leaves after
+the check's prompt (`Engine::side_reply_cap`), not a fixed figure: a reasoning
+model reasons from that budget before its verdict. `verification.finishCheck`
+(default on; off too with `reminders` off), `goalCheckModel` for its model.
 
 **No reminder when:**
 - the stop reason is `refusal`;
@@ -950,8 +959,11 @@ as the prompt. After every model turn while the goal is active:
    instructions: the agent's messages are claims, not evidence; failed work
    counts as not done unless redone; details no tool result shows are
    unverified. It answers `{"verdict": "met" | "not_met" | "impossible",
-   "evidence": [...], "reason": ...}`. A `met` with no evidence, anything it
-   can't parse, and text without JSON all count as `not_met`.
+   "evidence": [...], "reason": ...}`. A `met` with no evidence counts as
+   `not_met`. No answer, text without JSON and an unknown verdict are
+   `unclear`: the check judged nothing, so it is asked once more. Its reply
+   cap is the checking model's own, fitted to its window, as for the Finish
+   check (C12).
 2. **met:** the goal is achieved. **impossible:** it fails, with the reason.
 3. **not_met:** the driver starts another turn with a reminder that names
    the reason and the condition.
@@ -959,7 +971,7 @@ as the prompt. After every model turn while the goal is active:
 **Guards.** The loop stops but keeps the goal (paused) when:
 - three turns in a row used no tool;
 - a turn was interrupted, or a hook blocked the prompt;
-- the check itself failed;
+- the check itself failed, or gave no verdict twice (`check unclear`);
 - `--max-turns` (counted across the loop) or the budget ran out;
 - a transient API error occurred.
 

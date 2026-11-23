@@ -254,6 +254,14 @@ pub struct RunRecord {
     /// but false finish is told from one the model didn't vouch for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_verified: Option<bool>,
+    /// Times the separate check judged a Finish claim (`verification` events of kind
+    /// `finish_check`). They aren't reminders: `verify_reminders` leaves them out.
+    #[serde(default)]
+    pub finish_checks: u64,
+    /// Of those, the ones that judged nothing: no verdict could be read (`unclear`, a reply its
+    /// cap cut off among them) or the request failed (`error`). The claim then stood unchecked.
+    #[serde(default)]
+    pub finish_checks_unclear: u64,
     pub timed_out: bool,
     pub check_output: String,
     pub workspace: PathBuf,
@@ -304,6 +312,13 @@ pub struct Summary {
     /// false finish the model vouched for.
     #[serde(default)]
     pub claimed_false_finish_rate: f64,
+    /// Separate checks of Finish claims per run.
+    #[serde(default)]
+    pub finish_checks_per_run: f64,
+    /// Of those checks, the share that judged nothing (no readable verdict, or a failed request):
+    /// a check that can't answer lets every claim stand.
+    #[serde(default)]
+    pub finish_check_unclear_rate: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -352,6 +367,12 @@ pub fn summarize(runs: &[RunRecord]) -> Summary {
         compact_failures_per_run: runs.iter().map(|r| r.compact_failures as f64).sum::<f64>() / n,
         claimed_false_finish_rate: runs.iter().filter(|r| r.claimed_verified == Some(true) && !r.passed).count() as f64
             / n,
+        finish_checks_per_run: runs.iter().map(|r| r.finish_checks as f64).sum::<f64>() / n,
+        finish_check_unclear_rate: {
+            let checks: u64 = runs.iter().map(|r| r.finish_checks).sum();
+            let unclear: u64 = runs.iter().map(|r| r.finish_checks_unclear).sum();
+            (checks > 0).then(|| unclear as f64 / checks as f64)
+        },
     }
 }
 
@@ -480,6 +501,8 @@ pub struct StreamFacts {
     pub verification_missing: Vec<String>,
     pub verification_over_limit: Vec<String>,
     pub claimed_verified: Option<bool>,
+    pub finish_checks: u64,
+    pub finish_checks_unclear: u64,
     pub saw_result: bool,
 }
 
@@ -507,6 +530,14 @@ pub fn parse_stream(lines: &[Value]) -> StreamFacts {
                     if b["type"] == "tool_result" && b["is_error"] == true {
                         f.tool_errors += 1;
                     }
+                }
+            }
+            // The separate check of a Finish claim is recorded as a `verification` event too,
+            // but it reminds the model of nothing: counted on its own.
+            Some("system") if v["subtype"] == "verification" && v["kind"] == "finish_check" => {
+                f.finish_checks += 1;
+                if matches!(v["verdict"].as_str(), Some("unclear" | "error")) {
+                    f.finish_checks_unclear += 1;
                 }
             }
             Some("system") if v["subtype"] == "verification" => f.verify_reminders += 1,
@@ -605,6 +636,9 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Each run starts as a first session on its endpoint: no limits learned by earlier runs (a
+    // task's own `env` can still turn them on).
+    cmd.env("KODACT_LEARNED_LIMITS", "off");
     for (k, v) in opts.env.iter().map(|(k, v)| (k, v)).chain(task.spec.env.iter()) {
         cmd.env(k, v);
     }
@@ -696,6 +730,7 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        cmd.env("KODACT_LEARNED_LIMITS", "off");
         for (k, v) in opts.env.iter().map(|(k, v)| (k, v)).chain(task.spec.env.iter()) {
             cmd.env(k, v);
         }
@@ -748,6 +783,8 @@ pub async fn run_task(task: &Task, run: u32, opts: &RunOptions) -> anyhow::Resul
         verification_missing: facts.verification_missing,
         verification_over_limit: facts.verification_over_limit,
         claimed_verified: facts.claimed_verified,
+        finish_checks: facts.finish_checks,
+        finish_checks_unclear: facts.finish_checks_unclear,
         timed_out,
         check_output,
         workspace: ws,
@@ -791,6 +828,8 @@ pub async fn run_suite(tasks: &[Task], opts: &RunOptions) -> Report {
                     verification_missing: vec![],
                     verification_over_limit: vec![],
                     claimed_verified: None,
+                    finish_checks: 0,
+                    finish_checks_unclear: 0,
                     timed_out: false,
                     check_output: format!("harness error: {e:#}"),
                     workspace: PathBuf::new(),
@@ -855,7 +894,8 @@ pub fn render_markdown(r: &Report) -> String {
          | Nudges per task | {:.2} |\n| TodoWrite calls per task | {:.2} |\n| Tokens per task | {:.0} |\n\
          | Tool calls before the first write | {} |\n\
          | Compactions per task | {:.2} |\n\
-         | Failed summaries per task | {:.2} |\n| Finished as verified, check failed | {} |\n\n",
+         | Failed summaries per task | {:.2} |\n| Finished as verified, check failed | {} |\n\
+         | Finish checks per task (share that judged nothing) | {:.2} ({}) |\n\n",
         r.label,
         s.runs,
         r.args.join(" "),
@@ -878,6 +918,8 @@ pub fn render_markdown(r: &Report) -> String {
         s.compactions_per_run,
         s.compact_failures_per_run,
         pct(s.claimed_false_finish_rate),
+        s.finish_checks_per_run,
+        opt_pct(s.finish_check_unclear_rate),
     );
     out.push_str("## By pillar\n\n| Pillar | Runs | Pass | False finish | Turns |\n| --- | --- | --- | --- | --- |\n");
     for (p, s) in &r.by_pillar {
@@ -1037,6 +1079,23 @@ pub fn render_compare(a: &Report, b: &Report) -> String {
             _ => "–".into(),
         },
     ));
+    out.push_str(&row(
+        "Finished as verified, check failed",
+        pct(x.claimed_false_finish_rate),
+        pct(y.claimed_false_finish_rate),
+        &delta(x.claimed_false_finish_rate, y.claimed_false_finish_rate, false),
+    ));
+    if x.finish_check_unclear_rate.is_some() || y.finish_check_unclear_rate.is_some() {
+        out.push_str(&row(
+            "Finish checks that judged nothing",
+            opt_pct(x.finish_check_unclear_rate),
+            opt_pct(y.finish_check_unclear_rate),
+            &match (x.finish_check_unclear_rate, y.finish_check_unclear_rate) {
+                (Some(p), Some(q)) => delta(p, q, false),
+                _ => "–".into(),
+            },
+        ));
+    }
     out.push_str(&format!(
         "\n{} runs (A) and {} runs (B). Differences within a few points are noise at small sample sizes; use `--repeat` to tighten them.\n",
         x.runs, y.runs
@@ -1172,10 +1231,35 @@ mod tests {
             verification_missing: vec![],
             verification_over_limit: vec![],
             claimed_verified: None,
+            finish_checks: 0,
+            finish_checks_unclear: 0,
             timed_out: false,
             check_output: String::new(),
             workspace: PathBuf::new(),
         }
+    }
+
+    /// The separate check of a Finish claim is a `verification` event but no reminder: it is
+    /// counted on its own, with the checks that judged nothing, and their share in the summary.
+    #[test]
+    fn finish_checks_are_counted_apart_from_reminders() {
+        let check = |verdict: &str| json!({"type": "system", "subtype": "verification", "kind": "finish_check", "verdict": verdict});
+        let lines = vec![
+            json!({"type": "system", "subtype": "verification", "kind": "unchecked"}),
+            check("unclear"),
+            check("not_met"),
+            check("error"),
+            check("met"),
+        ];
+        let f = parse_stream(&lines);
+        assert_eq!((f.verify_reminders, f.finish_checks, f.finish_checks_unclear), (1, 4, 2));
+        let mut judged = rec(true, false, false, 0.0);
+        (judged.finish_checks, judged.finish_checks_unclear) = (3, 1);
+        let unchecked = rec(true, false, false, 0.0);
+        let s = summarize(&[judged, unchecked]);
+        assert_eq!(s.finish_checks_per_run, 1.5);
+        assert_eq!(s.finish_check_unclear_rate, Some(1.0 / 3.0));
+        assert_eq!(summarize(&[rec(true, false, false, 0.0)]).finish_check_unclear_rate, None, "no checks, no rate");
     }
 
     #[test]

@@ -7,6 +7,9 @@ summary. The conversation outgrows the window once, as a long run's does: the se
 the second work request with the vLLM/LiteLLM wording, and KodAct compacts. So what is measured
 is how KodAct's compaction copes with a summary cut off while reasoning (compactions done,
 failed, and KodAct's own note in their place), not the model.
+
+A request for the model `summarizer` is a model that doesn't reason first: it writes the summary
+at once. With `KODACT_COMPACTION_MODEL=summarizer` (`compaction.model`), it writes them.
 """
 import json, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -65,8 +68,9 @@ class H(BaseHTTPRequestHandler):
             state["overflowed"] = False
         done = {m["tool_call_id"] for m in msgs if m["role"] == "tool"}
         if SUMMARY_ASK in last:
+            writes = req.get("model") == "summarizer" or "<earlier_analysis>" in last
             out = say("<summary>Asked: the line count of data.txt into done.txt. `wc -l data.txt` said 1000. "
-                      "Next: write 1000 to done.txt.</summary>") if "<earlier_analysis>" in last else reason_until_cut()
+                      "Next: write 1000 to done.txt.</summary>") if writes else reason_until_cut()
         elif "call_Write" in done:
             out = say("done.txt holds 1000.")
         elif state["overflowed"]:

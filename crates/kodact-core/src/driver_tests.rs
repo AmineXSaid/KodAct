@@ -440,6 +440,64 @@ async fn goal_runs_until_the_check_passes() {
     assert_eq!(loaded.goal.unwrap()["status"], "achieved");
 }
 
+/// A reply its cap cut off while it reasoned: no text, no verdict.
+fn cut_off_verdict() -> MockTurn {
+    let thinking =
+        kodact_types::ContentBlock::Thinking { thinking: "weighing the evidence".into(), signature: "s".into() };
+    MockTurn::blocks(vec![thinking], kodact_types::StopReason::MaxTokens)
+}
+
+/// The goal check asks for the goal model's own reply cap, not a fixed 800 tokens: a reasoning
+/// model thinks from that budget before its verdict. A verdict it can't read is asked for once
+/// more, and then the loop pauses: it judged nothing, so it neither ends the goal nor sends the
+/// model back to work.
+#[tokio::test]
+async fn an_unreadable_goal_verdict_is_asked_again_then_the_goal_pauses() {
+    let glob = || MockTurn::tool("Glob", serde_json::json!({"pattern": "*"}));
+    // Cut off once, then answered: the second answer decides, and it counts as one check.
+    let mut t = driver();
+    for turn in [glob(), MockTurn::text("Listed."), cut_off_verdict(), verdict("met", "the glob ran")] {
+        t.p.push(turn);
+    }
+    assert_eq!(run_all(&mut t.d, "/goal the files are listed").await.len(), 1);
+    let g = t.d.goal.as_ref().unwrap();
+    assert_eq!((g.status.as_str(), g.checks), ("achieved", 1));
+    let reqs = t.p.requests();
+    assert_eq!(reqs.len(), 4, "two calls of the turn, two of the check");
+    assert!(reqs[2].tools.is_empty() && reqs[3].tools.is_empty());
+    assert_eq!(reqs[2].max_tokens, reqs[0].max_tokens, "the session's own reply cap, as its turns ask");
+    assert_eq!(reqs[3].max_tokens, reqs[2].max_tokens);
+
+    // Cut off twice: paused, the goal still set, and no turn sent on a check that judged nothing.
+    let mut t = driver();
+    for turn in [glob(), MockTurn::text("Listed."), cut_off_verdict(), cut_off_verdict()] {
+        t.p.push(turn);
+    }
+    assert_eq!(run_all(&mut t.d, "/goal the files are listed").await.len(), 1, "no continuation turn");
+    let g = t.d.goal.as_ref().unwrap();
+    assert_eq!((g.status.as_str(), g.paused.as_deref()), ("active", Some("check unclear")));
+    assert_eq!(t.p.requests().len(), 4);
+}
+
+/// With `goalCheckModel`, the check's reply cap is that model's own: small on a model with a
+/// small reply limit, its full limit on a large one (docs/goal.md, rule 5).
+#[tokio::test]
+async fn the_goal_check_asks_for_the_check_models_own_reply_limit() {
+    use kodact_api::models::{configure_limits, Limits};
+    configure_limits("goal-check-small", Limits { context_window: Some(24_000), max_output: Some(8_192) });
+    configure_limits("goal-check-large", Limits { context_window: Some(1_000_000), max_output: Some(65_536) });
+    for (model, cap) in [("goal-check-small", 8_192), ("goal-check-large", 65_536)] {
+        let settings = serde_json::json!({"goalCheckModel": model}).to_string();
+        let mut t = driver_with(|dir, _| std::fs::write(dir.join("proj/.kodact/settings.json"), settings).unwrap());
+        for turn in [MockTurn::text("Nothing to do."), verdict("met", "nothing was asked")] {
+            t.p.push(turn);
+        }
+        run_all(&mut t.d, "/goal it is done").await;
+        let check = t.p.requests().pop().unwrap();
+        assert_eq!((check.model.as_str(), check.max_tokens), (model, cap));
+    }
+}
+
 /// The goal check is told what KodAct recorded of the turn's changes: an agent that says
 /// "done" over a file no check ran on is contradicted by the harness, not only by the
 /// checker's reading of a long transcript.
