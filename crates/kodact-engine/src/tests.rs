@@ -1351,6 +1351,26 @@ async fn verify_ignores_a_commit_after_a_passing_check() {
     assert!(last_user_text(&h.provider.requests()[n - 1]).contains("through shell commands"));
 }
 
+/// Shaped like kv-store-grpc, 2026-11-23: a passing check of server.py, then a look for its
+/// process with `pgrep` (no process has that name: exit 1, or exit 127 where pgrep isn't
+/// installed, as there) and a test runner that isn't installed. Neither is a check nor a change:
+/// no reminder, no extra turn. (`pgrep -f` would match its own shell's command line and pass.)
+#[tokio::test]
+async fn verify_ignores_process_lookups_and_programs_that_are_not_installed() {
+    let h = Harness::new(vec![]);
+    let cwd = h.cwd();
+    std::fs::create_dir_all(&cwd).unwrap();
+    h.provider.push(MockTurn::tool("Write", json!({"file_path": cwd.join("server.py"), "content": "print('up')\n"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "python3 server.py"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "pgrep -x server.py"})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "no-such-test-runner-kodact server.py"})));
+    h.provider.push(MockTurn::text("server.py runs, and nothing is left running"));
+    let mut e = verifying_engine(&h, &[]);
+    let r = e.submit(prompt("write server.py")).await;
+    assert_eq!(r.num_turns, 5, "no reminder after the lookups");
+    assert!(!h.transcript_text().contains(r#""subtype":"verification""#), "{}", h.transcript_text());
+}
+
 #[tokio::test]
 async fn verify_sees_a_shell_rewrite_after_the_last_check_outside_git() {
     // A file written this turn, checked, then changed by a shell command and never run again,

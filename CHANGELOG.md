@@ -2,6 +2,22 @@
 
 ## 0.1.0 (unreleased)
 
+### A process lookup is not a check
+- **`pgrep`, `pkill`, `ps`, `pidof`, `kill` and the like are never checks,
+  and they change no file.** The verification loop read the pattern of
+  `pgrep -af "python3 server.py"` as a run of server.py: on kv-store-grpc
+  (Terminal-Bench, 2026-11-23) pgrep wasn't installed, the lookup ended 127,
+  and the model was told "the last check failed" after its Finish and sent
+  back to explain. Left out of the checks, a lookup also isn't taken for a
+  shell change, without touching the Bash tool's read-only list (it decides
+  permission prompts).
+- **A check whose own program isn't installed ran nothing** (exit 127 with
+  `<program>: command not found`): it neither fails the last check nor
+  unchecks the change. A program that ran and failed on a missing tool of
+  its own stays a failed check.
+- New task `verify-process-lookup` with a scripted model: 1 reminder and 6
+  turns before, 0 and 5 after, with the lookup tool present and missing.
+
 ### Small windows: a summary model, and limits kept between sessions
 - **`compaction.model`** (`KODACT_COMPACTION_MODEL` for A/B runs) names the
   model that writes compaction summaries: automatic, `/compact`, written

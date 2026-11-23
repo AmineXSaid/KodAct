@@ -311,6 +311,13 @@ Each pillar lists what KodAct does about it and what shows that it works.
   - a tool asked only about itself (`gcc --version`, `pytest --help`,
     `gcc -v`) is not a check and builds nothing: before, a version probe after
     an edit marked the change as tested and silenced the reminder;
+  - a process looked up or signalled (`pgrep -af "python3 server.py"`,
+    `pkill`, `ps`, `kill`) is not a check of the file its pattern names and
+    changes no file, and a check whose own program isn't installed (exit 127)
+    ran nothing: on kv-store-grpc (2026-11-23) a missing `pgrep` was taken
+    for a failed check of server.py, and the model was sent back after its
+    Finish to explain it (task `verify-process-lookup`, scripted: 1 reminder
+    and 6 turns → 0 and 5, with pgrep present and missing alike);
   - a run of a program a compile built in the turn is a check (by its path,
     from inline code that starts it, or from a script that does), while the
     program is newer than its sources and the turn's edits: before, a build and

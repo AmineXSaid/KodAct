@@ -187,6 +187,34 @@ unattended run (1,046 → 2,056 characters). Whether real models list their
 requirements well, and meet more of them, still needs a real-model
 comparison.
 
+## `openai_process_lookup.py`: the `verify-process-lookup` task
+
+A model that does what quick-thinking did on kv-store-grpc (2026-11-23): it
+fixes greet.py, runs it (a check that passes), looks for a running copy and
+ends. The lookup is `pgrep -x greet.py`, which finds no process of that name
+(exit 1); with `missing` after the port it is `procwatch greet.py`, a tool
+that isn't installed (exit 127), as pgrep wasn't in that container. Reminded
+after its reply, it answers once more.
+
+```bash
+python3 evals/scripted/openai_process_lookup.py 8794 &            # or: 8794 missing
+export KODACT_OPENAI_BASE_URL=http://127.0.0.1:8794/v1 KODACT_OPENAI_API_KEY=sk-test0123456789
+kodact-eval run --only verify-process-lookup --kodact <kodact> --label <label> --repeat 3 -- --model m --permission-mode bypassPermissions
+```
+
+Measured on 2026-11-23. A is 6fac60a, before the change; B is the change that
+leaves process lookups and programs that aren't installed out of the checks.
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate (pgrep / missing) | 3/3 / 3/3 | 3/3 / 3/3 |
+| Verification reminders per run | 1 / 1 | 0 / 0 |
+| Turns per run | 6 / 6 | 5 / 5 |
+
+A told the model "the last check (`pgrep -x greet.py`) failed" after work it
+had checked by running it. `pgrep -f "python3 greet.py"` shows nothing either
+way: it matches its own shell's command line and passes.
+
 ## `openai_judge_reasons_long.py`: the `judge-reasons-long` task
 
 A model that fixes one of two bugs, runs the visible test (which covers only

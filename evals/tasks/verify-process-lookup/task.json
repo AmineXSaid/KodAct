@@ -1,0 +1,7 @@
+{
+  "instruction": "Fix greet.py so it prints exactly `hello, world` (it prints `hello world` now). Run it to check, then make sure no copy of it is left running.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["python", "verification-loop", "reminders"],
+  "timeout_secs": 180
+}
