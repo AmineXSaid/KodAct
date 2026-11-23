@@ -8,7 +8,8 @@
 # Settings (environment):
 #   KODACT_HARBOR_MODEL    the model, as the endpoint names it (default deep-thinking); the same
 #                         variable sets it for run.sh, run-forgecode.sh and run-ante.sh
-#   KODACT_HARBOR_DATASET  default terminal-bench@2.0
+#   KODACT_HARBOR_DATASET  default terminal-bench/terminal-bench-2-1 (Terminal-Bench 2.1; see
+#                         dataset.sh); terminal-bench@2.0 runs 2.0 (job name gets -tb2.1, -tb2.0)
 #   KODACT_HARBOR_JOBS     tasks in parallel (default 2)
 #   KODACT_HARBOR_ARGS     extra kodact flags for every task (job name gets -args-<flags>)
 #   KODACT_HARBOR_GATE     0: start trials even while the model endpoint doesn't answer (by default
@@ -80,6 +81,7 @@ esac
 commit="$(git rev-parse --short HEAD)"
 dirty=""
 git diff --quiet HEAD -- crates Cargo.toml Cargo.lock || dirty="-dirty"
+. "$repo/evals/harbor/dataset.sh"  # which Terminal-Bench (2.1 by default): before caches.sh and the job name
 . "$repo/evals/harbor/hf-endpoint.sh"  # which Hugging Face Hub: before the job name, which says it
 . "$repo/evals/harbor/caches.sh"  # the caches made on this machine, when their folders exist
 . "$repo/evals/harbor/max-output.sh"  # the model's reply limit, before the job name, which says it
@@ -130,7 +132,7 @@ if [ -n "${KODACT_OPENAI_BASE_URL:-}" ] && [ "${KODACT_HARBOR_PROBE:-1}" != 0 ];
     fi
   fi
 fi
-job="kodact-${mode}-${model_tag}-${commit}${dirty}${custom}${ca}-$(date +%Y%m%d-%H%M%S)"
+job="kodact-${mode}-${dataset_tag}-${model_tag}-${commit}${dirty}${custom}${ca}-$(date +%Y%m%d-%H%M%S)"
 echo "job: $job"
 
 # Each trial gets a Docker network; a killed run leaves its networks behind, and Docker's address
@@ -152,12 +154,13 @@ fi
 # The report is written even when harbor fails part way.
 status=0
 . "$repo/evals/harbor/verifier-ca.sh"
+task_args "$@"
 PYTHONPATH="$repo/evals/harbor${PYTHONPATH:+:$PYTHONPATH}" harbor run \
-  -d "${KODACT_HARBOR_DATASET:-terminal-bench@2.0}" \
+  -d "$dataset" \
   -m "$model" \
   --agent kodact_agent:KodAct \
   --n-concurrent "${KODACT_HARBOR_JOBS:-2}" \
   --job-name "$job" \
-  ${verifier_ca[@]+"${verifier_ca[@]}"} "${scope[@]}" "$@" || status=$?
+  ${verifier_ca[@]+"${verifier_ca[@]}"} "${scope[@]}" ${task_args_out[@]+"${task_args_out[@]}"} || status=$?
 python3 "$repo/evals/harbor/report.py" "jobs/$job" || true
 exit "$status"

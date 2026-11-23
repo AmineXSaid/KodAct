@@ -5,6 +5,24 @@ the external benchmark: 89 tasks, each in its own container, graded by hidden
 tests. [Harbor](https://github.com/laude-institute/harbor) runs it. This
 directory holds a KodAct agent for Harbor (`kodact_agent.py`) and two scripts.
 
+The scripts run **Terminal-Bench 2.1** by default (`terminal-bench/terminal-bench-2-1`):
+the 89 tasks of 2.0 with 28 of them repaired, so every task can be solved
+([announcement](https://www.tbench.ai/news/terminal-bench-2-1)). 2.0's board
+stopped taking submissions in May 2026, and 2.1's adds only runs by its
+maintainers, so a score here compares harnesses run on the same model and
+setup, not a board entry. `KODACT_HARBOR_DATASET=terminal-bench@2.0` runs 2.0,
+to compare with older jobs. The commands are the same for both (`dataset.sh`):
+- `-i mteb-leaderboard` and `-x 'qemu-*'` work as before. 2.1 names its tasks
+  `terminal-bench/<task>`, and Harbor matches against that whole name, so a
+  plain name gets `*/` in front.
+- The job name says which ran (`kodact-full-tb2.1-…`, `…-tb2.0-…`), and so
+  does the report (`- dataset:`). Tasks keep their own names in reports, so
+  the two versions' jobs compare task by task.
+- The tests' uv caches follow the version: a task's cache made from 2.0's test
+  script is made again for 2.1, and again on switching back. It goes into the
+  same folder, so its script is read again but the packages already there
+  aren't downloaded twice.
+
 How a task runs:
 1. Harbor starts the task's container.
 2. The agent copies a static `kodact` into it (`/usr/local/bin/kodact`).
@@ -60,7 +78,7 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `KODACT_HARBOR_MODEL` | `deep-thinking` | the model as the endpoint names it (a `provider/` prefix is dropped); the same variable sets it for `run-forgecode.sh`, `run-ante.sh` and `run-pi.sh` |
-| `KODACT_HARBOR_DATASET` | `terminal-bench@2.0` | Harbor dataset |
+| `KODACT_HARBOR_DATASET` | `terminal-bench/terminal-bench-2-1` | Harbor dataset: Terminal-Bench 2.1 (its latest revision; `…-2-1@<revision>` pins one), or `terminal-bench@2.0`. The job name gets `-tb2.1` or `-tb2.0` |
 | `KODACT_HARBOR_JOBS` | `2` | Tasks in parallel |
 | `KODACT_HARBOR_ARGS` | | Extra `kodact` flags, e.g. `--max-turns 100`; the job name gets `-args-max-turns-100`. Split as bash would (`shell_args.py`): `'…'`, `"…"`, backslashes and `$'…'`, so text quoted with `printf '%q'` or `shlex.quote` works, e.g. `--append-system-prompt $(printf '%q' "$(cat SKILL.md)")`. Nothing is expanded: a `$(…)` left in the setting (inside single quotes) is refused by `run.sh` before any trial |
 | `KODACT_HARBOR_GATE` | `1` | Before each trial's agent starts, asks the endpoint whether it answers (`endpoint_gate.py`, the same request as the probe below, so no tokens). While it doesn't, the trial waits in Harbor's setup, not in the agent's time, and holds its slot, so no trial starts into an outage (see below). `0` turns it off |

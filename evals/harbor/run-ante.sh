@@ -26,6 +26,7 @@ model="${KODACT_HARBOR_MODEL:-${ANTE_MODEL:-deep-thinking}}"
 model_tag="$(printf '%s' "${model#*/}" | tr -c 'A-Za-z0-9._-' '-')"
 provider="${ANTE_PROVIDER:-openai-compatible}"
 install="${ANTE_INSTALL_ARGS:-}"
+. "$repo/evals/harbor/dataset.sh"  # which Terminal-Bench (2.1 by default): before caches.sh and the job name
 . "$repo/evals/harbor/hf-endpoint.sh"  # which Hugging Face Hub: before the job name, which says it
 . "$repo/evals/harbor/caches.sh"  # the caches made on this machine, when their folders exist
 ca=""; [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
@@ -33,7 +34,7 @@ ca=""; [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_PIP_CACHE:-}" ] && ca="${ca}-pipcache"
 [ -n "${KODACT_HARBOR_APT_CACHE:-}" ] && ca="${ca}-aptcache"
 [ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ] && ca="${ca}-hfmirror"
-job="ante-${mode}-${model_tag}-${install:-stable}${ca}-$(date +%Y%m%d-%H%M%S)"
+job="ante-${mode}-${dataset_tag}-${model_tag}-${install:-stable}${ca}-$(date +%Y%m%d-%H%M%S)"
 echo "job: $job"
 
 # ante_agent.py reads these on this machine too (endpoint host, container URL), not only in the container.
@@ -43,8 +44,9 @@ export OPENAI_COMPATIBLE_BASE_URL="$KODACT_OPENAI_BASE_URL" OPENAI_COMPATIBLE_AP
 status=0
 # The agent is evals/harbor/ante_agent.py; ~/ante-src/ante-harbor, if there, comes after it.
 . "$repo/evals/harbor/verifier-ca.sh"
+task_args "$@"
 PYTHONPATH="$repo/evals/harbor:$HOME/ante-src/ante-harbor${PYTHONPATH:+:$PYTHONPATH}" harbor run \
-  -d "${KODACT_HARBOR_DATASET:-terminal-bench@2.0}" \
+  -d "$dataset" \
   -m "$model" \
   --agent ante_agent:AnteAgent \
   --ak provider="$provider" --ak install_args="$install" \
@@ -52,6 +54,6 @@ PYTHONPATH="$repo/evals/harbor:$HOME/ante-src/ante-harbor${PYTHONPATH:+:$PYTHONP
   --ae "OPENAI_COMPATIBLE_API_KEY=$KODACT_OPENAI_API_KEY" \
   --n-concurrent "${KODACT_HARBOR_JOBS:-2}" \
   --job-name "$job" \
-  ${verifier_ca[@]+"${verifier_ca[@]}"} "${scope[@]}" "$@" || status=$?
+  ${verifier_ca[@]+"${verifier_ca[@]}"} "${scope[@]}" ${task_args_out[@]+"${task_args_out[@]}"} || status=$?
 python3 "$repo/evals/harbor/report.py" "jobs/$job" || true
 exit "$status"

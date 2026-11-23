@@ -64,7 +64,36 @@ def test_the_tests_packages_are_made_for_the_tasks_whose_tests_judged_nothing(tm
     assert steps(home, jobs)["warm_uv_cache.py"] == ["reshard-c4-data", "torch-tensor-parallelism"]
     (home / "uv-cache" / "tasks" / "torch-tensor-parallelism" / ".kodact-done").write_text("")
     (home / "uv-cache" / ".kodact-no-uvx").write_text("reshard-c4-data\n")
+    # Made from 2.0's scripts (an empty .kodact-done, the 2.0 list): done for a 2.0 run...
+    assert "warm_uv_cache.py" not in steps(home, jobs, KODACT_HARBOR_DATASET="terminal-bench@2.0")
+    # ...and made again for 2.1, the default, which changed some tasks' tests.
+    assert steps(home, jobs)["warm_uv_cache.py"] == ["reshard-c4-data", "torch-tensor-parallelism"]
+    import warm_uv_cache
+
+    (home / "uv-cache" / "tasks" / "torch-tensor-parallelism" / ".kodact-done").write_text(
+        warm_uv_cache.source_id({}) + "\n"
+    )
+    (home / "uv-cache" / ".kodact-no-uvx-2.1").write_text("reshard-c4-data\n")
     assert "warm_uv_cache.py" not in steps(home, jobs)
+    # A dataset whose task scripts aren't known: nothing to make.
+    (home / "uv-cache" / "tasks" / "torch-tensor-parallelism" / ".kodact-done").unlink()
+    assert "warm_uv_cache.py" not in steps(home, jobs, KODACT_HARBOR_DATASET="someone/other-bench")
+
+
+def test_each_version_reads_its_own_task_scripts():
+    import warm_uv_cache
+
+    assert warm_uv_cache.version({}) == "2.1"
+    assert warm_uv_cache.version({"KODACT_HARBOR_DATASET": "terminal-bench@2.0"}) == "2.0"
+    assert warm_uv_cache.version({"KODACT_HARBOR_DATASET": "terminal-bench/terminal-bench-2-1@6"}) == "2.1"
+    assert warm_uv_cache.version({"KODACT_HARBOR_DATASET": "terminal-bench/terminal-bench"}) is None
+    assert warm_uv_cache.no_uvx_list({"KODACT_HARBOR_DATASET": "terminal-bench@2.0"}) == ".kodact-no-uvx"
+    assert warm_uv_cache.no_uvx_list({}) == ".kodact-no-uvx-2.1"
+    assert warm_uv_cache.is_made("", {"KODACT_HARBOR_DATASET": "terminal-bench@2.0"})
+    assert not warm_uv_cache.is_made("", {})
+    assert warm_uv_cache.is_made(warm_uv_cache.source_id({}), {})
+    assert "12b7565" in warm_uv_cache.source_id({})
+    assert warm_uv_cache.source_id({"KODACT_HARBOR_TB21_COMMIT": "abc"}) == "terminal-bench 2.1 @ abc"
 
 
 def test_the_tasks_of_a_shared_uv_cache_get_their_own_and_the_rest_is_disk_to_free(tmp_path):
@@ -136,3 +165,34 @@ def test_harbor_gives_slow_downloads_more_time_but_not_the_agent():
     assert not any(a in args for a in ("--timeout-multiplier", "--agent-timeout-multiplier")), "the agent's own time stays"
     assert harbor_args(KODACT_HARBOR_TIMEOUT_MULTIPLIER="5")[1] == "5"
     assert "--verifier-timeout-multiplier" not in harbor_args(KODACT_HARBOR_TIMEOUT_MULTIPLIER="1"), "Harbor's own"
+
+
+def test_the_warmer_reads_this_versions_scripts_and_marks_what_it_made(tmp_path, monkeypatch):
+    # The warm run itself, with the script fetch and uv faked: a task named org/task is the task, a
+    # script that can't be read fails that task alone, and what it made names this version's source.
+    import os
+    import sys
+    import types
+
+    import pytest
+    import warm_uv_cache
+
+    scripts = {"fix-git": "echo nothing to install\n", "pytorch-model-cli": "uvx \\\n  -w torch pytest\n"}
+
+    def fake_script(task, environ=os.environ):
+        if task not in scripts:
+            raise OSError("HTTP Error 404: Not Found")
+        return scripts[task]
+
+    ran = []
+    monkeypatch.setattr(warm_uv_cache, "test_script", fake_script)
+    monkeypatch.setattr(warm_uv_cache.subprocess, "run", lambda cmd, env: ran.append(cmd) or types.SimpleNamespace(returncode=0))
+    monkeypatch.setenv("KODACT_HARBOR_UV_CACHE", str(tmp_path))
+    monkeypatch.delenv("KODACT_HARBOR_DATASET", raising=False)
+    monkeypatch.setattr(sys, "argv", ["warm_uv_cache.py", "terminal-bench/fix-git", "pytorch-model-cli", "gone"])
+    with pytest.raises(SystemExit, match="failed: gone"):
+        warm_uv_cache.main()
+    assert (tmp_path / ".kodact-no-uvx-2.1").read_text().split() == ["fix-git"]
+    assert ran and ran[0][-2:] == ["pytest", "--version"]
+    marker = (tmp_path / "tasks" / "pytorch-model-cli" / ".kodact-done").read_text()
+    assert warm_uv_cache.is_made(marker, {}) and not warm_uv_cache.is_made(marker, {"KODACT_HARBOR_DATASET": "terminal-bench@2.0"})

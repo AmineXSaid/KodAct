@@ -24,13 +24,18 @@ see. A gain that would not also help a person at their own terminal is not
 taken (see "Fix, don't fit" below and rule 7 in `docs/goal.md`).
 
 **How the target is measured.**
-- Terminal-Bench 2.0 (89 tasks) through Harbor (`evals/harbor/`), with the
-  model as published by the comparison it is held against: a harness is
-  compared with others on the same model, never across models.
-- At least 3 attempts per task. Between two runs on the same endpoint whose
-  code differed only by provider and doc commits (2026-11-16 and 17), 8 of
-  the 53 tasks both judged changed result: about 1 in 7, more than most
-  changes move the score.
+- Terminal-Bench 2.1 (the 89 tasks of 2.0, 28 of them repaired) through
+  Harbor (`evals/harbor/`, its default since 2026-11-23), with the model as
+  published by the comparison it is held against: a harness is compared with
+  others on the same model, never across models. 2.0's board stopped taking
+  submissions in May 2026, and 2.1's adds only runs by its maintainers, so the
+  comparison is with published results and with harnesses run here on the
+  same model.
+- At least 3 attempts per task. Two runs on the same endpoint (2026-11-16 and
+  17) changed result on 8 of the 53 tasks both judged: about 1 in 7, more than
+  most changes move the score. Their code differed by 948 lines in the
+  crates, mostly provider fixes, among them how requests reach the endpoint
+  measured, so part of that spread may be the code.
 - The score is passes over all 89 tasks. Trials the infrastructure lost
   (endpoint, Docker, verifier) are run again, never counted as passes.
 - Cost and wall time per passed task are reported with the score: a top
