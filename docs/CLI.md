@@ -668,6 +668,11 @@ waiting won't fix (a refused key, a spent quota) and pauses on one that may
 pass. In a `-p` run with a goal, the end-of-run reminder about open todos is
 not sent: the run goes on, and the goal's check decides.
 
+The check may reply at the length the checking model's own reply limit allows,
+so a reasoning model has room to think before its verdict. A check that still
+gives no verdict it can read is asked once more; if it again gives none, the
+goal pauses instead of sending the model back to work.
+
 **Saving defaults:** `/model`, `/effort`, `/fast`, `/output-style`,
 `/autocompact` and `/sandbox` apply at once. In the REPL (and later the
 TUI) they also save the choice as the default: `model`, `effortLevel`,
@@ -768,7 +773,7 @@ listed in the system prompt's environment section.
 | `verification.enabled` | `true` | `false` turns the loop off (as does `KODACT_VERIFY=0`) |
 | `verification.commands` | detected | The project's check commands |
 | `verification.maxReminders` | `1` | Reminders per user turn |
-| `verification.finishCheck` | `true` | Unattended runs: a Finish that claims `verified` is checked by a separate request against the run's request, once a turn, while more than the last fifth of `--max-time` is left. A "not met" sends the model back with the reason; a check that fails or can't be read lets the claim stand. `goalCheckModel` picks its model. `false` (or `KODACT_FINISH_CHECK=0`) turns it off, as does `reminders: false` |
+| `verification.finishCheck` | `true` | Unattended runs: a Finish that claims `verified` is checked by a separate request against the run's request, once a turn, while more than the last fifth of `--max-time` is left. A "not met" sends the model back with the reason; a check that fails or can't be read lets the claim stand. Its reply limit is the checking model's own, so a reasoning model can think before its verdict. `goalCheckModel` picks its model. `false` (or `KODACT_FINISH_CHECK=0`) turns it off, as does `reminders: false` |
 | `verification.syntaxCheck` | `true` | `false` stops the parse check after edits (off too with the loop off) |
 | `verification.languageServer` | `false` | `true` asks a language server for the errors after an edit (below) |
 | `verification.languageServers` | built-in | Extension to command, tried before the built-in ones: `{"py": ["pylsp"]}` |

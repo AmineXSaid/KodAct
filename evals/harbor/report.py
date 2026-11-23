@@ -325,6 +325,9 @@ class Trial:
         self.unknown_tools = Counter()
         self.system = Counter()
         self.reminders = Counter()
+        # The separate check of a Finish claim (`verification` of kind `finish_check`): a verdict
+        # on the work, not a reminder to the model, so it is kept apart from the reminders.
+        self.finish_checks = []
         self.retries = []
         self.result_event = None
         self.tokens_in = self.tokens_out = 0
@@ -359,7 +362,9 @@ class Trial:
                             self.unknown_tools[m.group(1)] += 1
             elif kind == "system" and ev.get("subtype") not in (None, "init"):
                 self.system[ev["subtype"]] += 1
-                if ev["subtype"] in REMINDERS:
+                if ev["subtype"] == "verification" and ev.get("kind") == "finish_check":
+                    self.finish_checks.append(ev)
+                elif ev["subtype"] in REMINDERS:
                     self.reminders[reminder_label(ev)] += 1
                 if ev["subtype"] == "api_retry":
                     self.retries.append(ev.get("error", ""))
@@ -509,6 +514,9 @@ class Trial:
             out.append("- harness events: " + ", ".join(f"{k} ×{v}" for k, v in self.system.most_common()))
         if self.reminders:
             out.append("- KodAct reminders: " + ", ".join(f"{k} ×{v}" for k, v in self.reminders.most_common()))
+        for c in getattr(self, "finish_checks", []):
+            cap = f", reply cap {int(c['max_tokens']):,} tokens" if c.get("max_tokens") else ""
+            out.append(f"- finish check: {c.get('verdict') or '?'}{cap}: {clip(c.get('reason') or '', 300)}")
         if self.tools:
             out.append(
                 "- tools (calls/errors): "
@@ -612,6 +620,7 @@ class Trial:
             "unknown_tools": dict(self.unknown_tools),
             "system_events": dict(self.system),
             "reminders": dict(self.reminders),
+            "finish_checks": [c.get("verdict") for c in getattr(self, "finish_checks", [])],
             "api_retries": len(self.retries),
             "http_429": self.http_429,
             "tests": self.verifier["summary"],
@@ -754,6 +763,15 @@ class Job:
             out.append(
                 f"- KodAct reminders: {sum(reminders.values())} in {with_any} of {n} trials: "
                 + ", ".join(f"{k} ×{v}" for k, v in reminders.most_common())
+            )
+        checks = Counter(c.get("verdict") or "?" for t in self.trials for c in getattr(t, "finish_checks", []))
+        if checks:
+            # `unclear` (no verdict could be read, a reply its cap cut off among them) and `error`
+            # judged nothing: the claim then stood unchecked.
+            unjudged = checks["unclear"] + checks["error"]
+            out.append(
+                f"- finish checks: {sum(checks.values())}, {unjudged} of them judged nothing: "
+                + ", ".join(f"{k} ×{v}" for k, v in checks.most_common())
             )
         out += ["", "## Tasks in detail", ""]
         out += [t.details() for t in self.trials]

@@ -324,6 +324,13 @@ Each pillar lists what KodAct does about it and what shows that it works.
     formatter's style before the edit is touched, so a project that doesn't
     use the formatter is never rewritten by it (task `format-after-edit`);
   - `/goal`'s check is told the same record (`HARNESS:` line).
+  - the separate check of a `verified` Finish, and `/goal`'s check, reply
+    within the checking model's own reply limit, fitted to its window: with
+    a fixed 8,000 (800 for `/goal`) a reasoning model's verdict was cut off
+    unwritten, the Finish claim stood and `/goal` read it as "not met". A
+    verdict that can't be read is `unclear`: `/goal` asks once more, then
+    pauses (task `judge-reasons-long`, scripted: 0/3 before, 3/3 after;
+    the Terminal-Bench A/B is owed);
   - a file a shell command rewrote (`sed -i`, a generator, `git checkout`)
     gets the language server's check too, when the session had already had it
     checked: told with the command's result. Formatting is not applied to

@@ -304,9 +304,6 @@ const FILES_LISTED: usize = 60;
 /// Characters those paths may take, whatever their depth.
 const FILES_CHARS: usize = 3_000;
 
-/// Output tokens the Finish check may use: room for a reasoning model to think before its verdict.
-const CHECK_MAX_TOKENS: u32 = 8_000;
-
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     /// KodAct's own nudges to the model: the verification reminder, the loop guard, the
@@ -1263,6 +1260,19 @@ impl Engine {
         let window = kodact_api::models::model_info_or_default(model).context_window;
         let fitted = fit_reply(cap, window, self.projected_context_tokens());
         self.reply_shrink.map_or(fitted, |s| fitted.min(s))
+    }
+
+    /// The reply a one-off request to `model` outside the conversation may ask for (the Finish
+    /// check, `/goal`'s check): the model's own reply cap, as the turn's requests get it, fitted
+    /// to what its window leaves after that request's prompt of `prompt_bytes`. A reasoning model
+    /// reasons from the same budget before it answers, so a fixed figure cut verdicts off
+    /// unwritten: on the 2026-11-17 runs a summary call reasoned 20,000 to 32,000 tokens before
+    /// writing a word. A cap is a ceiling: a model that answers in 200 tokens uses 200.
+    pub fn side_reply_cap(&self, model: &str, prompt_bytes: usize) -> u32 {
+        let info = kodact_api::models::model_info_or_default(model);
+        let cap = self.base_output_cap(model).min(info.max_output);
+        let prompt = u64::try_from(prompt_bytes / kodact_compact::BYTES_PER_TOKEN).unwrap_or(u64::MAX);
+        fit_reply(cap, info.context_window, prompt)
     }
 
     /// The reply cap before any raise for the turn. The user's (`KODACT_MAX_OUTPUT_TOKENS`) when
@@ -5169,9 +5179,10 @@ impl Engine {
             self.turn_request.trim()
         );
         let check_model = self.cfg.check_model.clone().unwrap_or_else(|| model.to_string());
+        let max_tokens = self.side_reply_cap(&check_model, crate::judge::EVALUATOR_PROMPT.len() + user.len());
         let req = MessagesRequest {
             model: check_model.clone(),
-            max_tokens: CHECK_MAX_TOKENS,
+            max_tokens,
             messages: vec![Message::user(vec![ContentBlock::text(user)])],
             system: vec![kodact_types::SystemBlock::text(crate::judge::EVALUATOR_PROMPT)],
             tools: vec![],
@@ -5193,7 +5204,7 @@ impl Engine {
             Err(e) => {
                 self.system_event(
                     "verification",
-                    json!({"kind": "finish_check", "verdict": "error", "reason": e.to_string()}),
+                    json!({"kind": "finish_check", "verdict": "error", "reason": e.to_string(), "max_tokens": max_tokens}),
                 );
                 return None;
             }
@@ -5201,18 +5212,29 @@ impl Engine {
         self.record_usage(&check_model, &msg.usage, turn);
         let text: String = msg.content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join("");
         // Only the checker's explicit "not met" sends the model back. A parse fallback (an answer
-        // cut off by the cap, a met without evidence) is recorded and lets the claim stand.
+        // cut off by the cap, a met without evidence) is recorded and lets the claim stand; a
+        // verdict the cap cut off says so, since it means the check judged nothing.
         let Some(reason) = crate::judge::explicit_not_met(&text) else {
-            let (verdict, reason) = crate::judge::parse_verdict(&text);
+            let (verdict, mut reason) = crate::judge::parse_verdict(&text);
             let label = match verdict {
                 crate::judge::Verdict::Met => "met",
                 crate::judge::Verdict::Impossible => "impossible",
-                crate::judge::Verdict::NotMet => "unclear",
+                crate::judge::Verdict::NotMet | crate::judge::Verdict::Unclear => "unclear",
             };
-            self.system_event("verification", json!({"kind": "finish_check", "verdict": label, "reason": reason}));
+            let cut_off = msg.stop_reason == Some(kodact_types::StopReason::MaxTokens);
+            if cut_off && label == "unclear" {
+                reason = format!("{reason}: the reply reached its {max_tokens}-token cap before a verdict");
+            }
+            self.system_event(
+                "verification",
+                json!({"kind": "finish_check", "verdict": label, "reason": reason, "max_tokens": max_tokens, "cut_off": cut_off}),
+            );
             return None;
         };
-        self.system_event("verification", json!({"kind": "finish_check", "verdict": "not_met", "reason": reason}));
+        self.system_event(
+            "verification",
+            json!({"kind": "finish_check", "verdict": "not_met", "reason": reason, "max_tokens": max_tokens}),
+        );
         self.notice(NoticeLevel::Info, format!("The finish check found the request not met yet: {reason}"));
         Some(crate::finish::check_note(&reason))
     }

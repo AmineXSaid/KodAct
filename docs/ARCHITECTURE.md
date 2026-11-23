@@ -487,10 +487,13 @@ the evaluator `/goal` uses (C18), with the turn's request as the goal, the
 conversation as evidence and the harness's own record of unchecked changes.
 Once a turn, while more than the last fifth of `--max-time` is left, never in
 sub-agents. Only an explicit `not_met` sends the model back (with the reason,
-as `system/verification` `{kind: "finish_check", verdict, reason}`); `met`,
-`impossible`, an answer that can't be read and a failed request let the claim
-stand. `verification.finishCheck` (default on; off too with `reminders`
-off), `goalCheckModel` for its model.
+as `system/verification` `{kind: "finish_check", verdict, reason, max_tokens}`);
+`met`, `impossible`, an answer that can't be read (`unclear`, with `cut_off`
+when the reply cap stopped it) and a failed request let the claim stand. Its
+reply cap is the checking model's own, fitted to what its window leaves after
+the check's prompt (`Engine::side_reply_cap`), not a fixed figure: a reasoning
+model reasons from that budget before its verdict. `verification.finishCheck`
+(default on; off too with `reminders` off), `goalCheckModel` for its model.
 
 **No reminder when:**
 - the stop reason is `refusal`;
@@ -950,8 +953,11 @@ as the prompt. After every model turn while the goal is active:
    instructions: the agent's messages are claims, not evidence; failed work
    counts as not done unless redone; details no tool result shows are
    unverified. It answers `{"verdict": "met" | "not_met" | "impossible",
-   "evidence": [...], "reason": ...}`. A `met` with no evidence, anything it
-   can't parse, and text without JSON all count as `not_met`.
+   "evidence": [...], "reason": ...}`. A `met` with no evidence counts as
+   `not_met`. No answer, text without JSON and an unknown verdict are
+   `unclear`: the check judged nothing, so it is asked once more. Its reply
+   cap is the checking model's own, fitted to its window, as for the Finish
+   check (C12).
 2. **met:** the goal is achieved. **impossible:** it fails, with the reason.
 3. **not_met:** the driver starts another turn with a reminder that names
    the reason and the condition.
@@ -959,7 +965,7 @@ as the prompt. After every model turn while the goal is active:
 **Guards.** The loop stops but keeps the goal (paused) when:
 - three turns in a row used no tool;
 - a turn was interrupted, or a hook blocked the prompt;
-- the check itself failed;
+- the check itself failed, or gave no verdict twice (`check unclear`);
 - `--max-turns` (counted across the loop) or the budget ran out;
 - a transient API error occurred.
 

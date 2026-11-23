@@ -985,18 +985,31 @@ impl Driver {
             let harness = goal::harness_note(last.verification.as_ref(), &last.missing);
             let user = format!("Goal: {condition}\n\nTranscript:\n{transcript}{harness}");
             let model = commands::goal_model(self);
-            let answer = commands::side_request_on(self, &model, goal::EVALUATOR_PROMPT, user, 800, &cancel).await;
-            if cancel.is_cancelled() {
-                self.pause("interrupted", "Goal paused: interrupted. Send a message to continue.");
-                return true;
-            }
-            let (verdict, reason) = match answer {
-                Ok(text) => goal::parse_verdict(&text),
-                Err(e) => {
-                    self.pause("check failed", format!("Goal paused: the goal check failed ({e})."));
-                    return false;
+            // The goal model's own reply cap, fitted to its window: a reasoning model reasons
+            // from the same budget before its verdict, and a fixed 800 tokens cut it off unwritten.
+            let cap = self.engine.side_reply_cap(&model, goal::EVALUATOR_PROMPT.len() + user.len());
+            // A verdict that can't be read says nothing about the goal: the check is asked once
+            // more, and then the loop pauses instead of sending the model back to work.
+            let mut checked = (Verdict::Unclear, String::new());
+            for _ in 0..2 {
+                let answer =
+                    commands::side_request_on(self, &model, goal::EVALUATOR_PROMPT, user.clone(), cap, &cancel).await;
+                if cancel.is_cancelled() {
+                    self.pause("interrupted", "Goal paused: interrupted. Send a message to continue.");
+                    return true;
                 }
-            };
+                checked = match answer {
+                    Ok(text) => goal::parse_verdict(&text),
+                    Err(e) => {
+                        self.pause("check failed", format!("Goal paused: the goal check failed ({e})."));
+                        return false;
+                    }
+                };
+                if checked.0 != Verdict::Unclear {
+                    break;
+                }
+            }
+            let (verdict, reason) = checked;
             let g = self.goal.as_mut().expect("goal checked above");
             g.checks += 1;
             g.last_reason = Some(reason.clone());
@@ -1011,6 +1024,16 @@ impl Driver {
                     g.status = Status::Failed(reason.clone());
                     self.goal_changed();
                     self.notice(NoticeLevel::Warning, format!("Goal can't be met: {reason}"));
+                    return false;
+                }
+                Verdict::Unclear => {
+                    self.pause(
+                        "check unclear",
+                        format!(
+                            "Goal paused: the goal check gave no verdict twice ({reason}, reply cap {cap} tokens). \
+                             Send a message to continue, or set goalCheckModel to a model that answers within it."
+                        ),
+                    );
                     return false;
                 }
                 Verdict::NotMet => {

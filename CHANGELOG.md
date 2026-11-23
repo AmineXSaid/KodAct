@@ -2,6 +2,30 @@
 
 ## 0.1.0 (unreleased)
 
+### The separate checks get room to answer
+- **The Finish check and `/goal`'s check reply within the checking model's
+  own reply limit,** fitted to what its window leaves after the check's
+  prompt, instead of a fixed 8,000 and 800 tokens. A reasoning model reasons
+  from that budget before its verdict: on the 2026-11-17 runs a summary call
+  reasoned 20,000 to 32,000 tokens before writing a word. A verdict cut off
+  that way judged nothing, so a false `verified` claim stood, and `/goal`
+  read it as "not met" and sent the model back to work. The cap is a
+  ceiling: a check that answers in 200 tokens uses 200.
+- **A verdict that can't be read is `unclear`, never "not met".** `/goal`
+  asks once more, then pauses with the reason instead of starting another
+  turn. The Finish check still lets the claim stand; its
+  `system/verification` event now carries `max_tokens`, and `cut_off` when
+  the cap stopped it.
+- **`kodact-eval` and the Harbor report count Finish checks apart from
+  reminders.** Both counted every `verification` event as a verification
+  reminder, the check's own verdict included. Reports now give the checks
+  per run and the share that judged nothing; `compare` also shows "finished
+  as verified, check failed".
+- New task `judge-reasons-long`, with a scripted model whose checker reasons
+  10,000 tokens before its verdict (`evals/scripted/openai_judge_reasons_long.py`):
+  0/3 before, 3/3 after. The Terminal-Bench A/B on a real reasoning model is
+  owed.
+
 ### Chat evals, and keeping the latest steps through compaction
 - **`kodact-eval` tasks can be chats:** `"followups": [...]` sends each as
   the next turn once the previous one has ended, in one session. New task

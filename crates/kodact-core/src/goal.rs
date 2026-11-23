@@ -130,8 +130,11 @@ mod tests {
             (Verdict::NotMet, "2 fail".into())
         );
         assert_eq!(parse_verdict(r#"{"verdict":"impossible","reason":"no network"}"#).0, Verdict::Impossible);
-        assert_eq!(parse_verdict("met!").0, Verdict::NotMet, "no JSON is never a pass");
-        assert_eq!(parse_verdict(r#"{"verdict":"maybe"}"#).0, Verdict::NotMet);
+        // No verdict to read is never a pass, and never a "not met" either: it judged nothing.
+        assert_eq!(parse_verdict("met!").0, Verdict::Unclear, "no JSON is never a pass");
+        assert_eq!(parse_verdict(r#"{"verdict":"maybe"}"#).0, Verdict::Unclear);
+        assert_eq!(parse_verdict("").0, Verdict::Unclear, "a reply cut off while it reasoned");
+        assert_eq!(parse_verdict(r#"{"verdict": "not_met", "reason": "cut o"#).0, Verdict::Unclear);
     }
 
     #[test]
