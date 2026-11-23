@@ -1,0 +1,2401 @@
+2026-11-01T10:00:00Z INFO uploads: upload 6478 exceeded soft limit
+2026-11-02T11:01:07Z INFO http.server: slow response from upstream (8789ms)
+2026-11-03T12:02:14Z INFO cache: cache miss storm (9558 keys)
+2026-11-04T13:03:21Z INFO http.server: slow response from upstream (624ms)
+2026-11-05T14:04:28Z WARN cache: cache miss storm (6861 keys)
+2026-11-06T15:05:35Z INFO cache: cache miss storm (1496 keys)
+2026-11-07T16:06:42Z INFO queue: queue lag 9274ms
+2026-11-08T17:07:49Z INFO cache: cache miss storm (9561 keys)
+2026-11-09T18:08:56Z WARN http.server: slow response from upstream (822ms)
+2026-11-01T19:09:03Z INFO metrics: metrics scrape took 9130ms
+2026-11-02T20:10:10Z INFO scheduler: retrying job 6877 after timeout
+2026-11-03T21:11:17Z INFO scheduler: retrying job 9363 after timeout
+2026-11-04T10:12:24Z INFO auth: token refresh for client 1698 delayed
+2026-11-05T11:13:31Z INFO metrics: metrics scrape took 1606ms
+2026-11-06T12:14:38Z INFO cache: cache miss storm (3384 keys)
+2026-11-07T13:15:45Z WARN tls: handshake 5156 renegotiated
+2026-11-08T14:16:52Z WARN tls: handshake 5934 renegotiated
+2026-11-09T15:17:59Z INFO auth: token refresh for client 2955 delayed
+2026-11-01T16:18:06Z INFO metrics: metrics scrape took 9421ms
+2026-11-02T17:19:13Z WARN auth: token refresh for client 5637 delayed
+2026-11-03T18:20:20Z INFO tls: handshake 9987 renegotiated
+2026-11-04T19:21:27Z INFO cache: cache miss storm (8397 keys)
+2026-11-05T20:22:34Z INFO queue: queue lag 5614ms
+2026-11-06T21:23:41Z WARN scheduler: retrying job 6919 after timeout
+2026-11-07T10:24:48Z INFO http.server: slow response from upstream (9153ms)
+2026-11-08T11:25:55Z INFO uploads: upload 5747 exceeded soft limit
+2026-11-09T12:26:02Z WARN tls: handshake 1136 renegotiated
+2026-11-01T13:27:09Z INFO cache: cache miss storm (7777 keys)
+2026-11-02T14:28:16Z INFO cache: cache miss storm (5082 keys)
+2026-11-03T15:29:23Z INFO tls: handshake 6330 renegotiated
+2026-11-04T16:30:30Z INFO uploads: upload 7574 exceeded soft limit
+2026-11-05T17:31:37Z INFO uploads: upload 1928 exceeded soft limit
+2026-11-06T18:32:44Z INFO tls: handshake 3585 renegotiated
+2026-11-07T19:33:51Z INFO auth: token refresh for client 4066 delayed
+2026-11-08T20:34:58Z WARN queue: queue lag 8144ms
+2026-11-09T21:35:05Z INFO cache: cache miss storm (7369 keys)
+2026-11-01T10:36:12Z INFO queue: queue lag 2253ms
+2026-11-02T11:37:19Z INFO queue: queue lag 6814ms
+2026-11-03T12:38:26Z WARN uploads: upload 3790 exceeded soft limit
+2026-11-04T13:39:33Z INFO scheduler: retrying job 2897 after timeout
+2026-11-05T14:40:40Z INFO scheduler: retrying job 3832 after timeout
+2026-11-06T15:41:47Z WARN http.server: slow response from upstream (9662ms)
+2026-11-07T16:42:54Z INFO scheduler: retrying job 4629 after timeout
+2026-11-08T17:43:01Z INFO http.server: slow response from upstream (6874ms)
+2026-11-09T18:44:08Z INFO uploads: upload 2066 exceeded soft limit
+2026-11-01T19:45:15Z WARN http.server: slow response from upstream (9173ms)
+2026-11-02T20:46:22Z WARN queue: queue lag 6546ms
+2026-11-03T21:47:29Z INFO queue: queue lag 7899ms
+2026-11-04T10:48:36Z INFO queue: queue lag 3132ms
+2026-11-05T11:49:43Z INFO cache: cache miss storm (7229 keys)
+2026-11-06T12:50:50Z INFO scheduler: retrying job 5581 after timeout
+2026-11-07T13:51:57Z INFO http.server: slow response from upstream (13ms)
+2026-11-08T14:52:04Z INFO scheduler: retrying job 5967 after timeout
+2026-11-09T15:53:11Z INFO http.server: slow response from upstream (3417ms)
+2026-11-01T16:54:18Z INFO queue: queue lag 4142ms
+2026-11-02T17:55:25Z INFO uploads: upload 7778 exceeded soft limit
+2026-11-03T18:56:32Z INFO cache: cache miss storm (8006 keys)
+2026-11-04T19:57:39Z WARN tls: handshake 7937 renegotiated
+2026-11-05T20:58:46Z INFO auth: token refresh for client 2371 delayed
+2026-11-06T21:59:53Z INFO cache: cache miss storm (4347 keys)
+2026-11-07T10:00:00Z INFO tls: handshake 8469 renegotiated
+2026-11-08T11:01:07Z INFO http.server: slow response from upstream (8664ms)
+2026-11-09T12:02:14Z INFO uploads: upload 8909 exceeded soft limit
+2026-11-01T13:03:21Z INFO http.server: slow response from upstream (1501ms)
+2026-11-02T14:04:28Z INFO auth: token refresh for client 2746 delayed
+2026-11-03T15:05:35Z INFO uploads: upload 8735 exceeded soft limit
+2026-11-04T16:06:42Z INFO uploads: upload 3207 exceeded soft limit
+2026-11-05T17:07:49Z WARN metrics: metrics scrape took 3724ms
+2026-11-06T18:08:56Z WARN metrics: metrics scrape took 5835ms
+2026-11-07T19:09:03Z INFO http.server: slow response from upstream (4587ms)
+2026-11-08T20:10:10Z INFO tls: handshake 3182 renegotiated
+2026-11-09T21:11:17Z WARN uploads: upload 5736 exceeded soft limit
+2026-11-01T10:12:24Z INFO uploads: upload 3622 exceeded soft limit
+2026-11-02T11:13:31Z INFO cache: cache miss storm (7711 keys)
+2026-11-03T12:14:38Z INFO metrics: metrics scrape took 3358ms
+2026-11-04T13:15:45Z INFO tls: handshake 7865 renegotiated
+2026-11-05T14:16:52Z INFO uploads: upload 1974 exceeded soft limit
+2026-11-06T15:17:59Z INFO queue: queue lag 7842ms
+2026-11-07T16:18:06Z WARN scheduler: retrying job 5457 after timeout
+2026-11-08T17:19:13Z WARN cache: cache miss storm (7598 keys)
+2026-11-09T18:20:20Z INFO queue: queue lag 2612ms
+2026-11-01T19:21:27Z INFO scheduler: retrying job 461 after timeout
+2026-11-02T20:22:34Z WARN scheduler: retrying job 2404 after timeout
+2026-11-03T21:23:41Z INFO tls: handshake 2564 renegotiated
+2026-11-04T10:24:48Z INFO scheduler: retrying job 243 after timeout
+2026-11-05T11:25:55Z INFO cache: cache miss storm (7117 keys)
+2026-11-06T12:26:02Z INFO metrics: metrics scrape took 468ms
+2026-11-07T13:27:09Z INFO auth: token refresh for client 4809 delayed
+2026-11-08T14:28:16Z INFO metrics: metrics scrape took 4259ms
+2026-11-09T15:29:23Z INFO queue: queue lag 1007ms
+2026-11-01T16:30:30Z WARN uploads: upload 9567 exceeded soft limit
+2026-11-02T17:31:37Z INFO queue: queue lag 8723ms
+2026-11-03T18:32:44Z INFO scheduler: retrying job 7221 after timeout
+2026-11-04T19:33:51Z INFO scheduler: retrying job 2464 after timeout
+2026-11-05T20:34:58Z INFO scheduler: retrying job 7767 after timeout
+2026-11-06T21:35:05Z INFO cache: cache miss storm (5350 keys)
+2026-11-07T10:36:12Z INFO tls: handshake 9189 renegotiated
+2026-11-08T11:37:19Z INFO http.server: slow response from upstream (3144ms)
+2026-11-09T12:38:26Z INFO auth: token refresh for client 1611 delayed
+2026-11-01T13:39:33Z INFO tls: handshake 1048 renegotiated
+2026-11-02T14:40:40Z INFO tls: handshake 8292 renegotiated
+2026-11-03T15:41:47Z INFO metrics: metrics scrape took 7421ms
+2026-11-04T16:42:54Z INFO tls: handshake 8582 renegotiated
+2026-11-05T17:43:01Z INFO auth: token refresh for client 7342 delayed
+2026-11-06T18:44:08Z WARN scheduler: retrying job 2002 after timeout
+2026-11-07T19:45:15Z WARN queue: queue lag 5187ms
+2026-11-08T20:46:22Z INFO cache: cache miss storm (7027 keys)
+2026-11-09T21:47:29Z INFO cache: cache miss storm (4970 keys)
+2026-11-01T10:48:36Z INFO cache: cache miss storm (6009 keys)
+2026-11-02T11:49:43Z INFO scheduler: retrying job 2258 after timeout
+2026-11-03T12:50:50Z INFO tls: handshake 1552 renegotiated
+2026-11-04T13:51:57Z WARN queue: queue lag 2677ms
+2026-11-05T14:52:04Z INFO metrics: metrics scrape took 7080ms
+2026-11-06T15:53:11Z INFO queue: queue lag 6912ms
+2026-11-07T16:54:18Z INFO metrics: metrics scrape took 5228ms
+2026-11-08T17:55:25Z INFO cache: cache miss storm (329 keys)
+2026-11-09T18:56:32Z WARN uploads: upload 7226 exceeded soft limit
+2026-11-01T19:57:39Z WARN http.server: slow response from upstream (5441ms)
+2026-11-02T20:58:46Z INFO auth: token refresh for client 1858 delayed
+2026-11-03T21:59:53Z INFO metrics: metrics scrape took 1387ms
+2026-11-04T10:00:00Z INFO auth: token refresh for client 658 delayed
+2026-11-05T11:01:07Z INFO scheduler: retrying job 2132 after timeout
+2026-11-06T12:02:14Z INFO queue: queue lag 6661ms
+2026-11-07T13:03:21Z WARN scheduler: retrying job 5368 after timeout
+2026-11-08T14:04:28Z INFO cache: cache miss storm (952 keys)
+2026-11-09T15:05:35Z WARN scheduler: retrying job 1196 after timeout
+2026-11-01T16:06:42Z INFO auth: token refresh for client 1461 delayed
+2026-11-02T17:07:49Z INFO auth: token refresh for client 9974 delayed
+2026-11-03T18:08:56Z INFO metrics: metrics scrape took 4342ms
+2026-11-04T19:09:03Z WARN cache: cache miss storm (199 keys)
+2026-11-05T20:10:10Z WARN uploads: upload 4398 exceeded soft limit
+2026-11-06T21:11:17Z INFO scheduler: retrying job 8642 after timeout
+2026-11-07T10:12:24Z INFO metrics: metrics scrape took 2655ms
+2026-11-08T11:13:31Z INFO auth: token refresh for client 2977 delayed
+2026-11-09T12:14:38Z INFO metrics: metrics scrape took 5007ms
+2026-11-01T13:15:45Z INFO metrics: metrics scrape took 7312ms
+2026-11-02T14:16:52Z INFO scheduler: retrying job 5695 after timeout
+2026-11-03T15:17:59Z INFO http.server: slow response from upstream (615ms)
+2026-11-04T16:18:06Z INFO http.server: slow response from upstream (8294ms)
+2026-11-05T17:19:13Z WARN metrics: metrics scrape took 4035ms
+2026-11-06T18:20:20Z INFO tls: handshake 7090 renegotiated
+2026-11-07T19:21:27Z WARN tls: handshake 8311 renegotiated
+2026-11-08T20:22:34Z INFO auth: token refresh for client 3771 delayed
+2026-11-09T21:23:41Z INFO uploads: upload 2299 exceeded soft limit
+2026-11-01T10:24:48Z INFO queue: queue lag 901ms
+2026-11-02T11:25:55Z INFO scheduler: retrying job 1168 after timeout
+2026-11-03T12:26:02Z WARN auth: token refresh for client 2684 delayed
+2026-11-04T13:27:09Z INFO http.server: slow response from upstream (6250ms)
+2026-11-05T14:28:16Z INFO auth: token refresh for client 4811 delayed
+2026-11-06T15:29:23Z WARN http.server: slow response from upstream (3046ms)
+2026-11-07T16:30:30Z INFO scheduler: retrying job 7314 after timeout
+2026-11-08T17:31:37Z INFO http.server: slow response from upstream (5976ms)
+2026-11-09T18:32:44Z INFO uploads: upload 4015 exceeded soft limit
+2026-11-01T19:33:51Z INFO http.server: slow response from upstream (3579ms)
+2026-11-02T20:34:58Z INFO uploads: upload 27 exceeded soft limit
+2026-11-03T21:35:05Z WARN uploads: upload 1384 exceeded soft limit
+2026-11-04T10:36:12Z INFO tls: handshake 8247 renegotiated
+2026-11-05T11:37:19Z INFO metrics: metrics scrape took 8279ms
+2026-11-06T12:38:26Z INFO http.server: slow response from upstream (4338ms)
+2026-11-07T13:39:33Z INFO cache: cache miss storm (6555 keys)
+2026-11-08T14:40:40Z WARN http.server: slow response from upstream (378ms)
+2026-11-09T15:41:47Z INFO auth: token refresh for client 3824 delayed
+2026-11-01T16:42:54Z INFO cache: cache miss storm (9784 keys)
+2026-11-02T17:43:01Z INFO queue: queue lag 8106ms
+2026-11-03T18:44:08Z INFO scheduler: retrying job 2381 after timeout
+2026-11-04T19:45:15Z WARN http.server: slow response from upstream (8292ms)
+2026-11-05T20:46:22Z INFO scheduler: retrying job 9579 after timeout
+2026-11-06T21:47:29Z INFO metrics: metrics scrape took 520ms
+2026-11-07T10:48:36Z INFO http.server: slow response from upstream (5919ms)
+2026-11-08T11:49:43Z WARN cache: cache miss storm (7405 keys)
+2026-11-09T12:50:50Z INFO http.server: slow response from upstream (8717ms)
+2026-11-01T13:51:57Z WARN metrics: metrics scrape took 4331ms
+2026-11-02T14:52:04Z WARN http.server: slow response from upstream (1158ms)
+2026-11-03T15:53:11Z INFO cache: cache miss storm (7773 keys)
+2026-11-04T16:54:18Z INFO auth: token refresh for client 4360 delayed
+2026-11-05T17:55:25Z INFO metrics: metrics scrape took 3790ms
+2026-11-06T18:56:32Z WARN tls: handshake 6277 renegotiated
+2026-11-07T19:57:39Z WARN cache: cache miss storm (4717 keys)
+2026-11-08T20:58:46Z INFO http.server: slow response from upstream (1279ms)
+2026-11-09T21:59:53Z INFO scheduler: retrying job 4170 after timeout
+2026-11-01T10:00:00Z INFO auth: token refresh for client 214 delayed
+2026-11-02T11:01:07Z INFO tls: handshake 7969 renegotiated
+2026-11-03T12:02:14Z INFO auth: token refresh for client 3576 delayed
+2026-11-04T13:03:21Z INFO tls: handshake 8472 renegotiated
+2026-11-05T14:04:28Z WARN auth: token refresh for client 7643 delayed
+2026-11-06T15:05:35Z INFO tls: handshake 9006 renegotiated
+2026-11-07T16:06:42Z INFO metrics: metrics scrape took 1416ms
+2026-11-08T17:07:49Z INFO tls: handshake 4754 renegotiated
+2026-11-09T18:08:56Z INFO tls: handshake 8310 renegotiated
+2026-11-01T19:09:03Z INFO tls: handshake 6348 renegotiated
+2026-11-02T20:10:10Z INFO metrics: metrics scrape took 1232ms
+2026-11-03T21:11:17Z INFO cache: cache miss storm (8596 keys)
+2026-11-04T10:12:24Z INFO auth: token refresh for client 2182 delayed
+2026-11-05T11:13:31Z INFO auth: token refresh for client 5993 delayed
+2026-11-06T12:14:38Z WARN metrics: metrics scrape took 7974ms
+2026-11-07T13:15:45Z INFO queue: queue lag 2616ms
+2026-11-08T14:16:52Z WARN http.server: slow response from upstream (7395ms)
+2026-11-09T15:17:59Z INFO queue: queue lag 2315ms
+2026-11-01T16:18:06Z INFO queue: queue lag 6172ms
+2026-11-02T17:19:13Z INFO uploads: upload 5438 exceeded soft limit
+2026-11-03T18:20:20Z INFO http.server: slow response from upstream (5552ms)
+2026-11-04T19:21:27Z INFO queue: queue lag 3217ms
+2026-11-05T20:22:34Z INFO http.server: slow response from upstream (4158ms)
+2026-11-06T21:23:41Z INFO uploads: upload 6447 exceeded soft limit
+2026-11-07T10:24:48Z INFO queue: queue lag 5919ms
+2026-11-08T11:25:55Z INFO queue: queue lag 800ms
+2026-11-09T12:26:02Z INFO auth: token refresh for client 855 delayed
+2026-11-01T13:27:09Z INFO auth: token refresh for client 4094 delayed
+2026-11-02T14:28:16Z WARN auth: token refresh for client 8381 delayed
+2026-11-03T15:29:23Z INFO uploads: upload 6126 exceeded soft limit
+2026-11-04T16:30:30Z INFO queue: queue lag 6564ms
+2026-11-05T17:31:37Z INFO metrics: metrics scrape took 820ms
+2026-11-06T18:32:44Z WARN queue: queue lag 2280ms
+2026-11-07T19:33:51Z WARN auth: token refresh for client 812 delayed
+2026-11-08T20:34:58Z INFO scheduler: retrying job 7746 after timeout
+2026-11-09T21:35:05Z INFO queue: queue lag 4626ms
+2026-11-01T10:36:12Z INFO auth: token refresh for client 4272 delayed
+2026-11-02T11:37:19Z INFO queue: queue lag 4938ms
+2026-11-03T12:38:26Z WARN tls: handshake 1971 renegotiated
+2026-11-04T13:39:33Z INFO scheduler: retrying job 1241 after timeout
+2026-11-05T14:40:40Z WARN metrics: metrics scrape took 9027ms
+2026-11-06T15:41:47Z WARN metrics: metrics scrape took 5463ms
+2026-11-07T16:42:54Z WARN tls: handshake 2297 renegotiated
+2026-11-08T17:43:01Z INFO metrics: metrics scrape took 1496ms
+2026-11-09T18:44:08Z INFO scheduler: retrying job 9117 after timeout
+2026-11-01T19:45:15Z INFO cache: cache miss storm (3927 keys)
+2026-11-02T20:46:22Z INFO uploads: upload 9342 exceeded soft limit
+2026-11-03T21:47:29Z INFO metrics: metrics scrape took 6773ms
+2026-11-04T10:48:36Z WARN queue: queue lag 8597ms
+2026-11-05T11:49:43Z WARN metrics: metrics scrape took 4437ms
+2026-11-06T12:50:50Z INFO uploads: upload 8171 exceeded soft limit
+2026-11-07T13:51:57Z INFO auth: token refresh for client 2072 delayed
+2026-11-08T14:52:04Z INFO metrics: metrics scrape took 4450ms
+2026-11-09T15:53:11Z WARN metrics: metrics scrape took 6559ms
+2026-11-01T16:54:18Z WARN tls: handshake 5122 renegotiated
+2026-11-02T17:55:25Z INFO http.server: slow response from upstream (538ms)
+2026-11-03T18:56:32Z WARN queue: queue lag 9630ms
+2026-11-04T19:57:39Z INFO tls: handshake 1208 renegotiated
+2026-11-05T20:58:46Z WARN queue: queue lag 7365ms
+2026-11-06T21:59:53Z INFO metrics: metrics scrape took 3676ms
+2026-11-07T10:00:00Z INFO scheduler: retrying job 8568 after timeout
+2026-11-08T11:01:07Z WARN cache: cache miss storm (1402 keys)
+2026-11-09T12:02:14Z INFO http.server: slow response from upstream (2068ms)
+2026-11-01T13:03:21Z INFO metrics: metrics scrape took 4987ms
+2026-11-02T14:04:28Z INFO scheduler: retrying job 8664 after timeout
+2026-11-03T15:05:35Z INFO queue: queue lag 1639ms
+2026-11-04T16:06:42Z INFO cache: cache miss storm (8602 keys)
+2026-11-05T17:07:49Z WARN metrics: metrics scrape took 4284ms
+2026-11-06T18:08:56Z INFO metrics: metrics scrape took 181ms
+2026-11-07T19:09:03Z WARN auth: token refresh for client 4574 delayed
+2026-11-08T20:10:10Z INFO uploads: upload 7797 exceeded soft limit
+2026-11-09T21:11:17Z INFO metrics: metrics scrape took 489ms
+2026-11-01T10:12:24Z INFO queue: queue lag 916ms
+2026-11-02T11:13:31Z INFO http.server: slow response from upstream (8174ms)
+2026-11-03T12:14:38Z INFO queue: queue lag 4224ms
+2026-11-04T13:15:45Z WARN metrics: metrics scrape took 6075ms
+2026-11-05T14:16:52Z WARN metrics: metrics scrape took 568ms
+2026-11-06T15:17:59Z WARN uploads: upload 5946 exceeded soft limit
+2026-11-07T16:18:06Z INFO queue: queue lag 120ms
+2026-11-08T17:19:13Z INFO auth: token refresh for client 3372 delayed
+2026-11-09T18:20:20Z INFO tls: handshake 5117 renegotiated
+2026-11-01T19:21:27Z INFO metrics: metrics scrape took 7630ms
+2026-11-02T20:22:34Z INFO metrics: metrics scrape took 4842ms
+2026-11-03T21:23:41Z WARN cache: cache miss storm (3078 keys)
+2026-11-04T10:24:48Z WARN metrics: metrics scrape took 6842ms
+2026-11-05T11:25:55Z INFO http.server: slow response from upstream (6456ms)
+2026-11-06T12:26:02Z INFO http.server: slow response from upstream (397ms)
+2026-11-07T13:27:09Z WARN scheduler: retrying job 859 after timeout
+2026-11-08T14:28:16Z INFO http.server: slow response from upstream (6454ms)
+2026-11-09T15:29:23Z INFO tls: handshake 1864 renegotiated
+2026-11-01T16:30:30Z INFO cache: cache miss storm (5404 keys)
+2026-11-02T17:31:37Z INFO metrics: metrics scrape took 8608ms
+2026-11-03T18:32:44Z INFO tls: handshake 5118 renegotiated
+2026-11-04T19:33:51Z INFO queue: queue lag 5444ms
+2026-11-05T20:34:58Z INFO tls: handshake 1795 renegotiated
+2026-11-06T21:35:05Z INFO http.server: slow response from upstream (4594ms)
+2026-11-07T10:36:12Z INFO cache: cache miss storm (6894 keys)
+2026-11-08T11:37:19Z INFO cache: cache miss storm (6238 keys)
+2026-11-09T12:38:26Z INFO uploads: upload 7095 exceeded soft limit
+2026-11-01T13:39:33Z INFO cache: cache miss storm (7767 keys)
+2026-11-02T14:40:40Z INFO metrics: metrics scrape took 8882ms
+2026-11-03T15:41:47Z INFO tls: handshake 5307 renegotiated
+2026-11-04T16:42:54Z WARN uploads: upload 506 exceeded soft limit
+2026-11-05T17:43:01Z INFO queue: queue lag 6641ms
+2026-11-06T18:44:08Z WARN http.server: slow response from upstream (581ms)
+2026-11-07T19:45:15Z INFO tls: handshake 1025 renegotiated
+2026-11-08T20:46:22Z INFO auth: token refresh for client 1039 delayed
+2026-11-09T21:47:29Z INFO uploads: upload 4471 exceeded soft limit
+2026-11-01T10:48:36Z INFO uploads: upload 4305 exceeded soft limit
+2026-11-02T11:49:43Z INFO uploads: upload 4882 exceeded soft limit
+2026-11-03T12:50:50Z INFO http.server: slow response from upstream (407ms)
+2026-11-04T13:51:57Z INFO metrics: metrics scrape took 7795ms
+2026-11-05T14:52:04Z WARN tls: handshake 4123 renegotiated
+2026-11-06T15:53:11Z WARN queue: queue lag 2184ms
+2026-11-07T16:54:18Z INFO tls: handshake 152 renegotiated
+2026-11-08T17:55:25Z INFO auth: token refresh for client 9959 delayed
+2026-11-09T18:56:32Z INFO metrics: metrics scrape took 5245ms
+2026-11-01T19:57:39Z INFO tls: handshake 9770 renegotiated
+2026-11-02T20:58:46Z INFO cache: cache miss storm (6427 keys)
+2026-11-03T21:59:53Z INFO scheduler: retrying job 6690 after timeout
+2026-11-04T10:00:00Z INFO cache: cache miss storm (7902 keys)
+2026-11-05T11:01:07Z INFO uploads: upload 6998 exceeded soft limit
+2026-11-06T12:02:14Z INFO cache: cache miss storm (4349 keys)
+2026-11-07T13:03:21Z INFO cache: cache miss storm (1589 keys)
+2026-11-08T14:04:28Z WARN queue: queue lag 7333ms
+2026-11-09T15:05:35Z INFO scheduler: retrying job 2187 after timeout
+2026-11-01T16:06:42Z WARN queue: queue lag 3859ms
+2026-11-02T17:07:49Z INFO cache: cache miss storm (4823 keys)
+2026-11-03T18:08:56Z INFO auth: token refresh for client 6120 delayed
+2026-11-04T19:09:03Z INFO auth: token refresh for client 3273 delayed
+2026-11-05T20:10:10Z INFO tls: handshake 3053 renegotiated
+2026-11-06T21:11:17Z INFO metrics: metrics scrape took 2522ms
+2026-11-07T10:12:24Z INFO auth: token refresh for client 5356 delayed
+2026-11-08T11:13:31Z WARN cache: cache miss storm (4133 keys)
+2026-11-09T12:14:38Z INFO metrics: metrics scrape took 1657ms
+2026-11-01T13:15:45Z INFO tls: handshake 1686 renegotiated
+2026-11-02T14:16:52Z WARN http.server: slow response from upstream (3796ms)
+2026-11-03T15:17:59Z INFO tls: handshake 671 renegotiated
+2026-11-04T16:18:06Z INFO auth: token refresh for client 1963 delayed
+2026-11-05T17:19:13Z INFO http.server: slow response from upstream (9848ms)
+2026-11-06T18:20:20Z INFO metrics: metrics scrape took 6108ms
+2026-11-07T19:21:27Z WARN scheduler: retrying job 9890 after timeout
+2026-11-08T20:22:34Z INFO auth: token refresh for client 1743 delayed
+2026-11-09T21:23:41Z INFO uploads: upload 623 exceeded soft limit
+2026-11-01T10:24:48Z INFO uploads: upload 2326 exceeded soft limit
+2026-11-02T11:25:55Z INFO http.server: slow response from upstream (4186ms)
+2026-11-03T12:26:02Z INFO http.server: slow response from upstream (196ms)
+2026-11-04T13:27:09Z WARN uploads: upload 6101 exceeded soft limit
+2026-11-05T14:28:16Z INFO scheduler: retrying job 1286 after timeout
+2026-11-06T15:29:23Z INFO metrics: metrics scrape took 8130ms
+2026-11-07T16:30:30Z INFO tls: handshake 6697 renegotiated
+2026-11-08T17:31:37Z WARN cache: cache miss storm (9023 keys)
+2026-11-09T18:32:44Z INFO scheduler: retrying job 2691 after timeout
+2026-11-01T19:33:51Z INFO queue: queue lag 6723ms
+2026-11-02T20:34:58Z INFO auth: token refresh for client 6855 delayed
+2026-11-03T21:35:05Z INFO http.server: slow response from upstream (9291ms)
+2026-11-04T10:36:12Z WARN uploads: upload 6833 exceeded soft limit
+2026-11-05T11:37:19Z INFO http.server: slow response from upstream (3240ms)
+2026-11-06T12:38:26Z WARN queue: queue lag 3346ms
+2026-11-07T13:39:33Z WARN http.server: slow response from upstream (2575ms)
+2026-11-08T14:40:40Z INFO queue: queue lag 1492ms
+2026-11-09T15:41:47Z INFO queue: queue lag 7561ms
+2026-11-01T16:42:54Z INFO scheduler: retrying job 253 after timeout
+2026-11-02T17:43:01Z INFO http.server: slow response from upstream (6509ms)
+2026-11-03T18:44:08Z INFO cache: cache miss storm (8275 keys)
+2026-11-04T19:45:15Z INFO scheduler: retrying job 5710 after timeout
+2026-11-05T20:46:22Z INFO auth: token refresh for client 8548 delayed
+2026-11-06T21:47:29Z INFO scheduler: retrying job 1792 after timeout
+2026-11-07T10:48:36Z WARN queue: queue lag 3243ms
+2026-11-08T11:49:43Z INFO auth: token refresh for client 722 delayed
+2026-11-09T12:50:50Z INFO tls: handshake 884 renegotiated
+2026-11-01T13:51:57Z INFO queue: queue lag 2635ms
+2026-11-02T14:52:04Z WARN metrics: metrics scrape took 3223ms
+2026-11-03T15:53:11Z INFO tls: handshake 9273 renegotiated
+2026-11-04T16:54:18Z INFO metrics: metrics scrape took 6559ms
+2026-11-05T17:55:25Z WARN scheduler: retrying job 5895 after timeout
+2026-11-06T18:56:32Z INFO cache: cache miss storm (4057 keys)
+2026-11-07T19:57:39Z INFO metrics: metrics scrape took 9223ms
+2026-11-08T20:58:46Z INFO http.server: slow response from upstream (1938ms)
+2026-11-09T21:59:53Z WARN queue: queue lag 9022ms
+2026-11-01T10:00:00Z WARN auth: token refresh for client 5059 delayed
+2026-11-02T11:01:07Z WARN metrics: metrics scrape took 6386ms
+2026-11-03T12:02:14Z WARN uploads: upload 8260 exceeded soft limit
+2026-11-04T13:03:21Z INFO tls: handshake 392 renegotiated
+2026-11-05T14:04:28Z WARN http.server: slow response from upstream (7633ms)
+2026-11-06T15:05:35Z WARN metrics: metrics scrape took 7518ms
+2026-11-07T16:06:42Z WARN scheduler: retrying job 6569 after timeout
+2026-11-08T17:07:49Z INFO cache: cache miss storm (2114 keys)
+2026-11-09T18:08:56Z WARN uploads: upload 5995 exceeded soft limit
+2026-11-01T19:09:03Z WARN cache: cache miss storm (8273 keys)
+2026-11-02T20:10:10Z INFO http.server: slow response from upstream (2144ms)
+2026-11-03T21:11:17Z INFO cache: cache miss storm (8390 keys)
+2026-11-04T10:12:24Z INFO cache: cache miss storm (8266 keys)
+2026-11-05T11:13:31Z INFO queue: queue lag 433ms
+2026-11-06T12:14:38Z INFO cache: cache miss storm (3183 keys)
+2026-11-07T13:15:45Z WARN scheduler: retrying job 4726 after timeout
+2026-11-08T14:16:52Z INFO scheduler: retrying job 1083 after timeout
+2026-11-09T15:17:59Z INFO uploads: upload 2611 exceeded soft limit
+2026-11-01T16:18:06Z INFO uploads: upload 7487 exceeded soft limit
+2026-11-02T17:19:13Z INFO scheduler: retrying job 8238 after timeout
+2026-11-03T18:20:20Z INFO tls: handshake 9707 renegotiated
+2026-11-04T19:21:27Z INFO auth: token refresh for client 5237 delayed
+2026-11-05T20:22:34Z INFO uploads: upload 3269 exceeded soft limit
+2026-11-06T21:23:41Z WARN scheduler: retrying job 2651 after timeout
+2026-11-07T10:24:48Z INFO auth: token refresh for client 6184 delayed
+2026-11-08T11:25:55Z INFO scheduler: retrying job 1895 after timeout
+2026-11-09T12:26:02Z INFO http.server: slow response from upstream (7432ms)
+2026-11-01T13:27:09Z INFO cache: cache miss storm (8786 keys)
+2026-11-02T14:28:16Z INFO queue: queue lag 4347ms
+2026-11-03T15:29:23Z INFO queue: queue lag 9469ms
+2026-11-04T16:30:30Z INFO scheduler: retrying job 5430 after timeout
+2026-11-05T17:31:37Z WARN cache: cache miss storm (3779 keys)
+2026-11-06T18:32:44Z INFO scheduler: retrying job 4865 after timeout
+2026-11-07T19:33:51Z INFO auth: token refresh for client 9608 delayed
+2026-11-08T20:34:58Z INFO uploads: upload 563 exceeded soft limit
+2026-11-09T21:35:05Z INFO metrics: metrics scrape took 4777ms
+2026-11-01T10:36:12Z WARN queue: queue lag 8409ms
+2026-11-02T11:37:19Z INFO uploads: upload 2173 exceeded soft limit
+2026-11-03T12:38:26Z INFO tls: handshake 756 renegotiated
+2026-11-04T13:39:33Z INFO http.server: slow response from upstream (52ms)
+2026-11-05T14:40:40Z INFO uploads: upload 1752 exceeded soft limit
+2026-11-06T15:41:47Z INFO uploads: upload 6780 exceeded soft limit
+2026-11-07T16:42:54Z INFO auth: token refresh for client 3355 delayed
+2026-11-08T17:43:01Z WARN uploads: upload 2608 exceeded soft limit
+2026-11-09T18:44:08Z INFO scheduler: retrying job 4000 after timeout
+2026-11-01T19:45:15Z WARN scheduler: retrying job 1579 after timeout
+2026-11-02T20:46:22Z INFO cache: cache miss storm (4429 keys)
+2026-11-03T21:47:29Z INFO queue: queue lag 198ms
+2026-11-04T10:48:36Z INFO http.server: slow response from upstream (9753ms)
+2026-11-05T11:49:43Z WARN tls: handshake 4081 renegotiated
+2026-11-06T12:50:50Z INFO scheduler: retrying job 730 after timeout
+2026-11-07T13:51:57Z INFO http.server: slow response from upstream (6661ms)
+2026-11-08T14:52:04Z INFO scheduler: retrying job 2618 after timeout
+2026-11-09T15:53:11Z INFO http.server: slow response from upstream (212ms)
+2026-11-01T16:54:18Z INFO metrics: metrics scrape took 6779ms
+2026-11-02T17:55:25Z WARN metrics: metrics scrape took 2871ms
+2026-11-03T18:56:32Z INFO auth: token refresh for client 4929 delayed
+2026-11-04T19:57:39Z WARN http.server: slow response from upstream (8831ms)
+2026-11-05T20:58:46Z WARN http.server: slow response from upstream (7164ms)
+2026-11-06T21:59:53Z INFO tls: handshake 7423 renegotiated
+2026-11-07T10:00:00Z INFO scheduler: retrying job 1734 after timeout
+2026-11-08T11:01:07Z INFO auth: token refresh for client 645 delayed
+2026-11-09T12:02:14Z INFO cache: cache miss storm (4323 keys)
+2026-11-01T13:03:21Z INFO http.server: slow response from upstream (9083ms)
+2026-11-02T14:04:28Z INFO queue: queue lag 4853ms
+2026-11-03T15:05:35Z INFO metrics: metrics scrape took 8323ms
+2026-11-04T16:06:42Z INFO http.server: slow response from upstream (4275ms)
+2026-11-05T17:07:49Z INFO metrics: metrics scrape took 2618ms
+2026-11-06T18:08:56Z INFO uploads: upload 6378 exceeded soft limit
+2026-11-07T19:09:03Z INFO uploads: upload 6226 exceeded soft limit
+2026-11-08T20:10:10Z WARN tls: handshake 8703 renegotiated
+2026-11-09T21:11:17Z INFO http.server: slow response from upstream (7173ms)
+2026-11-01T10:12:24Z INFO metrics: metrics scrape took 3482ms
+2026-11-02T11:13:31Z INFO queue: queue lag 9270ms
+2026-11-03T12:14:38Z INFO scheduler: retrying job 549 after timeout
+2026-11-04T13:15:45Z INFO http.server: slow response from upstream (1757ms)
+2026-11-05T14:16:52Z INFO scheduler: retrying job 2333 after timeout
+2026-11-06T15:17:59Z INFO http.server: slow response from upstream (692ms)
+2026-11-07T16:18:06Z INFO scheduler: retrying job 1121 after timeout
+2026-11-08T17:19:13Z INFO http.server: slow response from upstream (9684ms)
+2026-11-09T18:20:20Z INFO uploads: upload 8757 exceeded soft limit
+2026-11-01T19:21:27Z WARN cache: cache miss storm (1764 keys)
+2026-11-02T20:22:34Z INFO metrics: metrics scrape took 3338ms
+2026-11-03T21:23:41Z INFO cache: cache miss storm (574 keys)
+2026-11-04T10:24:48Z INFO cache: cache miss storm (7827 keys)
+2026-11-05T11:25:55Z INFO cache: cache miss storm (1613 keys)
+2026-11-06T12:26:02Z INFO metrics: metrics scrape took 5238ms
+2026-11-07T13:27:09Z WARN uploads: upload 4288 exceeded soft limit
+2026-11-08T14:28:16Z INFO http.server: slow response from upstream (4215ms)
+2026-11-09T15:29:23Z INFO auth: token refresh for client 6039 delayed
+2026-11-01T16:30:30Z WARN uploads: upload 4722 exceeded soft limit
+2026-11-02T17:31:37Z WARN http.server: slow response from upstream (521ms)
+2026-11-03T18:32:44Z INFO queue: queue lag 5691ms
+2026-11-04T19:33:51Z INFO tls: handshake 8822 renegotiated
+2026-11-05T20:34:58Z INFO metrics: metrics scrape took 9423ms
+2026-11-06T21:35:05Z INFO auth: token refresh for client 7154 delayed
+2026-11-07T10:36:12Z INFO http.server: slow response from upstream (4734ms)
+2026-11-08T11:37:19Z INFO http.server: slow response from upstream (5708ms)
+2026-11-09T12:38:26Z INFO tls: handshake 8062 renegotiated
+2026-11-01T13:39:33Z WARN scheduler: retrying job 9718 after timeout
+2026-11-02T14:40:40Z INFO uploads: upload 9480 exceeded soft limit
+2026-11-03T15:41:47Z INFO scheduler: retrying job 3527 after timeout
+2026-11-04T16:42:54Z WARN metrics: metrics scrape took 2726ms
+2026-11-05T17:43:01Z INFO cache: cache miss storm (8042 keys)
+2026-11-06T18:44:08Z INFO cache: cache miss storm (5836 keys)
+2026-11-07T19:45:15Z WARN cache: cache miss storm (6475 keys)
+2026-11-08T20:46:22Z WARN cache: cache miss storm (422 keys)
+2026-11-09T21:47:29Z INFO uploads: upload 4976 exceeded soft limit
+2026-11-01T10:48:36Z WARN auth: token refresh for client 8938 delayed
+2026-11-02T11:49:43Z WARN scheduler: retrying job 3836 after timeout
+2026-11-03T12:50:50Z INFO tls: handshake 8718 renegotiated
+2026-11-04T13:51:57Z INFO http.server: slow response from upstream (9538ms)
+2026-11-05T14:52:04Z INFO uploads: upload 7387 exceeded soft limit
+2026-11-06T15:53:11Z INFO uploads: upload 7598 exceeded soft limit
+2026-11-07T16:54:18Z INFO tls: handshake 9499 renegotiated
+2026-11-08T17:55:25Z INFO metrics: metrics scrape took 5483ms
+2026-11-09T18:56:32Z INFO tls: handshake 8328 renegotiated
+2026-11-01T19:57:39Z INFO metrics: metrics scrape took 4949ms
+2026-11-02T20:58:46Z INFO scheduler: retrying job 4066 after timeout
+2026-11-03T21:59:53Z INFO uploads: upload 2646 exceeded soft limit
+2026-11-04T10:00:00Z INFO metrics: metrics scrape took 3111ms
+2026-11-05T11:01:07Z INFO auth: token refresh for client 2706 delayed
+2026-11-06T12:02:14Z INFO cache: cache miss storm (6305 keys)
+2026-11-07T13:03:21Z INFO scheduler: retrying job 4959 after timeout
+2026-11-08T14:04:28Z WARN auth: token refresh for client 4496 delayed
+2026-11-09T15:05:35Z INFO metrics: metrics scrape took 1760ms
+2026-11-01T16:06:42Z INFO auth: token refresh for client 6372 delayed
+2026-11-02T17:07:49Z INFO tls: handshake 216 renegotiated
+2026-11-03T18:08:56Z WARN queue: queue lag 3654ms
+2026-11-04T19:09:03Z WARN auth: token refresh for client 372 delayed
+2026-11-05T20:10:10Z INFO scheduler: retrying job 9901 after timeout
+2026-11-06T21:11:17Z INFO queue: queue lag 3979ms
+2026-11-07T10:12:24Z WARN queue: queue lag 3754ms
+2026-11-08T11:13:31Z INFO metrics: metrics scrape took 2045ms
+2026-11-09T12:14:38Z WARN tls: handshake 5138 renegotiated
+2026-11-01T13:15:45Z INFO auth: token refresh for client 6884 delayed
+2026-11-02T14:16:52Z WARN metrics: metrics scrape took 2573ms
+2026-11-03T15:17:59Z WARN auth: token refresh for client 7919 delayed
+2026-11-04T16:18:06Z INFO tls: handshake 6716 renegotiated
+2026-11-05T17:19:13Z INFO scheduler: retrying job 184 after timeout
+2026-11-06T18:20:20Z WARN queue: queue lag 1752ms
+2026-11-07T19:21:27Z INFO http.server: slow response from upstream (8912ms)
+2026-11-08T20:22:34Z INFO metrics: metrics scrape took 3283ms
+2026-11-09T21:23:41Z INFO uploads: upload 9423 exceeded soft limit
+2026-11-01T10:24:48Z INFO tls: handshake 7804 renegotiated
+2026-11-02T11:25:55Z INFO http.server: slow response from upstream (8557ms)
+2026-11-03T12:26:02Z WARN uploads: upload 7496 exceeded soft limit
+2026-11-04T13:27:09Z INFO metrics: metrics scrape took 6440ms
+2026-11-05T14:28:16Z INFO cache: cache miss storm (937 keys)
+2026-11-06T15:29:23Z INFO auth: token refresh for client 6266 delayed
+2026-11-07T16:30:30Z INFO queue: queue lag 228ms
+2026-11-08T17:31:37Z WARN cache: cache miss storm (6900 keys)
+2026-11-09T18:32:44Z INFO uploads: upload 1800 exceeded soft limit
+2026-11-01T19:33:51Z INFO metrics: metrics scrape took 6571ms
+2026-11-02T20:34:58Z WARN metrics: metrics scrape took 7581ms
+2026-11-03T21:35:05Z INFO metrics: metrics scrape took 2128ms
+2026-11-04T10:36:12Z INFO cache: cache miss storm (7696 keys)
+2026-11-05T11:37:19Z INFO metrics: metrics scrape took 5795ms
+2026-11-06T12:38:26Z WARN queue: queue lag 4832ms
+2026-11-07T13:39:33Z WARN scheduler: retrying job 5822 after timeout
+2026-11-08T14:40:40Z INFO metrics: metrics scrape took 6172ms
+2026-11-09T15:41:47Z WARN auth: token refresh for client 3055 delayed
+2026-11-01T16:42:54Z INFO tls: handshake 4617 renegotiated
+2026-11-02T17:43:01Z INFO uploads: upload 4955 exceeded soft limit
+2026-11-03T18:44:08Z WARN uploads: upload 7954 exceeded soft limit
+2026-11-04T19:45:15Z INFO queue: queue lag 5948ms
+2026-11-05T20:46:22Z INFO scheduler: retrying job 6319 after timeout
+2026-11-06T21:47:29Z INFO http.server: slow response from upstream (9260ms)
+2026-11-07T10:48:36Z INFO uploads: upload 8704 exceeded soft limit
+2026-11-08T11:49:43Z INFO uploads: upload 198 exceeded soft limit
+2026-11-09T12:50:50Z INFO metrics: metrics scrape took 4810ms
+2026-11-01T13:51:57Z INFO auth: token refresh for client 9487 delayed
+2026-11-02T14:52:04Z INFO scheduler: retrying job 3051 after timeout
+2026-11-03T15:53:11Z INFO tls: handshake 2511 renegotiated
+2026-11-04T16:54:18Z WARN metrics: metrics scrape took 8767ms
+2026-11-05T17:55:25Z INFO scheduler: retrying job 8996 after timeout
+2026-11-06T18:56:32Z INFO auth: token refresh for client 8111 delayed
+2026-11-07T19:57:39Z INFO metrics: metrics scrape took 7195ms
+2026-11-08T20:58:46Z INFO cache: cache miss storm (4343 keys)
+2026-11-09T21:59:53Z INFO queue: queue lag 2292ms
+2026-11-01T10:00:00Z WARN tls: handshake 9139 renegotiated
+2026-11-02T11:01:07Z WARN http.server: slow response from upstream (7662ms)
+2026-11-03T12:02:14Z WARN scheduler: retrying job 4049 after timeout
+2026-11-04T13:03:21Z INFO tls: handshake 8849 renegotiated
+2026-11-05T14:04:28Z INFO http.server: slow response from upstream (5264ms)
+2026-11-06T15:05:35Z WARN tls: handshake 4873 renegotiated
+2026-11-07T16:06:42Z INFO tls: handshake 6986 renegotiated
+2026-11-08T17:07:49Z INFO queue: queue lag 2967ms
+2026-11-09T18:08:56Z INFO uploads: upload 346 exceeded soft limit
+2026-11-01T19:09:03Z INFO http.server: slow response from upstream (1549ms)
+2026-11-02T20:10:10Z WARN tls: handshake 2377 renegotiated
+2026-11-03T21:11:17Z INFO http.server: slow response from upstream (6819ms)
+2026-11-04T10:12:24Z INFO scheduler: retrying job 1557 after timeout
+2026-11-05T11:13:31Z INFO uploads: upload 7784 exceeded soft limit
+2026-11-06T12:14:38Z INFO metrics: metrics scrape took 7140ms
+2026-11-07T13:15:45Z WARN uploads: upload 4131 exceeded soft limit
+2026-11-08T14:16:52Z INFO http.server: slow response from upstream (4808ms)
+2026-11-09T15:17:59Z WARN uploads: upload 6624 exceeded soft limit
+2026-11-01T16:18:06Z INFO uploads: upload 8307 exceeded soft limit
+2026-11-02T17:19:13Z INFO uploads: upload 8074 exceeded soft limit
+2026-11-03T18:20:20Z INFO cache: cache miss storm (3160 keys)
+2026-11-04T19:21:27Z INFO uploads: upload 2100 exceeded soft limit
+2026-11-05T20:22:34Z INFO cache: cache miss storm (6545 keys)
+2026-11-06T21:23:41Z INFO queue: queue lag 6538ms
+2026-11-07T10:24:48Z INFO auth: token refresh for client 111 delayed
+2026-11-08T11:25:55Z INFO http.server: slow response from upstream (7793ms)
+2026-11-09T12:26:02Z WARN http.server: slow response from upstream (2419ms)
+2026-11-01T13:27:09Z INFO cache: cache miss storm (656 keys)
+2026-11-02T14:28:16Z INFO tls: handshake 1670 renegotiated
+2026-11-03T15:29:23Z INFO scheduler: retrying job 6917 after timeout
+2026-11-04T16:30:30Z INFO cache: cache miss storm (6053 keys)
+2026-11-05T17:31:37Z INFO scheduler: retrying job 9219 after timeout
+2026-11-06T18:32:44Z INFO auth: token refresh for client 3037 delayed
+2026-11-07T19:33:51Z INFO queue: queue lag 5227ms
+2026-11-08T20:34:58Z WARN http.server: slow response from upstream (9288ms)
+2026-11-09T21:35:05Z WARN http.server: slow response from upstream (9308ms)
+2026-11-01T10:36:12Z INFO http.server: slow response from upstream (6908ms)
+2026-11-02T11:37:19Z WARN queue: queue lag 1111ms
+2026-11-03T12:38:26Z WARN http.server: slow response from upstream (9739ms)
+2026-11-04T13:39:33Z WARN scheduler: retrying job 6767 after timeout
+2026-11-05T14:40:40Z INFO cache: cache miss storm (7746 keys)
+2026-11-06T15:41:47Z INFO metrics: metrics scrape took 264ms
+2026-11-07T16:42:54Z INFO queue: queue lag 162ms
+2026-11-08T17:43:01Z INFO cache: cache miss storm (3585 keys)
+2026-11-09T18:44:08Z INFO cache: cache miss storm (7748 keys)
+2026-11-01T19:45:15Z INFO http.server: slow response from upstream (9332ms)
+2026-11-02T20:46:22Z WARN metrics: metrics scrape took 3080ms
+2026-11-03T21:47:29Z INFO http.server: slow response from upstream (2382ms)
+2026-11-04T10:48:36Z INFO cache: cache miss storm (9143 keys)
+2026-11-05T11:49:43Z WARN tls: handshake 4172 renegotiated
+2026-11-06T12:50:50Z INFO http.server: slow response from upstream (196ms)
+2026-11-07T13:51:57Z INFO http.server: slow response from upstream (1315ms)
+2026-11-08T14:52:04Z INFO queue: queue lag 5129ms
+2026-11-09T15:53:11Z WARN scheduler: retrying job 9987 after timeout
+2026-11-01T16:54:18Z INFO http.server: slow response from upstream (6032ms)
+2026-11-02T17:55:25Z WARN tls: handshake 2737 renegotiated
+2026-11-03T18:56:32Z INFO scheduler: retrying job 5961 after timeout
+2026-11-04T19:57:39Z WARN scheduler: retrying job 7824 after timeout
+2026-11-05T20:58:46Z WARN queue: queue lag 4466ms
+2026-11-06T21:59:53Z INFO uploads: upload 4595 exceeded soft limit
+2026-11-07T10:00:00Z INFO http.server: slow response from upstream (9935ms)
+2026-11-08T11:01:07Z INFO http.server: slow response from upstream (9859ms)
+2026-11-09T12:02:14Z WARN auth: token refresh for client 4042 delayed
+2026-11-01T13:03:21Z WARN queue: queue lag 6173ms
+2026-11-02T14:04:28Z WARN metrics: metrics scrape took 4651ms
+2026-11-03T15:05:35Z INFO http.server: slow response from upstream (4319ms)
+2026-11-04T16:06:42Z WARN auth: token refresh for client 2586 delayed
+2026-11-05T17:07:49Z INFO http.server: slow response from upstream (2314ms)
+2026-11-06T18:08:56Z INFO scheduler: retrying job 8985 after timeout
+2026-11-07T19:09:03Z INFO tls: handshake 8768 renegotiated
+2026-11-08T20:10:10Z WARN cache: cache miss storm (6264 keys)
+2026-11-09T21:11:17Z INFO metrics: metrics scrape took 5080ms
+2026-11-01T10:12:24Z WARN http.server: slow response from upstream (7633ms)
+2026-11-02T11:13:31Z INFO metrics: metrics scrape took 9617ms
+2026-11-03T12:14:38Z WARN http.server: slow response from upstream (7542ms)
+2026-11-04T13:15:45Z INFO cache: cache miss storm (1036 keys)
+2026-11-05T14:16:52Z WARN metrics: metrics scrape took 9506ms
+2026-11-06T15:17:59Z INFO auth: token refresh for client 7818 delayed
+2026-11-07T16:18:06Z INFO metrics: metrics scrape took 3494ms
+2026-11-08T17:19:13Z INFO metrics: metrics scrape took 2970ms
+2026-11-09T18:20:20Z INFO auth: token refresh for client 9477 delayed
+2026-11-01T19:21:27Z WARN uploads: upload 8484 exceeded soft limit
+2026-11-02T20:22:34Z INFO scheduler: retrying job 740 after timeout
+2026-11-03T21:23:41Z INFO tls: handshake 1748 renegotiated
+2026-11-04T10:24:48Z WARN uploads: upload 1349 exceeded soft limit
+2026-11-05T11:25:55Z INFO scheduler: retrying job 9794 after timeout
+2026-11-06T12:26:02Z INFO http.server: slow response from upstream (4606ms)
+2026-11-07T13:27:09Z INFO http.server: slow response from upstream (560ms)
+2026-11-08T14:28:16Z WARN metrics: metrics scrape took 9622ms
+2026-11-09T15:29:23Z INFO metrics: metrics scrape took 4594ms
+2026-11-01T16:30:30Z INFO queue: queue lag 7331ms
+2026-11-02T17:31:37Z INFO scheduler: retrying job 630 after timeout
+2026-11-03T18:32:44Z INFO uploads: upload 2971 exceeded soft limit
+2026-11-04T19:33:51Z INFO queue: queue lag 460ms
+2026-11-05T20:34:58Z INFO http.server: slow response from upstream (9142ms)
+2026-11-06T21:35:05Z WARN uploads: upload 7986 exceeded soft limit
+2026-11-07T10:36:12Z WARN cache: cache miss storm (1974 keys)
+2026-11-08T11:37:19Z INFO cache: cache miss storm (5231 keys)
+2026-11-09T12:38:26Z INFO metrics: metrics scrape took 8308ms
+2026-11-01T13:39:33Z INFO queue: queue lag 7355ms
+2026-11-02T14:40:40Z INFO scheduler: retrying job 3862 after timeout
+2026-11-03T15:41:47Z INFO metrics: metrics scrape took 642ms
+2026-11-04T16:42:54Z INFO auth: token refresh for client 981 delayed
+2026-11-05T17:43:01Z INFO http.server: slow response from upstream (4235ms)
+2026-11-06T18:44:08Z INFO tls: handshake 1665 renegotiated
+2026-11-07T19:45:15Z INFO scheduler: retrying job 104 after timeout
+2026-11-08T20:46:22Z INFO metrics: metrics scrape took 9673ms
+2026-11-09T21:47:29Z INFO tls: handshake 7722 renegotiated
+2026-11-01T10:48:36Z INFO uploads: upload 4220 exceeded soft limit
+2026-11-02T11:49:43Z INFO queue: queue lag 6153ms
+2026-11-03T12:50:50Z WARN tls: handshake 2771 renegotiated
+2026-11-04T13:51:57Z INFO tls: handshake 2355 renegotiated
+2026-11-05T14:52:04Z WARN http.server: slow response from upstream (3206ms)
+2026-11-06T15:53:11Z INFO http.server: slow response from upstream (3623ms)
+2026-11-07T16:54:18Z INFO cache: cache miss storm (2299 keys)
+2026-11-08T17:55:25Z INFO tls: handshake 6319 renegotiated
+2026-11-09T18:56:32Z INFO http.server: slow response from upstream (7421ms)
+2026-11-01T19:57:39Z INFO uploads: upload 3841 exceeded soft limit
+2026-11-02T20:58:46Z INFO tls: handshake 6007 renegotiated
+2026-11-03T21:59:53Z INFO scheduler: retrying job 3641 after timeout
+2026-11-04T10:00:00Z INFO http.server: slow response from upstream (7405ms)
+2026-11-05T11:01:07Z WARN scheduler: retrying job 2457 after timeout
+2026-11-06T12:02:14Z WARN auth: token refresh for client 6756 delayed
+2026-11-07T13:03:21Z INFO metrics: metrics scrape took 426ms
+2026-11-08T14:04:28Z INFO auth: token refresh for client 5490 delayed
+2026-11-09T15:05:35Z INFO scheduler: retrying job 8054 after timeout
+2026-11-01T16:06:42Z INFO cache: cache miss storm (7484 keys)
+2026-11-02T17:07:49Z INFO tls: handshake 2522 renegotiated
+2026-11-03T18:08:56Z INFO http.server: slow response from upstream (9184ms)
+2026-11-04T19:09:03Z INFO tls: handshake 1962 renegotiated
+2026-11-05T20:10:10Z INFO auth: token refresh for client 5978 delayed
+2026-11-06T21:11:17Z INFO queue: queue lag 3920ms
+2026-11-07T10:12:24Z INFO metrics: metrics scrape took 6402ms
+2026-11-08T11:13:31Z WARN auth: token refresh for client 2667 delayed
+2026-11-09T12:14:38Z INFO http.server: slow response from upstream (2375ms)
+2026-11-01T13:15:45Z WARN http.server: slow response from upstream (8329ms)
+2026-11-02T14:16:52Z INFO uploads: upload 7268 exceeded soft limit
+2026-11-03T15:17:59Z INFO http.server: slow response from upstream (3054ms)
+2026-11-04T16:18:06Z WARN uploads: upload 674 exceeded soft limit
+2026-11-05T17:19:13Z INFO queue: queue lag 4545ms
+2026-11-06T18:20:20Z INFO scheduler: retrying job 2961 after timeout
+2026-11-07T19:21:27Z INFO metrics: metrics scrape took 3232ms
+2026-11-08T20:22:34Z INFO cache: cache miss storm (9980 keys)
+2026-11-09T21:23:41Z INFO tls: handshake 2882 renegotiated
+2026-11-01T10:24:48Z INFO metrics: metrics scrape took 3158ms
+2026-11-02T11:25:55Z INFO auth: token refresh for client 174 delayed
+2026-11-03T12:26:02Z WARN cache: cache miss storm (917 keys)
+2026-11-04T13:27:09Z INFO uploads: upload 4626 exceeded soft limit
+2026-11-05T14:28:16Z INFO tls: handshake 263 renegotiated
+2026-11-06T15:29:23Z WARN queue: queue lag 2193ms
+2026-11-07T16:30:30Z INFO auth: token refresh for client 3058 delayed
+2026-11-08T17:31:37Z INFO uploads: upload 2688 exceeded soft limit
+2026-11-09T18:32:44Z INFO uploads: upload 5845 exceeded soft limit
+2026-11-01T19:33:51Z INFO tls: handshake 1988 renegotiated
+2026-11-02T20:34:58Z INFO uploads: upload 5268 exceeded soft limit
+2026-11-03T21:35:05Z INFO queue: queue lag 4786ms
+2026-11-04T10:36:12Z WARN cache: cache miss storm (7324 keys)
+2026-11-05T11:37:19Z INFO http.server: slow response from upstream (348ms)
+2026-11-06T12:38:26Z INFO metrics: metrics scrape took 3675ms
+2026-11-07T13:39:33Z INFO scheduler: retrying job 1692 after timeout
+2026-11-08T14:40:40Z INFO auth: token refresh for client 9109 delayed
+2026-11-09T15:41:47Z INFO http.server: slow response from upstream (1590ms)
+2026-11-01T16:42:54Z INFO metrics: metrics scrape took 299ms
+2026-11-02T17:43:01Z INFO tls: handshake 7287 renegotiated
+2026-11-03T18:44:08Z INFO cache: cache miss storm (1548 keys)
+2026-11-04T19:45:15Z INFO scheduler: retrying job 4483 after timeout
+2026-11-05T20:46:22Z WARN cache: cache miss storm (8097 keys)
+2026-11-06T21:47:29Z INFO auth: token refresh for client 2009 delayed
+2026-11-07T10:48:36Z WARN cache: cache miss storm (2253 keys)
+2026-11-08T11:49:43Z INFO metrics: metrics scrape took 2422ms
+2026-11-09T12:50:50Z WARN tls: handshake 2702 renegotiated
+2026-11-01T13:51:57Z WARN http.server: slow response from upstream (6899ms)
+2026-11-02T14:52:04Z WARN http.server: slow response from upstream (861ms)
+2026-11-03T15:53:11Z INFO uploads: upload 6575 exceeded soft limit
+2026-11-04T16:54:18Z INFO metrics: metrics scrape took 7146ms
+2026-11-05T17:55:25Z WARN uploads: upload 9202 exceeded soft limit
+2026-11-06T18:56:32Z INFO http.server: slow response from upstream (8486ms)
+2026-11-07T19:57:39Z INFO scheduler: retrying job 4094 after timeout
+2026-11-08T20:58:46Z INFO queue: queue lag 5980ms
+2026-11-09T21:59:53Z INFO cache: cache miss storm (1144 keys)
+2026-11-01T10:00:00Z WARN uploads: upload 3299 exceeded soft limit
+2026-11-02T11:01:07Z INFO http.server: slow response from upstream (2294ms)
+2026-11-03T12:02:14Z WARN queue: queue lag 7443ms
+2026-11-04T13:03:21Z INFO http.server: slow response from upstream (573ms)
+2026-11-05T14:04:28Z INFO auth: token refresh for client 8894 delayed
+2026-11-06T15:05:35Z INFO http.server: slow response from upstream (4115ms)
+2026-11-07T16:06:42Z INFO cache: cache miss storm (7115 keys)
+2026-11-08T17:07:49Z INFO metrics: metrics scrape took 4720ms
+2026-11-09T18:08:56Z INFO cache: cache miss storm (5704 keys)
+2026-11-01T19:09:03Z INFO scheduler: retrying job 998 after timeout
+2026-11-02T20:10:10Z INFO auth: token refresh for client 7651 delayed
+2026-11-03T21:11:17Z WARN scheduler: retrying job 2040 after timeout
+2026-11-04T10:12:24Z INFO scheduler: retrying job 6670 after timeout
+2026-11-05T11:13:31Z INFO auth: token refresh for client 3997 delayed
+2026-11-06T12:14:38Z INFO cache: cache miss storm (7450 keys)
+2026-11-07T13:15:45Z WARN metrics: metrics scrape took 3306ms
+2026-11-08T14:16:52Z WARN uploads: upload 8988 exceeded soft limit
+2026-11-09T15:17:59Z WARN auth: token refresh for client 7693 delayed
+2026-11-01T16:18:06Z INFO auth: token refresh for client 3979 delayed
+2026-11-02T17:19:13Z INFO uploads: upload 3103 exceeded soft limit
+2026-11-03T18:20:20Z WARN queue: queue lag 204ms
+2026-11-04T19:21:27Z INFO uploads: upload 3918 exceeded soft limit
+2026-11-05T20:22:34Z INFO uploads: upload 8061 exceeded soft limit
+2026-11-06T21:23:41Z INFO auth: token refresh for client 3551 delayed
+2026-11-07T10:24:48Z INFO auth: token refresh for client 366 delayed
+2026-11-08T11:25:55Z INFO scheduler: retrying job 9937 after timeout
+2026-11-09T12:26:02Z WARN uploads: upload 1026 exceeded soft limit
+2026-11-01T13:27:09Z WARN queue: queue lag 5811ms
+2026-11-02T14:28:16Z INFO cache: cache miss storm (2541 keys)
+2026-11-03T15:29:23Z INFO queue: queue lag 5784ms
+2026-11-04T16:30:30Z INFO scheduler: retrying job 4544 after timeout
+2026-11-05T17:31:37Z WARN cache: cache miss storm (4412 keys)
+2026-11-06T18:32:44Z WARN scheduler: retrying job 1703 after timeout
+2026-11-07T19:33:51Z WARN http.server: slow response from upstream (9020ms)
+2026-11-08T20:34:58Z WARN cache: cache miss storm (6522 keys)
+2026-11-09T21:35:05Z WARN scheduler: retrying job 4586 after timeout
+2026-11-01T10:36:12Z WARN cache: cache miss storm (7420 keys)
+2026-11-02T11:37:19Z INFO tls: handshake 5787 renegotiated
+2026-11-03T12:38:26Z INFO auth: token refresh for client 6410 delayed
+2026-11-04T13:39:33Z INFO queue: queue lag 120ms
+2026-11-05T14:40:40Z WARN tls: handshake 7285 renegotiated
+2026-11-06T15:41:47Z INFO auth: token refresh for client 8806 delayed
+2026-11-07T16:42:54Z INFO auth: token refresh for client 7147 delayed
+2026-11-08T17:43:01Z INFO queue: queue lag 1450ms
+2026-11-09T18:44:08Z INFO uploads: upload 9972 exceeded soft limit
+2026-11-01T19:45:15Z INFO metrics: metrics scrape took 3357ms
+2026-11-02T20:46:22Z INFO queue: queue lag 429ms
+2026-11-03T21:47:29Z INFO http.server: slow response from upstream (9265ms)
+2026-11-04T10:48:36Z INFO tls: handshake 8799 renegotiated
+2026-11-05T11:49:43Z WARN auth: token refresh for client 8487 delayed
+2026-11-06T12:50:50Z WARN queue: queue lag 7616ms
+2026-11-07T13:51:57Z INFO uploads: upload 9753 exceeded soft limit
+2026-11-08T14:52:04Z WARN uploads: upload 180 exceeded soft limit
+2026-11-09T15:53:11Z INFO cache: cache miss storm (1631 keys)
+2026-11-01T16:54:18Z INFO queue: queue lag 8216ms
+2026-11-02T17:55:25Z INFO queue: queue lag 3093ms
+2026-11-03T18:56:32Z WARN queue: queue lag 6590ms
+2026-11-04T19:57:39Z INFO tls: handshake 8695 renegotiated
+2026-11-05T20:58:46Z INFO cache: cache miss storm (5952 keys)
+2026-11-06T21:59:53Z INFO uploads: upload 1240 exceeded soft limit
+2026-11-07T10:00:00Z INFO auth: token refresh for client 1820 delayed
+2026-11-08T11:01:07Z INFO auth: token refresh for client 8347 delayed
+2026-11-09T12:02:14Z INFO queue: queue lag 8596ms
+2026-11-01T13:03:21Z INFO auth: token refresh for client 8282 delayed
+2026-11-02T14:04:28Z WARN metrics: metrics scrape took 2998ms
+2026-11-03T15:05:35Z INFO http.server: slow response from upstream (5796ms)
+2026-11-04T16:06:42Z WARN http.server: slow response from upstream (185ms)
+2026-11-05T17:07:49Z INFO http.server: slow response from upstream (9069ms)
+2026-11-06T18:08:56Z INFO http.server: slow response from upstream (6523ms)
+2026-11-07T19:09:03Z INFO cache: cache miss storm (493 keys)
+2026-11-08T20:10:10Z INFO metrics: metrics scrape took 8166ms
+2026-11-09T21:11:17Z INFO auth: token refresh for client 9422 delayed
+2026-11-01T10:12:24Z WARN metrics: metrics scrape took 9868ms
+2026-11-02T11:13:31Z INFO cache: cache miss storm (2578 keys)
+2026-11-03T12:14:38Z INFO cache: cache miss storm (1650 keys)
+2026-11-04T13:15:45Z INFO cache: cache miss storm (8570 keys)
+2026-11-05T14:16:52Z WARN tls: handshake 7065 renegotiated
+2026-11-06T15:17:59Z INFO http.server: slow response from upstream (9493ms)
+2026-11-07T16:18:06Z INFO uploads: upload 3913 exceeded soft limit
+2026-11-08T17:19:13Z INFO uploads: upload 2785 exceeded soft limit
+2026-11-09T18:20:20Z INFO http.server: slow response from upstream (1639ms)
+2026-11-01T19:21:27Z INFO cache: cache miss storm (3150 keys)
+2026-11-02T20:22:34Z WARN tls: handshake 330 renegotiated
+2026-11-03T21:23:41Z INFO http.server: slow response from upstream (6497ms)
+2026-11-04T10:24:48Z WARN http.server: slow response from upstream (904ms)
+2026-11-05T11:25:55Z INFO metrics: metrics scrape took 3661ms
+2026-11-06T12:26:02Z INFO http.server: slow response from upstream (9627ms)
+2026-11-07T13:27:09Z INFO scheduler: retrying job 110 after timeout
+2026-11-08T14:28:16Z INFO tls: handshake 6864 renegotiated
+2026-11-09T15:29:23Z WARN auth: token refresh for client 1116 delayed
+2026-11-01T16:30:30Z WARN metrics: metrics scrape took 9591ms
+2026-11-02T17:31:37Z WARN metrics: metrics scrape took 5075ms
+2026-11-03T18:32:44Z WARN queue: queue lag 377ms
+2026-11-04T19:33:51Z INFO metrics: metrics scrape took 2852ms
+2026-11-05T20:34:58Z INFO scheduler: retrying job 6219 after timeout
+2026-11-06T21:35:05Z INFO scheduler: retrying job 4772 after timeout
+2026-11-07T10:36:12Z INFO queue: queue lag 1892ms
+2026-11-08T11:37:19Z WARN uploads: upload 5513 exceeded soft limit
+2026-11-09T12:38:26Z INFO queue: queue lag 2029ms
+2026-11-01T13:39:33Z INFO queue: queue lag 9084ms
+2026-11-02T14:40:40Z WARN metrics: metrics scrape took 3142ms
+2026-11-03T15:41:47Z INFO tls: handshake 5653 renegotiated
+2026-11-04T16:42:54Z WARN metrics: metrics scrape took 582ms
+2026-11-05T17:43:01Z INFO auth: token refresh for client 5603 delayed
+2026-11-06T18:44:08Z INFO scheduler: retrying job 2137 after timeout
+2026-11-07T19:45:15Z INFO cache: cache miss storm (4428 keys)
+2026-11-08T20:46:22Z WARN scheduler: retrying job 7662 after timeout
+2026-11-09T21:47:29Z INFO metrics: metrics scrape took 6037ms
+2026-11-01T10:48:36Z INFO uploads: upload 6648 exceeded soft limit
+2026-11-02T11:49:43Z INFO queue: queue lag 4880ms
+2026-11-03T12:50:50Z INFO tls: handshake 3733 renegotiated
+2026-11-04T13:51:57Z INFO tls: handshake 4282 renegotiated
+2026-11-05T14:52:04Z INFO tls: handshake 8769 renegotiated
+2026-11-06T15:53:11Z WARN metrics: metrics scrape took 9974ms
+2026-11-07T16:54:18Z INFO metrics: metrics scrape took 2021ms
+2026-11-08T17:55:25Z INFO cache: cache miss storm (6314 keys)
+2026-11-09T18:56:32Z INFO http.server: slow response from upstream (5101ms)
+2026-11-01T19:57:39Z WARN http.server: slow response from upstream (1419ms)
+2026-11-02T20:58:46Z INFO scheduler: retrying job 5269 after timeout
+2026-11-03T21:59:53Z INFO metrics: metrics scrape took 1125ms
+2026-11-04T10:00:00Z INFO uploads: upload 3169 exceeded soft limit
+2026-11-05T11:01:07Z INFO cache: cache miss storm (1450 keys)
+2026-11-06T12:02:14Z INFO metrics: metrics scrape took 2076ms
+2026-11-07T13:03:21Z INFO queue: queue lag 5841ms
+2026-11-08T14:04:28Z WARN queue: queue lag 2175ms
+2026-11-09T15:05:35Z INFO auth: token refresh for client 494 delayed
+2026-11-01T16:06:42Z INFO uploads: upload 6769 exceeded soft limit
+2026-11-02T17:07:49Z WARN http.server: slow response from upstream (4080ms)
+2026-11-03T18:08:56Z INFO queue: queue lag 1610ms
+2026-11-04T19:09:03Z INFO scheduler: retrying job 1897 after timeout
+2026-11-05T20:10:10Z INFO auth: token refresh for client 672 delayed
+2026-11-06T21:11:17Z INFO queue: queue lag 9980ms
+2026-11-07T10:12:24Z WARN scheduler: retrying job 3255 after timeout
+2026-11-08T11:13:31Z INFO auth: token refresh for client 6248 delayed
+2026-11-09T12:14:38Z INFO http.server: slow response from upstream (2953ms)
+2026-11-01T13:15:45Z WARN metrics: metrics scrape took 8542ms
+2026-11-02T14:16:52Z WARN auth: token refresh for client 9435 delayed
+2026-11-03T15:17:59Z INFO uploads: upload 1842 exceeded soft limit
+2026-11-04T16:18:06Z INFO auth: token refresh for client 9596 delayed
+2026-11-05T17:19:13Z INFO http.server: slow response from upstream (1831ms)
+2026-11-06T18:20:20Z INFO http.server: slow response from upstream (3452ms)
+2026-11-07T19:21:27Z INFO uploads: upload 6845 exceeded soft limit
+2026-11-08T20:22:34Z INFO queue: queue lag 4616ms
+2026-11-09T21:23:41Z INFO cache: cache miss storm (6956 keys)
+2026-11-01T10:24:48Z INFO tls: handshake 8252 renegotiated
+2026-11-02T11:25:55Z INFO tls: handshake 3384 renegotiated
+2026-11-03T12:26:02Z INFO queue: queue lag 8030ms
+2026-11-04T13:27:09Z INFO metrics: metrics scrape took 9170ms
+2026-11-05T14:28:16Z INFO auth: token refresh for client 8962 delayed
+2026-11-06T15:29:23Z INFO scheduler: retrying job 8921 after timeout
+2026-11-07T16:30:30Z INFO auth: token refresh for client 982 delayed
+2026-11-08T17:31:37Z INFO scheduler: retrying job 5699 after timeout
+2026-11-09T18:32:44Z INFO queue: queue lag 3309ms
+2026-11-01T19:33:51Z INFO auth: token refresh for client 2247 delayed
+2026-11-02T20:34:58Z WARN tls: handshake 3907 renegotiated
+2026-11-03T21:35:05Z INFO metrics: metrics scrape took 8454ms
+2026-11-04T10:36:12Z INFO tls: handshake 5768 renegotiated
+2026-11-05T11:37:19Z INFO auth: token refresh for client 2334 delayed
+2026-11-06T12:38:26Z INFO metrics: metrics scrape took 1942ms
+2026-11-07T13:39:33Z INFO queue: queue lag 2546ms
+2026-11-08T14:40:40Z WARN tls: handshake 3390 renegotiated
+2026-11-09T15:41:47Z INFO cache: cache miss storm (212 keys)
+2026-11-01T16:42:54Z WARN uploads: upload 3392 exceeded soft limit
+2026-11-02T17:43:01Z INFO http.server: slow response from upstream (4611ms)
+2026-11-03T18:44:08Z INFO auth: token refresh for client 1821 delayed
+2026-11-04T19:45:15Z WARN auth: token refresh for client 1861 delayed
+2026-11-05T20:46:22Z INFO scheduler: retrying job 7302 after timeout
+2026-11-06T21:47:29Z INFO tls: handshake 4753 renegotiated
+2026-11-07T10:48:36Z INFO scheduler: retrying job 756 after timeout
+2026-11-08T11:49:43Z WARN http.server: slow response from upstream (7964ms)
+2026-11-09T12:50:50Z INFO cache: cache miss storm (9244 keys)
+2026-11-01T13:51:57Z INFO auth: token refresh for client 8019 delayed
+2026-11-02T14:52:04Z WARN queue: queue lag 3119ms
+2026-11-03T15:53:11Z INFO uploads: upload 5896 exceeded soft limit
+2026-11-04T16:54:18Z INFO cache: cache miss storm (4129 keys)
+2026-11-05T17:55:25Z INFO metrics: metrics scrape took 2281ms
+2026-11-06T18:56:32Z INFO http.server: slow response from upstream (6486ms)
+2026-11-07T19:57:39Z INFO scheduler: retrying job 6037 after timeout
+2026-11-08T20:58:46Z INFO scheduler: retrying job 1684 after timeout
+2026-11-09T21:59:53Z INFO auth: token refresh for client 6225 delayed
+2026-11-01T10:00:00Z INFO scheduler: retrying job 5255 after timeout
+2026-11-02T11:01:07Z INFO metrics: metrics scrape took 2243ms
+2026-11-03T12:02:14Z INFO uploads: upload 3931 exceeded soft limit
+2026-11-04T13:03:21Z INFO http.server: slow response from upstream (1766ms)
+2026-11-05T14:04:28Z INFO queue: queue lag 3556ms
+2026-11-06T15:05:35Z WARN tls: handshake 8194 renegotiated
+2026-11-07T16:06:42Z INFO scheduler: retrying job 9883 after timeout
+2026-11-08T17:07:49Z INFO cache: cache miss storm (3737 keys)
+2026-11-09T18:08:56Z INFO scheduler: retrying job 7271 after timeout
+2026-11-01T19:09:03Z INFO queue: queue lag 664ms
+2026-11-02T20:10:10Z WARN tls: handshake 3136 renegotiated
+2026-11-03T21:11:17Z INFO metrics: metrics scrape took 55ms
+2026-11-04T10:12:24Z WARN http.server: slow response from upstream (2355ms)
+2026-11-05T11:13:31Z INFO auth: token refresh for client 916 delayed
+2026-11-06T12:14:38Z INFO queue: queue lag 1037ms
+2026-11-07T13:15:45Z INFO tls: handshake 2898 renegotiated
+2026-11-08T14:16:52Z WARN scheduler: retrying job 4855 after timeout
+2026-11-09T15:17:59Z WARN http.server: slow response from upstream (9240ms)
+2026-11-01T16:18:06Z INFO uploads: upload 7691 exceeded soft limit
+2026-11-02T17:19:13Z INFO cache: cache miss storm (8476 keys)
+2026-11-03T18:20:20Z WARN tls: handshake 8770 renegotiated
+2026-11-04T19:21:27Z WARN scheduler: retrying job 9989 after timeout
+2026-11-05T20:22:34Z INFO cache: cache miss storm (5441 keys)
+2026-11-06T21:23:41Z WARN auth: token refresh for client 6049 delayed
+2026-11-07T10:24:48Z INFO tls: handshake 4913 renegotiated
+2026-11-08T11:25:55Z INFO uploads: upload 3104 exceeded soft limit
+2026-11-09T12:26:02Z WARN metrics: metrics scrape took 1406ms
+2026-11-01T13:27:09Z INFO scheduler: retrying job 9101 after timeout
+2026-11-02T14:28:16Z INFO queue: queue lag 8693ms
+2026-11-03T15:29:23Z WARN metrics: metrics scrape took 6503ms
+2026-11-04T16:30:30Z INFO auth: token refresh for client 3733 delayed
+2026-11-05T17:31:37Z INFO scheduler: retrying job 8990 after timeout
+2026-11-06T18:32:44Z INFO cache: cache miss storm (4163 keys)
+2026-11-07T19:33:51Z INFO cache: cache miss storm (8706 keys)
+2026-11-08T20:34:58Z WARN auth: token refresh for client 3729 delayed
+2026-11-09T21:35:05Z INFO tls: handshake 8877 renegotiated
+2026-11-01T10:36:12Z INFO cache: cache miss storm (6695 keys)
+2026-11-02T11:37:19Z WARN cache: cache miss storm (2210 keys)
+2026-11-03T12:38:26Z INFO cache: cache miss storm (7546 keys)
+2026-11-04T13:39:33Z INFO queue: queue lag 3149ms
+2026-11-05T14:40:40Z INFO tls: handshake 2251 renegotiated
+2026-11-06T15:41:47Z INFO uploads: upload 6634 exceeded soft limit
+2026-11-07T16:42:54Z INFO metrics: metrics scrape took 6110ms
+2026-11-08T17:43:01Z INFO http.server: slow response from upstream (9747ms)
+2026-11-09T18:44:08Z WARN metrics: metrics scrape took 4924ms
+2026-11-01T19:45:15Z INFO cache: cache miss storm (6989 keys)
+2026-11-02T20:46:22Z INFO cache: cache miss storm (9233 keys)
+2026-11-03T21:47:29Z INFO cache: cache miss storm (2762 keys)
+2026-11-04T10:48:36Z INFO uploads: upload 200 exceeded soft limit
+2026-11-05T11:49:43Z INFO auth: token refresh for client 3930 delayed
+2026-11-06T12:50:50Z INFO uploads: upload 8021 exceeded soft limit
+2026-11-07T13:51:57Z INFO http.server: slow response from upstream (1642ms)
+2026-11-08T14:52:04Z INFO uploads: upload 9890 exceeded soft limit
+2026-11-09T15:53:11Z INFO cache: cache miss storm (3982 keys)
+2026-11-01T16:54:18Z INFO auth: token refresh for client 3174 delayed
+2026-11-02T17:55:25Z INFO tls: handshake 9535 renegotiated
+2026-11-03T18:56:32Z INFO tls: handshake 353 renegotiated
+2026-11-04T19:57:39Z INFO tls: handshake 1218 renegotiated
+2026-11-05T20:58:46Z INFO auth: token refresh for client 2471 delayed
+2026-11-06T21:59:53Z WARN auth: token refresh for client 2373 delayed
+2026-11-07T10:00:00Z INFO auth: token refresh for client 7285 delayed
+2026-11-08T11:01:07Z INFO http.server: slow response from upstream (5619ms)
+2026-11-09T12:02:14Z WARN scheduler: retrying job 8231 after timeout
+2026-11-01T13:03:21Z INFO tls: handshake 590 renegotiated
+2026-11-02T14:04:28Z INFO cache: cache miss storm (9839 keys)
+2026-11-03T15:05:35Z WARN queue: queue lag 2603ms
+2026-11-04T16:06:42Z WARN tls: handshake 3765 renegotiated
+2026-11-05T17:07:49Z INFO cache: cache miss storm (5404 keys)
+2026-11-06T18:08:56Z INFO metrics: metrics scrape took 2155ms
+2026-11-07T19:09:03Z INFO http.server: slow response from upstream (2790ms)
+2026-11-08T20:10:10Z WARN uploads: upload 5439 exceeded soft limit
+2026-11-09T21:11:17Z WARN tls: handshake 5804 renegotiated
+2026-11-01T10:12:24Z INFO uploads: upload 5506 exceeded soft limit
+2026-11-02T11:13:31Z INFO tls: handshake 3722 renegotiated
+2026-11-03T12:14:38Z INFO http.server: slow response from upstream (7536ms)
+2026-11-04T13:15:45Z INFO http.server: slow response from upstream (2363ms)
+2026-11-05T14:16:52Z WARN auth: token refresh for client 4488 delayed
+2026-11-06T15:17:59Z INFO cache: cache miss storm (5856 keys)
+2026-11-07T16:18:06Z INFO scheduler: retrying job 9195 after timeout
+2026-11-08T17:19:13Z INFO cache: cache miss storm (6993 keys)
+2026-11-09T18:20:20Z INFO cache: cache miss storm (4623 keys)
+2026-11-01T19:21:27Z INFO metrics: metrics scrape took 1190ms
+2026-11-02T20:22:34Z INFO auth: token refresh for client 5951 delayed
+2026-11-03T21:23:41Z INFO metrics: metrics scrape took 9033ms
+2026-11-04T10:24:48Z INFO queue: queue lag 1000ms
+2026-11-05T11:25:55Z INFO uploads: upload 7898 exceeded soft limit
+2026-11-06T12:26:02Z INFO uploads: upload 3857 exceeded soft limit
+2026-11-07T13:27:09Z INFO uploads: upload 2231 exceeded soft limit
+2026-11-08T14:28:16Z INFO metrics: metrics scrape took 7434ms
+2026-11-09T15:29:23Z WARN queue: queue lag 6499ms
+2026-11-01T16:30:30Z INFO auth: token refresh for client 9624 delayed
+2026-11-02T17:31:37Z INFO cache: cache miss storm (4949 keys)
+2026-11-03T18:32:44Z INFO auth: token refresh for client 9379 delayed
+2026-11-04T19:33:51Z INFO uploads: upload 3126 exceeded soft limit
+2026-11-05T20:34:58Z INFO cache: cache miss storm (4994 keys)
+2026-11-06T21:35:05Z WARN uploads: upload 5858 exceeded soft limit
+2026-11-07T10:36:12Z INFO queue: queue lag 7948ms
+2026-11-08T11:37:19Z INFO uploads: upload 4529 exceeded soft limit
+2026-11-09T12:38:26Z INFO auth: token refresh for client 2706 delayed
+2026-11-01T13:39:33Z INFO auth: token refresh for client 338 delayed
+2026-11-02T14:40:40Z INFO metrics: metrics scrape took 6556ms
+2026-11-03T15:41:47Z INFO tls: handshake 9887 renegotiated
+2026-11-04T16:42:54Z INFO auth: token refresh for client 3232 delayed
+2026-11-05T17:43:01Z INFO metrics: metrics scrape took 2123ms
+2026-11-06T18:44:08Z INFO http.server: slow response from upstream (1213ms)
+2026-11-07T19:45:15Z INFO uploads: upload 92 exceeded soft limit
+2026-11-08T20:46:22Z INFO metrics: metrics scrape took 8807ms
+2026-11-09T21:47:29Z INFO http.server: slow response from upstream (461ms)
+2026-11-01T10:48:36Z INFO metrics: metrics scrape took 5363ms
+2026-11-02T11:49:43Z WARN http.server: slow response from upstream (6650ms)
+2026-11-03T12:50:50Z INFO uploads: upload 951 exceeded soft limit
+2026-11-04T13:51:57Z INFO queue: queue lag 1438ms
+2026-11-05T14:52:04Z WARN uploads: upload 9805 exceeded soft limit
+2026-11-06T15:53:11Z INFO queue: queue lag 7601ms
+2026-11-07T16:54:18Z INFO http.server: slow response from upstream (5201ms)
+2026-11-08T17:55:25Z INFO uploads: upload 6811 exceeded soft limit
+2026-11-09T18:56:32Z INFO uploads: upload 1541 exceeded soft limit
+2026-11-01T19:57:39Z INFO http.server: slow response from upstream (3458ms)
+2026-11-02T20:58:46Z INFO scheduler: retrying job 5872 after timeout
+2026-11-03T21:59:53Z WARN uploads: upload 5647 exceeded soft limit
+2026-11-04T10:00:00Z INFO scheduler: retrying job 3778 after timeout
+2026-11-05T11:01:07Z WARN auth: token refresh for client 528 delayed
+2026-11-06T12:02:14Z WARN auth: token refresh for client 9173 delayed
+2026-11-07T13:03:21Z INFO auth: token refresh for client 8584 delayed
+2026-11-08T14:04:28Z INFO auth: token refresh for client 4153 delayed
+2026-11-09T15:05:35Z WARN http.server: slow response from upstream (1644ms)
+2026-11-01T16:06:42Z INFO uploads: upload 3748 exceeded soft limit
+2026-11-02T17:07:49Z INFO queue: queue lag 467ms
+2026-11-03T18:08:56Z INFO scheduler: retrying job 995 after timeout
+2026-11-04T19:09:03Z INFO metrics: metrics scrape took 4255ms
+2026-11-05T20:10:10Z INFO uploads: upload 2917 exceeded soft limit
+2026-11-06T21:11:17Z INFO scheduler: retrying job 5757 after timeout
+2026-11-07T10:12:24Z WARN metrics: metrics scrape took 8184ms
+2026-11-08T11:13:31Z INFO metrics: metrics scrape took 6383ms
+2026-11-09T12:14:38Z INFO tls: handshake 5315 renegotiated
+2026-11-01T13:15:45Z INFO http.server: slow response from upstream (262ms)
+2026-11-02T14:16:52Z WARN cache: cache miss storm (5755 keys)
+2026-11-03T15:17:59Z INFO http.server: slow response from upstream (9253ms)
+2026-11-04T16:18:06Z WARN queue: queue lag 6163ms
+2026-11-05T17:19:13Z INFO metrics: metrics scrape took 4137ms
+2026-11-06T18:20:20Z INFO http.server: slow response from upstream (7117ms)
+2026-11-07T19:21:27Z INFO metrics: metrics scrape took 5814ms
+2026-11-08T20:22:34Z INFO metrics: metrics scrape took 6983ms
+2026-11-09T21:23:41Z INFO auth: token refresh for client 8179 delayed
+2026-11-01T10:24:48Z INFO metrics: metrics scrape took 7831ms
+2026-11-02T11:25:55Z INFO auth: token refresh for client 4926 delayed
+2026-11-03T12:26:02Z INFO auth: token refresh for client 5441 delayed
+2026-11-04T13:27:09Z WARN http.server: slow response from upstream (4101ms)
+2026-11-05T14:28:16Z INFO scheduler: retrying job 9800 after timeout
+2026-11-06T15:29:23Z INFO tls: handshake 9500 renegotiated
+2026-11-07T16:30:30Z INFO http.server: slow response from upstream (5914ms)
+2026-11-08T17:31:37Z WARN http.server: slow response from upstream (2996ms)
+2026-11-09T18:32:44Z INFO queue: queue lag 4885ms
+2026-11-01T19:33:51Z INFO http.server: slow response from upstream (2499ms)
+2026-11-02T20:34:58Z INFO http.server: slow response from upstream (4969ms)
+2026-11-03T21:35:05Z INFO scheduler: retrying job 1608 after timeout
+2026-11-04T10:36:12Z WARN scheduler: retrying job 6517 after timeout
+2026-11-05T11:37:19Z WARN cache: cache miss storm (5573 keys)
+2026-11-06T12:38:26Z INFO queue: queue lag 549ms
+2026-11-07T13:39:33Z INFO metrics: metrics scrape took 261ms
+2026-11-08T14:40:40Z INFO http.server: slow response from upstream (8280ms)
+2026-11-09T15:41:47Z WARN metrics: metrics scrape took 1728ms
+2026-11-01T16:42:54Z INFO http.server: slow response from upstream (5195ms)
+2026-11-02T17:43:01Z INFO cache: cache miss storm (1983 keys)
+2026-11-03T18:44:08Z INFO tls: handshake 8618 renegotiated
+2026-11-04T19:45:15Z INFO queue: queue lag 2942ms
+2026-11-05T20:46:22Z INFO metrics: metrics scrape took 8947ms
+2026-11-06T21:47:29Z INFO cache: cache miss storm (8140 keys)
+2026-11-07T10:48:36Z INFO cache: cache miss storm (3534 keys)
+2026-11-08T11:49:43Z INFO metrics: metrics scrape took 4482ms
+2026-11-09T12:50:50Z INFO scheduler: retrying job 4345 after timeout
+2026-11-01T13:51:57Z INFO auth: token refresh for client 717 delayed
+2026-11-02T14:52:04Z INFO metrics: metrics scrape took 6696ms
+2026-11-03T15:53:11Z INFO uploads: upload 183 exceeded soft limit
+2026-11-04T16:54:18Z INFO uploads: upload 7444 exceeded soft limit
+2026-11-05T17:55:25Z INFO auth: token refresh for client 6733 delayed
+2026-11-06T18:56:32Z WARN auth: token refresh for client 6923 delayed
+2026-11-07T19:57:39Z WARN uploads: upload 6284 exceeded soft limit
+2026-11-08T20:58:46Z WARN scheduler: retrying job 6324 after timeout
+2026-11-09T21:59:53Z INFO queue: queue lag 96ms
+2026-11-01T10:00:00Z INFO metrics: metrics scrape took 6186ms
+2026-11-02T11:01:07Z INFO metrics: metrics scrape took 1913ms
+2026-11-03T12:02:14Z INFO cache: cache miss storm (821 keys)
+2026-11-04T13:03:21Z INFO queue: queue lag 7258ms
+2026-11-05T14:04:28Z WARN uploads: upload 9475 exceeded soft limit
+2026-11-06T15:05:35Z WARN http.server: slow response from upstream (7720ms)
+2026-11-07T16:06:42Z WARN uploads: upload 3850 exceeded soft limit
+2026-11-08T17:07:49Z INFO queue: queue lag 1060ms
+2026-11-09T18:08:56Z INFO queue: queue lag 5287ms
+2026-11-01T19:09:03Z INFO cache: cache miss storm (4350 keys)
+2026-11-02T20:10:10Z WARN auth: token refresh for client 5707 delayed
+2026-11-03T21:11:17Z INFO tls: handshake 2337 renegotiated
+2026-11-04T10:12:24Z INFO cache: cache miss storm (8594 keys)
+2026-11-05T11:13:31Z INFO metrics: metrics scrape took 6003ms
+2026-11-06T12:14:38Z INFO metrics: metrics scrape took 2507ms
+2026-11-07T13:15:45Z INFO tls: handshake 718 renegotiated
+2026-11-08T14:16:52Z WARN uploads: upload 5937 exceeded soft limit
+2026-11-09T15:17:59Z INFO queue: queue lag 6727ms
+2026-11-01T16:18:06Z INFO scheduler: retrying job 6156 after timeout
+2026-11-02T17:19:13Z INFO cache: cache miss storm (5853 keys)
+2026-11-03T18:20:20Z WARN auth: token refresh for client 1451 delayed
+2026-11-04T19:21:27Z WARN auth: token refresh for client 4769 delayed
+2026-11-05T20:22:34Z INFO tls: handshake 7371 renegotiated
+2026-11-06T21:23:41Z INFO tls: handshake 8486 renegotiated
+2026-11-07T10:24:48Z INFO scheduler: retrying job 2148 after timeout
+2026-11-08T11:25:55Z WARN uploads: upload 8541 exceeded soft limit
+2026-11-09T12:26:02Z INFO metrics: metrics scrape took 8585ms
+2026-11-01T13:27:09Z WARN uploads: upload 4152 exceeded soft limit
+2026-11-02T14:28:16Z INFO http.server: slow response from upstream (23ms)
+2026-11-03T15:29:23Z INFO auth: token refresh for client 9686 delayed
+2026-11-04T16:30:30Z INFO scheduler: retrying job 8933 after timeout
+2026-11-05T17:31:37Z INFO auth: token refresh for client 4198 delayed
+2026-11-06T18:32:44Z INFO metrics: metrics scrape took 7187ms
+2026-11-07T19:33:51Z WARN cache: cache miss storm (1465 keys)
+2026-11-08T20:34:58Z INFO metrics: metrics scrape took 6942ms
+2026-11-09T21:35:05Z INFO auth: token refresh for client 729 delayed
+2026-11-01T10:36:12Z WARN tls: handshake 6025 renegotiated
+2026-11-02T11:37:19Z INFO http.server: slow response from upstream (6693ms)
+2026-11-03T12:38:26Z INFO queue: queue lag 5782ms
+2026-11-04T13:39:33Z WARN metrics: metrics scrape took 9491ms
+2026-11-05T14:40:40Z INFO scheduler: retrying job 9516 after timeout
+2026-11-06T15:41:47Z INFO uploads: upload 3338 exceeded soft limit
+2026-11-07T16:42:54Z INFO uploads: upload 1319 exceeded soft limit
+2026-11-08T17:43:01Z WARN tls: handshake 6453 renegotiated
+2026-11-09T18:44:08Z WARN queue: queue lag 429ms
+2026-11-01T19:45:15Z WARN cache: cache miss storm (7582 keys)
+2026-11-02T20:46:22Z WARN queue: queue lag 7769ms
+2026-11-03T21:47:29Z INFO scheduler: retrying job 7216 after timeout
+2026-11-04T10:48:36Z WARN queue: queue lag 2226ms
+2026-11-05T11:49:43Z INFO http.server: slow response from upstream (3290ms)
+2026-11-06T12:50:50Z INFO queue: queue lag 4826ms
+2026-11-07T13:51:57Z WARN uploads: upload 7544 exceeded soft limit
+2026-11-08T14:52:04Z INFO cache: cache miss storm (3626 keys)
+2026-11-09T15:53:11Z INFO cache: cache miss storm (1676 keys)
+2026-11-01T16:54:18Z INFO tls: handshake 3542 renegotiated
+2026-11-02T17:55:25Z INFO tls: handshake 3284 renegotiated
+2026-11-03T18:56:32Z WARN uploads: upload 907 exceeded soft limit
+2026-11-04T19:57:39Z INFO queue: queue lag 6677ms
+2026-11-05T20:58:46Z INFO http.server: slow response from upstream (5260ms)
+2026-11-06T21:59:53Z INFO uploads: upload 8500 exceeded soft limit
+2026-11-07T10:00:00Z INFO http.server: slow response from upstream (8839ms)
+2026-11-08T11:01:07Z INFO auth: token refresh for client 1429 delayed
+2026-11-09T12:02:14Z WARN uploads: upload 4188 exceeded soft limit
+2026-11-01T13:03:21Z WARN auth: token refresh for client 8381 delayed
+2026-11-02T14:04:28Z INFO queue: queue lag 5037ms
+2026-11-03T15:05:35Z INFO auth: token refresh for client 6239 delayed
+2026-11-04T16:06:42Z INFO queue: queue lag 5006ms
+2026-11-05T17:07:49Z INFO metrics: metrics scrape took 863ms
+2026-11-06T18:08:56Z INFO metrics: metrics scrape took 7615ms
+2026-11-07T19:09:03Z INFO tls: handshake 6002 renegotiated
+2026-11-08T20:10:10Z INFO uploads: upload 7488 exceeded soft limit
+2026-11-09T21:11:17Z INFO http.server: slow response from upstream (149ms)
+2026-11-01T10:12:24Z WARN cache: cache miss storm (9265 keys)
+2026-11-02T11:13:31Z INFO uploads: upload 4491 exceeded soft limit
+2026-11-03T12:14:38Z WARN metrics: metrics scrape took 4786ms
+2026-11-04T13:15:45Z INFO metrics: metrics scrape took 9710ms
+2026-11-05T14:16:52Z WARN tls: handshake 7298 renegotiated
+2026-11-06T15:17:59Z INFO metrics: metrics scrape took 955ms
+2026-11-07T16:18:06Z WARN scheduler: retrying job 2049 after timeout
+2026-11-08T17:19:13Z INFO http.server: slow response from upstream (1188ms)
+2026-11-09T18:20:20Z INFO tls: handshake 242 renegotiated
+2026-11-01T19:21:27Z WARN scheduler: retrying job 3627 after timeout
+2026-11-02T20:22:34Z INFO auth: token refresh for client 8766 delayed
+2026-11-03T21:23:41Z INFO scheduler: retrying job 3399 after timeout
+2026-11-04T10:24:48Z WARN cache: cache miss storm (1570 keys)
+2026-11-05T11:25:55Z INFO metrics: metrics scrape took 834ms
+2026-11-06T12:26:02Z INFO queue: queue lag 4230ms
+2026-11-07T13:27:09Z WARN tls: handshake 2546 renegotiated
+2026-11-08T14:28:16Z INFO http.server: slow response from upstream (694ms)
+2026-11-09T15:29:23Z WARN scheduler: retrying job 4820 after timeout
+2026-11-01T16:30:30Z INFO metrics: metrics scrape took 9194ms
+2026-11-02T17:31:37Z INFO scheduler: retrying job 4237 after timeout
+2026-11-03T18:32:44Z INFO uploads: upload 2498 exceeded soft limit
+2026-11-04T19:33:51Z WARN metrics: metrics scrape took 549ms
+2026-11-05T20:34:58Z WARN uploads: upload 2565 exceeded soft limit
+2026-11-06T21:35:05Z INFO auth: token refresh for client 8951 delayed
+2026-11-07T10:36:12Z INFO cache: cache miss storm (7619 keys)
+2026-11-08T11:37:19Z INFO scheduler: retrying job 7052 after timeout
+2026-11-09T12:38:26Z WARN uploads: upload 1883 exceeded soft limit
+2026-11-01T13:39:33Z INFO http.server: slow response from upstream (2010ms)
+2026-11-02T14:40:40Z INFO metrics: metrics scrape took 4773ms
+2026-11-03T15:41:47Z INFO tls: handshake 301 renegotiated
+2026-11-04T16:42:54Z INFO tls: handshake 3295 renegotiated
+2026-11-05T17:43:01Z INFO tls: handshake 4973 renegotiated
+2026-11-06T18:44:08Z INFO cache: cache miss storm (2298 keys)
+2026-11-07T19:45:15Z INFO tls: handshake 3732 renegotiated
+2026-11-08T20:46:22Z INFO auth: token refresh for client 9514 delayed
+2026-11-09T21:47:29Z INFO cache: cache miss storm (5650 keys)
+2026-11-01T10:48:36Z INFO metrics: metrics scrape took 4925ms
+2026-11-02T11:49:43Z INFO http.server: slow response from upstream (5468ms)
+2026-11-03T12:50:50Z WARN uploads: upload 7891 exceeded soft limit
+2026-11-04T13:51:57Z INFO metrics: metrics scrape took 5974ms
+2026-11-05T14:52:04Z INFO scheduler: retrying job 4896 after timeout
+2026-11-06T15:53:11Z WARN cache: cache miss storm (1577 keys)
+2026-11-07T16:54:18Z INFO cache: cache miss storm (9768 keys)
+2026-11-08T17:55:25Z WARN queue: queue lag 598ms
+2026-11-09T18:56:32Z INFO http.server: slow response from upstream (8420ms)
+2026-11-01T19:57:39Z WARN cache: cache miss storm (2172 keys)
+2026-11-02T20:58:46Z INFO queue: queue lag 1259ms
+2026-11-03T21:59:53Z INFO uploads: upload 5899 exceeded soft limit
+2026-11-04T10:00:00Z INFO scheduler: retrying job 5443 after timeout
+2026-11-05T11:01:07Z WARN http.server: slow response from upstream (4980ms)
+2026-11-06T12:02:14Z INFO scheduler: retrying job 1550 after timeout
+2026-11-07T13:03:21Z INFO cache: cache miss storm (1928 keys)
+2026-11-08T14:04:28Z WARN scheduler: retrying job 4441 after timeout
+2026-11-09T15:05:35Z INFO cache: cache miss storm (7674 keys)
+2026-11-01T16:06:42Z INFO metrics: metrics scrape took 9322ms
+2026-11-02T17:07:49Z INFO http.server: slow response from upstream (6021ms)
+2026-11-03T18:08:56Z INFO metrics: metrics scrape took 6624ms
+2026-11-04T19:09:03Z INFO metrics: metrics scrape took 3940ms
+2026-11-05T20:10:10Z INFO metrics: metrics scrape took 257ms
+2026-11-06T21:11:17Z INFO cache: cache miss storm (8011 keys)
+2026-11-07T10:12:24Z INFO metrics: metrics scrape took 1436ms
+2026-11-08T11:13:31Z INFO scheduler: retrying job 4338 after timeout
+2026-11-09T12:14:38Z WARN http.server: slow response from upstream (6453ms)
+2026-11-01T13:15:45Z INFO cache: cache miss storm (9345 keys)
+2026-11-02T14:16:52Z INFO cache: cache miss storm (9488 keys)
+2026-11-03T15:17:59Z INFO metrics: metrics scrape took 4000ms
+2026-11-04T16:18:06Z INFO http.server: slow response from upstream (1206ms)
+2026-11-05T17:19:13Z INFO uploads: upload 685 exceeded soft limit
+2026-11-06T18:20:20Z INFO metrics: metrics scrape took 4984ms
+2026-11-07T19:21:27Z INFO uploads: upload 7575 exceeded soft limit
+2026-11-08T20:22:34Z INFO scheduler: retrying job 5211 after timeout
+2026-11-09T21:23:41Z WARN queue: queue lag 538ms
+2026-11-01T10:24:48Z INFO cache: cache miss storm (2435 keys)
+2026-11-02T11:25:55Z INFO scheduler: retrying job 5651 after timeout
+2026-11-03T12:26:02Z INFO scheduler: retrying job 3257 after timeout
+2026-11-04T13:27:09Z INFO metrics: metrics scrape took 1105ms
+2026-11-05T14:28:16Z WARN http.server: slow response from upstream (628ms)
+2026-11-06T15:29:23Z INFO tls: handshake 1141 renegotiated
+2026-11-07T16:30:30Z INFO cache: cache miss storm (834 keys)
+2026-11-08T17:31:37Z WARN uploads: upload 1523 exceeded soft limit
+2026-11-09T18:32:44Z INFO uploads: upload 8080 exceeded soft limit
+2026-11-01T19:33:51Z INFO tls: handshake 4258 renegotiated
+2026-11-02T20:34:58Z INFO auth: token refresh for client 7647 delayed
+2026-11-03T21:35:05Z WARN scheduler: retrying job 6331 after timeout
+2026-11-04T10:36:12Z INFO auth: token refresh for client 1124 delayed
+2026-11-05T11:37:19Z INFO auth: token refresh for client 3943 delayed
+2026-11-06T12:38:26Z WARN metrics: metrics scrape took 9211ms
+2026-11-07T13:39:33Z WARN metrics: metrics scrape took 9430ms
+2026-11-08T14:40:40Z WARN http.server: slow response from upstream (6478ms)
+2026-11-09T15:41:47Z WARN uploads: upload 6665 exceeded soft limit
+2026-11-01T16:42:54Z INFO cache: cache miss storm (5573 keys)
+2026-11-02T17:43:01Z INFO queue: queue lag 83ms
+2026-11-03T18:44:08Z WARN auth: token refresh for client 9903 delayed
+2026-11-04T19:45:15Z INFO http.server: slow response from upstream (7798ms)
+2026-11-05T20:46:22Z WARN queue: queue lag 9918ms
+2026-11-06T21:47:29Z WARN auth: token refresh for client 2399 delayed
+2026-11-07T10:48:36Z INFO uploads: upload 1371 exceeded soft limit
+2026-11-08T11:49:43Z WARN uploads: upload 7643 exceeded soft limit
+2026-11-09T12:50:50Z INFO http.server: slow response from upstream (5512ms)
+2026-11-01T13:51:57Z INFO cache: cache miss storm (3078 keys)
+2026-11-02T14:52:04Z WARN tls: handshake 8827 renegotiated
+2026-11-03T15:53:11Z INFO metrics: metrics scrape took 3554ms
+2026-11-04T16:54:18Z WARN http.server: slow response from upstream (3026ms)
+2026-11-05T17:55:25Z INFO queue: queue lag 5460ms
+2026-11-06T18:56:32Z INFO scheduler: retrying job 2752 after timeout
+2026-11-07T19:57:39Z INFO metrics: metrics scrape took 6471ms
+2026-11-08T20:58:46Z WARN auth: token refresh for client 5228 delayed
+2026-11-09T21:59:53Z INFO metrics: metrics scrape took 6415ms
+2026-11-01T10:00:00Z INFO http.server: slow response from upstream (2882ms)
+2026-11-02T11:01:07Z INFO cache: cache miss storm (7457 keys)
+2026-11-03T12:02:14Z INFO auth: token refresh for client 1663 delayed
+2026-11-04T13:03:21Z INFO queue: queue lag 4160ms
+2026-11-05T14:04:28Z INFO queue: queue lag 8435ms
+2026-11-06T15:05:35Z WARN uploads: upload 4373 exceeded soft limit
+2026-11-07T16:06:42Z INFO auth: token refresh for client 5012 delayed
+2026-11-08T17:07:49Z INFO queue: queue lag 8171ms
+2026-11-09T18:08:56Z INFO tls: handshake 304 renegotiated
+2026-11-01T19:09:03Z INFO http.server: slow response from upstream (9142ms)
+2026-11-02T20:10:10Z WARN queue: queue lag 5107ms
+2026-11-03T21:11:17Z WARN scheduler: retrying job 585 after timeout
+2026-11-04T10:12:24Z WARN uploads: upload 2254 exceeded soft limit
+2026-11-05T11:13:31Z INFO http.server: slow response from upstream (2377ms)
+2026-11-06T12:14:38Z INFO metrics: metrics scrape took 6436ms
+2026-11-07T13:15:45Z INFO scheduler: retrying job 3970 after timeout
+2026-11-08T14:16:52Z INFO auth: token refresh for client 6902 delayed
+2026-11-09T15:17:59Z INFO queue: queue lag 6243ms
+2026-11-01T16:18:06Z INFO tls: handshake 4556 renegotiated
+2026-11-02T17:19:13Z INFO uploads: upload 9433 exceeded soft limit
+2026-11-03T18:20:20Z INFO tls: handshake 8732 renegotiated
+2026-11-04T19:21:27Z INFO uploads: upload 3299 exceeded soft limit
+2026-11-05T20:22:34Z INFO http.server: slow response from upstream (5056ms)
+2026-11-06T21:23:41Z INFO scheduler: retrying job 886 after timeout
+2026-11-07T10:24:48Z WARN auth: token refresh for client 5910 delayed
+2026-11-08T11:25:55Z INFO scheduler: retrying job 5079 after timeout
+2026-11-09T12:26:02Z INFO tls: handshake 5267 renegotiated
+2026-11-01T13:27:09Z WARN tls: handshake 1786 renegotiated
+2026-11-02T14:28:16Z INFO auth: token refresh for client 6464 delayed
+2026-11-03T15:29:23Z WARN uploads: upload 7752 exceeded soft limit
+2026-11-04T16:30:30Z INFO auth: token refresh for client 3351 delayed
+2026-11-05T17:31:37Z WARN tls: handshake 2628 renegotiated
+2026-11-06T18:32:44Z INFO uploads: upload 2501 exceeded soft limit
+2026-11-07T19:33:51Z WARN auth: token refresh for client 9164 delayed
+2026-11-08T20:34:58Z INFO queue: queue lag 4521ms
+2026-11-09T21:35:05Z INFO queue: queue lag 6490ms
+2026-11-01T10:36:12Z INFO auth: token refresh for client 4265 delayed
+2026-11-02T11:37:19Z INFO tls: handshake 687 renegotiated
+2026-11-03T12:38:26Z INFO auth: token refresh for client 9875 delayed
+2026-11-04T13:39:33Z INFO uploads: upload 3997 exceeded soft limit
+2026-11-05T14:40:40Z INFO cache: cache miss storm (9885 keys)
+2026-11-06T15:41:47Z INFO queue: queue lag 5039ms
+2026-11-07T16:42:54Z INFO scheduler: retrying job 1940 after timeout
+2026-11-08T17:43:01Z WARN queue: queue lag 5609ms
+2026-11-09T18:44:08Z WARN queue: queue lag 8198ms
+2026-11-01T19:45:15Z INFO uploads: upload 3053 exceeded soft limit
+2026-11-02T20:46:22Z WARN scheduler: retrying job 4740 after timeout
+2026-11-03T21:47:29Z INFO scheduler: retrying job 5559 after timeout
+2026-11-04T10:48:36Z WARN cache: cache miss storm (1104 keys)
+2026-11-05T11:49:43Z INFO http.server: slow response from upstream (9477ms)
+2026-11-06T12:50:50Z WARN queue: queue lag 3515ms
+2026-11-07T13:51:57Z INFO auth: token refresh for client 2486 delayed
+2026-11-08T14:52:04Z INFO metrics: metrics scrape took 8211ms
+2026-11-09T15:53:11Z INFO cache: cache miss storm (558 keys)
+2026-11-01T16:54:18Z INFO queue: queue lag 2160ms
+2026-11-02T17:55:25Z INFO queue: queue lag 1112ms
+2026-11-03T18:56:32Z INFO auth: token refresh for client 3677 delayed
+2026-11-04T19:57:39Z INFO auth: token refresh for client 5904 delayed
+2026-11-05T20:58:46Z INFO cache: cache miss storm (392 keys)
+2026-11-06T21:59:53Z INFO cache: cache miss storm (5337 keys)
+2026-11-07T10:00:00Z INFO metrics: metrics scrape took 7509ms
+2026-11-08T11:01:07Z WARN scheduler: retrying job 4516 after timeout
+2026-11-09T12:02:14Z WARN http.server: slow response from upstream (9680ms)
+2026-11-01T13:03:21Z INFO http.server: slow response from upstream (8822ms)
+2026-11-02T14:04:28Z INFO tls: handshake 7935 renegotiated
+2026-11-03T15:05:35Z INFO metrics: metrics scrape took 5582ms
+2026-11-04T16:06:42Z INFO uploads: upload 3579 exceeded soft limit
+2026-11-05T17:07:49Z INFO metrics: metrics scrape took 9472ms
+2026-11-06T18:08:56Z INFO http.server: slow response from upstream (2845ms)
+2026-11-07T19:09:03Z INFO http.server: slow response from upstream (6955ms)
+2026-11-08T20:10:10Z INFO uploads: upload 4494 exceeded soft limit
+2026-11-09T21:11:17Z INFO cache: cache miss storm (6565 keys)
+2026-11-01T10:12:24Z WARN queue: queue lag 3717ms
+2026-11-02T11:13:31Z INFO http.server: slow response from upstream (8718ms)
+2026-11-03T12:14:38Z INFO uploads: upload 1179 exceeded soft limit
+2026-11-04T13:15:45Z INFO tls: handshake 7076 renegotiated
+2026-11-05T14:16:52Z WARN tls: handshake 3135 renegotiated
+2026-11-06T15:17:59Z INFO uploads: upload 1843 exceeded soft limit
+2026-11-07T16:18:06Z INFO queue: queue lag 4639ms
+2026-11-08T17:19:13Z INFO metrics: metrics scrape took 8467ms
+2026-11-09T18:20:20Z WARN http.server: slow response from upstream (3249ms)
+2026-11-01T19:21:27Z INFO metrics: metrics scrape took 3306ms
+2026-11-02T20:22:34Z INFO auth: token refresh for client 268 delayed
+2026-11-03T21:23:41Z INFO cache: cache miss storm (3379 keys)
+2026-11-04T10:24:48Z INFO queue: queue lag 8820ms
+2026-11-05T11:25:55Z INFO auth: token refresh for client 2691 delayed
+2026-11-06T12:26:02Z INFO uploads: upload 5019 exceeded soft limit
+2026-11-07T13:27:09Z INFO cache: cache miss storm (2880 keys)
+2026-11-08T14:28:16Z WARN uploads: upload 491 exceeded soft limit
+2026-11-09T15:29:23Z INFO tls: handshake 5628 renegotiated
+2026-11-01T16:30:30Z INFO cache: cache miss storm (5971 keys)
+2026-11-02T17:31:37Z WARN tls: handshake 1365 renegotiated
+2026-11-03T18:32:44Z INFO uploads: upload 7812 exceeded soft limit
+2026-11-04T19:33:51Z INFO scheduler: retrying job 8665 after timeout
+2026-11-05T20:34:58Z WARN auth: token refresh for client 3438 delayed
+2026-11-06T21:35:05Z INFO uploads: upload 357 exceeded soft limit
+2026-11-07T10:36:12Z INFO metrics: metrics scrape took 8513ms
+2026-11-08T11:37:19Z WARN queue: queue lag 2647ms
+2026-11-09T12:38:26Z INFO queue: queue lag 2276ms
+2026-11-01T13:39:33Z INFO http.server: slow response from upstream (3516ms)
+2026-11-02T14:40:40Z INFO queue: queue lag 159ms
+2026-11-03T15:41:47Z WARN cache: cache miss storm (718 keys)
+2026-11-04T16:42:54Z INFO metrics: metrics scrape took 5308ms
+2026-11-05T17:43:01Z WARN uploads: upload 7948 exceeded soft limit
+2026-11-06T18:44:08Z INFO metrics: metrics scrape took 3998ms
+2026-11-07T19:45:15Z INFO metrics: metrics scrape took 6278ms
+2026-11-08T20:46:22Z INFO cache: cache miss storm (9696 keys)
+2026-11-09T21:47:29Z INFO scheduler: retrying job 7219 after timeout
+2026-11-01T10:48:36Z WARN tls: handshake 1116 renegotiated
+2026-11-02T11:49:43Z WARN http.server: slow response from upstream (2778ms)
+2026-11-03T12:50:50Z INFO queue: queue lag 7703ms
+2026-11-04T13:51:57Z INFO tls: handshake 1949 renegotiated
+2026-11-05T14:52:04Z WARN tls: handshake 1037 renegotiated
+2026-11-06T15:53:11Z INFO metrics: metrics scrape took 90ms
+2026-11-07T16:54:18Z INFO queue: queue lag 637ms
+2026-11-08T17:55:25Z INFO metrics: metrics scrape took 3288ms
+2026-11-09T18:56:32Z INFO http.server: slow response from upstream (7653ms)
+2026-11-01T19:57:39Z WARN http.server: slow response from upstream (3949ms)
+2026-11-02T20:58:46Z INFO metrics: metrics scrape took 9122ms
+2026-11-03T21:59:53Z INFO queue: queue lag 687ms
+2026-11-04T10:00:00Z WARN scheduler: retrying job 308 after timeout
+2026-11-05T11:01:07Z INFO tls: handshake 1592 renegotiated
+2026-11-06T12:02:14Z INFO scheduler: retrying job 8678 after timeout
+2026-11-07T13:03:21Z INFO scheduler: retrying job 1743 after timeout
+2026-11-08T14:04:28Z INFO queue: queue lag 1191ms
+2026-11-09T15:05:35Z INFO http.server: slow response from upstream (8242ms)
+2026-11-01T16:06:42Z INFO cache: cache miss storm (8946 keys)
+2026-11-02T17:07:49Z WARN auth: token refresh for client 6513 delayed
+2026-11-03T18:08:56Z INFO http.server: slow response from upstream (404ms)
+2026-11-04T19:09:03Z WARN scheduler: retrying job 3430 after timeout
+2026-11-05T20:10:10Z INFO cache: cache miss storm (7039 keys)
+2026-11-06T21:11:17Z INFO cache: cache miss storm (8957 keys)
+2026-11-07T10:12:24Z INFO uploads: upload 1449 exceeded soft limit
+2026-11-08T11:13:31Z INFO metrics: metrics scrape took 1481ms
+2026-11-09T12:14:38Z INFO uploads: upload 4969 exceeded soft limit
+2026-11-01T13:15:45Z INFO auth: token refresh for client 2431 delayed
+2026-11-02T14:16:52Z INFO tls: handshake 3156 renegotiated
+2026-11-03T15:17:59Z INFO http.server: slow response from upstream (1238ms)
+2026-11-04T16:18:06Z INFO http.server: slow response from upstream (9820ms)
+2026-11-05T17:19:13Z WARN metrics: metrics scrape took 7474ms
+2026-11-06T18:20:20Z INFO queue: queue lag 1317ms
+2026-11-07T19:21:27Z INFO http.server: slow response from upstream (511ms)
+2026-11-08T20:22:34Z WARN scheduler: retrying job 908 after timeout
+2026-11-09T21:23:41Z INFO scheduler: retrying job 7247 after timeout
+2026-11-01T10:24:48Z INFO auth: token refresh for client 4149 delayed
+2026-11-02T11:25:55Z INFO auth: token refresh for client 474 delayed
+2026-11-03T12:26:02Z WARN uploads: upload 1561 exceeded soft limit
+2026-11-04T13:27:09Z WARN scheduler: retrying job 2679 after timeout
+2026-11-05T14:28:16Z INFO tls: handshake 4502 renegotiated
+2026-11-06T15:29:23Z INFO metrics: metrics scrape took 6767ms
+2026-11-07T16:30:30Z INFO http.server: slow response from upstream (3791ms)
+2026-11-08T17:31:37Z INFO uploads: upload 38 exceeded soft limit
+2026-11-09T18:32:44Z INFO metrics: metrics scrape took 1309ms
+2026-11-01T19:33:51Z INFO scheduler: retrying job 589 after timeout
+2026-11-02T20:34:58Z WARN uploads: upload 5530 exceeded soft limit
+2026-11-03T21:35:05Z INFO uploads: upload 8812 exceeded soft limit
+2026-11-04T10:36:12Z WARN cache: cache miss storm (2649 keys)
+2026-11-05T11:37:19Z INFO metrics: metrics scrape took 8831ms
+2026-11-06T12:38:26Z WARN metrics: metrics scrape took 8510ms
+2026-11-07T13:39:33Z INFO cache: cache miss storm (3582 keys)
+2026-11-08T14:40:40Z INFO auth: token refresh for client 4272 delayed
+2026-11-09T15:41:47Z INFO queue: queue lag 2898ms
+2026-11-01T16:42:54Z INFO tls: handshake 4668 renegotiated
+2026-11-02T17:43:01Z INFO queue: queue lag 5609ms
+2026-11-03T18:44:08Z INFO auth: token refresh for client 1513 delayed
+2026-11-04T19:45:15Z INFO metrics: metrics scrape took 9695ms
+2026-11-05T20:46:22Z INFO scheduler: retrying job 9805 after timeout
+2026-11-06T21:47:29Z WARN cache: cache miss storm (4989 keys)
+2026-11-07T10:48:36Z INFO cache: cache miss storm (1106 keys)
+2026-11-08T11:49:43Z INFO http.server: slow response from upstream (5932ms)
+2026-11-09T12:50:50Z INFO cache: cache miss storm (9140 keys)
+2026-11-01T13:51:57Z WARN cache: cache miss storm (8370 keys)
+2026-11-02T14:52:04Z WARN auth: token refresh for client 2924 delayed
+2026-11-03T15:53:11Z INFO cache: cache miss storm (4977 keys)
+2026-11-04T16:54:18Z WARN queue: queue lag 2848ms
+2026-11-05T17:55:25Z INFO tls: handshake 7556 renegotiated
+2026-11-06T18:56:32Z INFO uploads: upload 3385 exceeded soft limit
+2026-11-07T19:57:39Z WARN http.server: slow response from upstream (3716ms)
+2026-11-08T20:58:46Z INFO cache: cache miss storm (5756 keys)
+2026-11-09T21:59:53Z INFO uploads: upload 170 exceeded soft limit
+2026-11-01T10:00:00Z INFO metrics: metrics scrape took 1476ms
+2026-11-02T11:01:07Z INFO scheduler: retrying job 4319 after timeout
+2026-11-03T12:02:14Z INFO scheduler: retrying job 2363 after timeout
+2026-11-04T13:03:21Z INFO tls: handshake 947 renegotiated
+2026-11-05T14:04:28Z INFO queue: queue lag 1467ms
+2026-11-06T15:05:35Z INFO metrics: metrics scrape took 1071ms
+2026-11-07T16:06:42Z INFO auth: token refresh for client 4406 delayed
+2026-11-08T17:07:49Z INFO scheduler: retrying job 5967 after timeout
+2026-11-09T18:08:56Z INFO scheduler: retrying job 6061 after timeout
+2026-11-01T19:09:03Z INFO auth: token refresh for client 6010 delayed
+2026-11-02T20:10:10Z INFO scheduler: retrying job 4078 after timeout
+2026-11-03T21:11:17Z INFO scheduler: retrying job 6248 after timeout
+2026-11-04T10:12:24Z INFO http.server: slow response from upstream (3187ms)
+2026-11-05T11:13:31Z WARN metrics: metrics scrape took 5995ms
+2026-11-06T12:14:38Z WARN metrics: metrics scrape took 4317ms
+2026-11-07T13:15:45Z INFO http.server: slow response from upstream (1641ms)
+2026-11-08T14:16:52Z INFO queue: queue lag 3857ms
+2026-11-09T15:17:59Z INFO auth: token refresh for client 7752 delayed
+2026-11-01T16:18:06Z WARN tls: handshake 1907 renegotiated
+2026-11-02T17:19:13Z WARN cache: cache miss storm (9108 keys)
+2026-11-03T18:20:20Z INFO tls: handshake 6640 renegotiated
+2026-11-04T19:21:27Z WARN cache: cache miss storm (7866 keys)
+2026-11-05T20:22:34Z INFO scheduler: retrying job 6986 after timeout
+2026-11-06T21:23:41Z INFO tls: handshake 1948 renegotiated
+2026-11-07T10:24:48Z INFO metrics: metrics scrape took 4369ms
+2026-11-08T11:25:55Z WARN uploads: upload 7696 exceeded soft limit
+2026-11-09T12:26:02Z INFO metrics: metrics scrape took 9099ms
+2026-11-01T13:27:09Z INFO http.server: slow response from upstream (8354ms)
+2026-11-02T14:28:16Z WARN metrics: metrics scrape took 3546ms
+2026-11-03T15:29:23Z INFO queue: queue lag 991ms
+2026-11-04T16:30:30Z INFO queue: queue lag 3937ms
+2026-11-05T17:31:37Z INFO scheduler: retrying job 3489 after timeout
+2026-11-06T18:32:44Z INFO cache: cache miss storm (7830 keys)
+2026-11-07T19:33:51Z WARN auth: token refresh for client 7561 delayed
+2026-11-08T20:34:58Z INFO scheduler: retrying job 7432 after timeout
+2026-11-09T21:35:05Z INFO uploads: upload 3374 exceeded soft limit
+2026-11-01T10:36:12Z INFO auth: token refresh for client 1126 delayed
+2026-11-02T11:37:19Z WARN cache: cache miss storm (7900 keys)
+2026-11-03T12:38:26Z INFO auth: token refresh for client 8358 delayed
+2026-11-04T13:39:33Z INFO http.server: slow response from upstream (7715ms)
+2026-11-05T14:40:40Z INFO http.server: slow response from upstream (8185ms)
+2026-11-06T15:41:47Z INFO scheduler: retrying job 2386 after timeout
+2026-11-07T16:42:54Z INFO queue: queue lag 694ms
+2026-11-08T17:43:01Z INFO uploads: upload 3727 exceeded soft limit
+2026-11-09T18:44:08Z WARN http.server: slow response from upstream (1352ms)
+2026-11-01T19:45:15Z INFO tls: handshake 598 renegotiated
+2026-11-02T20:46:22Z WARN auth: token refresh for client 2311 delayed
+2026-11-03T21:47:29Z INFO metrics: metrics scrape took 5154ms
+2026-11-04T10:48:36Z INFO metrics: metrics scrape took 6596ms
+2026-11-05T11:49:43Z INFO http.server: slow response from upstream (216ms)
+2026-11-06T12:50:50Z WARN uploads: upload 3829 exceeded soft limit
+2026-11-07T13:51:57Z WARN cache: cache miss storm (6132 keys)
+2026-11-08T14:52:04Z INFO tls: handshake 3555 renegotiated
+2026-11-09T15:53:11Z WARN metrics: metrics scrape took 3318ms
+2026-11-01T16:54:18Z WARN auth: token refresh for client 4449 delayed
+2026-11-02T17:55:25Z INFO metrics: metrics scrape took 530ms
+2026-11-03T18:56:32Z INFO queue: queue lag 5632ms
+2026-11-04T19:57:39Z INFO queue: queue lag 9325ms
+2026-11-05T20:58:46Z INFO uploads: upload 3916 exceeded soft limit
+2026-11-06T21:59:53Z INFO http.server: slow response from upstream (9963ms)
+2026-11-07T10:00:00Z WARN auth: token refresh for client 7793 delayed
+2026-11-08T11:01:07Z INFO queue: queue lag 4287ms
+2026-11-09T12:02:14Z INFO metrics: metrics scrape took 4497ms
+2026-11-01T13:03:21Z INFO queue: queue lag 2255ms
+2026-11-02T14:04:28Z INFO scheduler: retrying job 942 after timeout
+2026-11-03T15:05:35Z INFO scheduler: retrying job 6937 after timeout
+2026-11-04T16:06:42Z INFO scheduler: retrying job 9604 after timeout
+2026-11-05T17:07:49Z WARN tls: handshake 4158 renegotiated
+2026-11-06T18:08:56Z INFO metrics: metrics scrape took 4416ms
+2026-11-07T19:09:03Z INFO queue: queue lag 855ms
+2026-11-08T20:10:10Z INFO queue: queue lag 296ms
+2026-11-09T21:11:17Z INFO auth: token refresh for client 4744 delayed
+2026-11-01T10:12:24Z INFO scheduler: retrying job 6892 after timeout
+2026-11-02T11:13:31Z WARN cache: cache miss storm (4929 keys)
+2026-11-03T12:14:38Z WARN cache: cache miss storm (4003 keys)
+2026-11-04T13:15:45Z INFO tls: handshake 8560 renegotiated
+2026-11-05T14:16:52Z WARN metrics: metrics scrape took 1255ms
+2026-11-06T15:17:59Z WARN auth: token refresh for client 2984 delayed
+2026-11-07T16:18:06Z INFO auth: token refresh for client 6760 delayed
+2026-11-08T17:19:13Z INFO uploads: upload 1212 exceeded soft limit
+2026-11-09T18:20:20Z WARN http.server: slow response from upstream (3488ms)
+2026-11-01T19:21:27Z INFO uploads: upload 7299 exceeded soft limit
+2026-11-02T20:22:34Z INFO tls: handshake 2963 renegotiated
+2026-11-03T21:23:41Z INFO tls: handshake 3825 renegotiated
+2026-11-04T10:24:48Z INFO queue: queue lag 3403ms
+2026-11-05T11:25:55Z WARN queue: queue lag 2204ms
+2026-11-06T12:26:02Z INFO metrics: metrics scrape took 5902ms
+2026-11-07T13:27:09Z WARN queue: queue lag 5988ms
+2026-11-08T14:28:16Z INFO scheduler: retrying job 3531 after timeout
+2026-11-09T15:29:23Z INFO auth: token refresh for client 594 delayed
+2026-11-01T16:30:30Z WARN scheduler: retrying job 6904 after timeout
+2026-11-02T17:31:37Z WARN cache: cache miss storm (9551 keys)
+2026-11-03T18:32:44Z INFO tls: handshake 9462 renegotiated
+2026-11-04T19:33:51Z INFO uploads: upload 7173 exceeded soft limit
+2026-11-05T20:34:58Z INFO uploads: upload 7902 exceeded soft limit
+2026-11-06T21:35:05Z INFO http.server: slow response from upstream (6465ms)
+2026-11-07T10:36:12Z INFO uploads: upload 4797 exceeded soft limit
+2026-11-08T11:37:19Z INFO metrics: metrics scrape took 9712ms
+2026-11-09T12:38:26Z INFO metrics: metrics scrape took 4939ms
+2026-11-01T13:39:33Z INFO auth: token refresh for client 1070 delayed
+2026-11-02T14:40:40Z INFO tls: handshake 3259 renegotiated
+2026-11-03T15:41:47Z WARN http.server: slow response from upstream (9195ms)
+2026-11-04T16:42:54Z INFO auth: token refresh for client 1157 delayed
+2026-11-05T17:43:01Z INFO http.server: slow response from upstream (1415ms)
+2026-11-06T18:44:08Z INFO metrics: metrics scrape took 2854ms
+2026-11-07T19:45:15Z INFO metrics: metrics scrape took 4353ms
+2026-11-08T20:46:22Z INFO metrics: metrics scrape took 402ms
+2026-11-09T21:47:29Z INFO cache: cache miss storm (1459 keys)
+2026-11-01T10:48:36Z INFO metrics: metrics scrape took 7708ms
+2026-11-02T11:49:43Z INFO uploads: upload 8567 exceeded soft limit
+2026-11-03T12:50:50Z INFO uploads: upload 4790 exceeded soft limit
+2026-11-04T13:51:57Z WARN queue: queue lag 4245ms
+2026-11-05T14:52:04Z INFO uploads: upload 1385 exceeded soft limit
+2026-11-06T15:53:11Z INFO auth: token refresh for client 4360 delayed
+2026-11-07T16:54:18Z INFO cache: cache miss storm (867 keys)
+2026-11-08T17:55:25Z INFO auth: token refresh for client 5394 delayed
+2026-11-09T18:56:32Z WARN uploads: upload 2321 exceeded soft limit
+2026-11-01T19:57:39Z INFO metrics: metrics scrape took 2531ms
+2026-11-02T20:58:46Z WARN queue: queue lag 4845ms
+2026-11-03T21:59:53Z INFO http.server: slow response from upstream (5111ms)
+2026-11-04T10:00:00Z WARN cache: cache miss storm (1553 keys)
+2026-11-05T11:01:07Z INFO cache: cache miss storm (3144 keys)
+2026-11-06T12:02:14Z WARN tls: handshake 3798 renegotiated
+2026-11-07T13:03:21Z WARN cache: cache miss storm (9267 keys)
+2026-11-08T14:04:28Z INFO queue: queue lag 225ms
+2026-11-09T15:05:35Z INFO metrics: metrics scrape took 1777ms
+2026-11-01T16:06:42Z INFO tls: handshake 4245 renegotiated
+2026-11-02T17:07:49Z INFO queue: queue lag 945ms
+2026-11-03T18:08:56Z INFO http.server: slow response from upstream (395ms)
+2026-11-04T19:09:03Z INFO metrics: metrics scrape took 3474ms
+2026-11-05T20:10:10Z INFO tls: handshake 3023 renegotiated
+2026-11-06T21:11:17Z INFO metrics: metrics scrape took 4282ms
+2026-11-07T10:12:24Z INFO scheduler: retrying job 1026 after timeout
+2026-11-08T11:13:31Z WARN metrics: metrics scrape took 5562ms
+2026-11-09T12:14:38Z WARN auth: token refresh for client 5178 delayed
+2026-11-01T13:15:45Z INFO auth: token refresh for client 9991 delayed
+2026-11-02T14:16:52Z INFO uploads: upload 4818 exceeded soft limit
+2026-11-03T15:17:59Z INFO http.server: slow response from upstream (8427ms)
+2026-11-04T16:18:06Z INFO metrics: metrics scrape took 2881ms
+2026-11-05T17:19:13Z WARN metrics: metrics scrape took 505ms
+2026-11-06T18:20:20Z INFO metrics: metrics scrape took 1969ms
+2026-11-07T19:21:27Z WARN uploads: upload 8681 exceeded soft limit
+2026-11-08T20:22:34Z INFO auth: token refresh for client 1750 delayed
+2026-11-09T21:23:41Z WARN cache: cache miss storm (7174 keys)
+2026-11-01T10:24:48Z INFO tls: handshake 4148 renegotiated
+2026-11-02T11:25:55Z WARN metrics: metrics scrape took 5224ms
+2026-11-03T12:26:02Z WARN tls: handshake 6099 renegotiated
+2026-11-04T13:27:09Z INFO tls: handshake 846 renegotiated
+2026-11-05T14:28:16Z WARN cache: cache miss storm (1449 keys)
+2026-11-06T15:29:23Z INFO auth: token refresh for client 622 delayed
+2026-11-07T16:30:30Z INFO scheduler: retrying job 7642 after timeout
+2026-11-08T17:31:37Z INFO http.server: slow response from upstream (1132ms)
+2026-11-09T18:32:44Z WARN uploads: upload 8526 exceeded soft limit
+2026-11-01T19:33:51Z INFO cache: cache miss storm (6463 keys)
+2026-11-02T20:34:58Z INFO cache: cache miss storm (532 keys)
+2026-11-03T21:35:05Z INFO auth: token refresh for client 8693 delayed
+2026-11-04T10:36:12Z INFO cache: cache miss storm (5187 keys)
+2026-11-05T11:37:19Z WARN scheduler: retrying job 2780 after timeout
+2026-11-06T12:38:26Z INFO metrics: metrics scrape took 6348ms
+2026-11-07T13:39:33Z INFO queue: queue lag 5948ms
+2026-11-08T14:40:40Z INFO cache: cache miss storm (7515 keys)
+2026-11-09T15:41:47Z INFO cache: cache miss storm (4262 keys)
+2026-11-01T16:42:54Z WARN queue: queue lag 3720ms
+2026-11-02T17:43:01Z INFO scheduler: retrying job 7632 after timeout
+2026-11-03T18:44:08Z INFO queue: queue lag 2133ms
+2026-11-04T19:45:15Z WARN metrics: metrics scrape took 1763ms
+2026-11-05T20:46:22Z INFO uploads: upload 463 exceeded soft limit
+2026-11-06T21:47:29Z WARN auth: token refresh for client 2443 delayed
+2026-11-07T10:48:36Z INFO uploads: upload 2841 exceeded soft limit
+2026-11-08T11:49:43Z INFO uploads: upload 6865 exceeded soft limit
+2026-11-09T12:50:50Z INFO http.server: slow response from upstream (3806ms)
+2026-11-01T13:51:57Z INFO uploads: upload 4176 exceeded soft limit
+2026-11-02T14:52:04Z INFO http.server: slow response from upstream (5368ms)
+2026-11-03T15:53:11Z INFO metrics: metrics scrape took 4367ms
+2026-11-04T16:54:18Z INFO uploads: upload 6148 exceeded soft limit
+2026-11-05T17:55:25Z WARN uploads: upload 6207 exceeded soft limit
+2026-11-06T18:56:32Z INFO auth: token refresh for client 3731 delayed
+2026-11-07T19:57:39Z WARN http.server: slow response from upstream (9299ms)
+2026-11-08T20:58:46Z INFO metrics: metrics scrape took 2818ms
+2026-11-09T21:59:53Z INFO scheduler: retrying job 4158 after timeout
+2026-11-01T10:00:00Z WARN uploads: upload 7169 exceeded soft limit
+2026-11-02T11:01:07Z INFO auth: token refresh for client 3938 delayed
+2026-11-03T12:02:14Z INFO uploads: upload 5667 exceeded soft limit
+2026-11-04T13:03:21Z INFO scheduler: retrying job 2288 after timeout
+2026-11-05T14:04:28Z WARN http.server: slow response from upstream (5569ms)
+2026-11-06T15:05:35Z WARN tls: handshake 3518 renegotiated
+2026-11-07T16:06:42Z INFO uploads: upload 4095 exceeded soft limit
+2026-11-08T17:07:49Z INFO cache: cache miss storm (1949 keys)
+2026-11-09T18:08:56Z INFO uploads: upload 428 exceeded soft limit
+2026-11-01T19:09:03Z INFO metrics: metrics scrape took 1167ms
+2026-11-02T20:10:10Z WARN cache: cache miss storm (870 keys)
+2026-11-03T21:11:17Z WARN metrics: metrics scrape took 6593ms
+2026-11-04T10:12:24Z WARN auth: token refresh for client 6204 delayed
+2026-11-05T11:13:31Z WARN auth: token refresh for client 5228 delayed
+2026-11-06T12:14:38Z INFO uploads: upload 5781 exceeded soft limit
+2026-11-07T13:15:45Z INFO cache: cache miss storm (7940 keys)
+2026-11-08T14:16:52Z WARN tls: handshake 203 renegotiated
+2026-11-09T15:17:59Z INFO metrics: metrics scrape took 3424ms
+2026-11-01T16:18:06Z INFO uploads: upload 2055 exceeded soft limit
+2026-11-02T17:19:13Z WARN http.server: slow response from upstream (9690ms)
+2026-11-03T18:20:20Z INFO queue: queue lag 2156ms
+2026-11-04T19:21:27Z INFO queue: queue lag 3021ms
+2026-11-05T20:22:34Z INFO auth: token refresh for client 1673 delayed
+2026-11-06T21:23:41Z INFO metrics: metrics scrape took 3598ms
+2026-11-07T10:24:48Z WARN uploads: upload 2594 exceeded soft limit
+2026-11-08T11:25:55Z INFO queue: queue lag 6839ms
+2026-11-09T12:26:02Z INFO metrics: metrics scrape took 4954ms
+2026-11-01T13:27:09Z INFO uploads: upload 8059 exceeded soft limit
+2026-11-02T14:28:16Z INFO http.server: slow response from upstream (9920ms)
+2026-11-03T15:29:23Z INFO queue: queue lag 3013ms
+2026-11-04T16:30:30Z INFO http.server: slow response from upstream (9334ms)
+2026-11-05T17:31:37Z INFO uploads: upload 918 exceeded soft limit
+2026-11-06T18:32:44Z INFO metrics: metrics scrape took 8241ms
+2026-11-07T19:33:51Z WARN metrics: metrics scrape took 2540ms
+2026-11-08T20:34:58Z INFO metrics: metrics scrape took 2520ms
+2026-11-09T21:35:05Z INFO tls: handshake 6954 renegotiated
+2026-11-01T10:36:12Z INFO scheduler: retrying job 9908 after timeout
+2026-11-02T11:37:19Z INFO auth: token refresh for client 6895 delayed
+2026-11-03T12:38:26Z WARN metrics: metrics scrape took 897ms
+2026-11-04T13:39:33Z INFO cache: cache miss storm (5583 keys)
+2026-11-05T14:40:40Z INFO scheduler: retrying job 8833 after timeout
+2026-11-06T15:41:47Z INFO auth: token refresh for client 8475 delayed
+2026-11-07T16:42:54Z INFO scheduler: retrying job 9888 after timeout
+2026-11-08T17:43:01Z INFO scheduler: retrying job 9603 after timeout
+2026-11-09T18:44:08Z WARN cache: cache miss storm (9744 keys)
+2026-11-01T19:45:15Z INFO metrics: metrics scrape took 6963ms
+2026-11-02T20:46:22Z WARN http.server: slow response from upstream (38ms)
+2026-11-03T21:47:29Z INFO tls: handshake 1150 renegotiated
+2026-11-04T10:48:36Z INFO queue: queue lag 5251ms
+2026-11-05T11:49:43Z INFO tls: handshake 3556 renegotiated
+2026-11-06T12:50:50Z WARN uploads: upload 4026 exceeded soft limit
+2026-11-07T13:51:57Z INFO metrics: metrics scrape took 2651ms
+2026-11-08T14:52:04Z INFO queue: queue lag 7153ms
+2026-11-09T15:53:11Z INFO auth: token refresh for client 2663 delayed
+2026-11-01T16:54:18Z WARN metrics: metrics scrape took 1402ms
+2026-11-02T17:55:25Z INFO scheduler: retrying job 9672 after timeout
+2026-11-03T18:56:32Z INFO uploads: upload 8276 exceeded soft limit
+2026-11-04T19:57:39Z INFO auth: token refresh for client 6852 delayed
+2026-11-05T20:58:46Z WARN tls: handshake 9710 renegotiated
+2026-11-06T21:59:53Z WARN tls: handshake 4549 renegotiated
+2026-11-07T10:00:00Z INFO tls: handshake 7740 renegotiated
+2026-11-08T11:01:07Z INFO scheduler: retrying job 3826 after timeout
+2026-11-09T12:02:14Z INFO cache: cache miss storm (6292 keys)
+2026-11-01T13:03:21Z WARN cache: cache miss storm (1655 keys)
+2026-11-02T14:04:28Z WARN uploads: upload 5508 exceeded soft limit
+2026-11-03T15:05:35Z WARN uploads: upload 2505 exceeded soft limit
+2026-11-04T16:06:42Z INFO tls: handshake 692 renegotiated
+2026-11-05T17:07:49Z INFO tls: handshake 8347 renegotiated
+2026-11-06T18:08:56Z WARN queue: queue lag 4896ms
+2026-11-07T19:09:03Z INFO scheduler: retrying job 2390 after timeout
+2026-11-08T20:10:10Z WARN uploads: upload 5361 exceeded soft limit
+2026-11-09T21:11:17Z INFO metrics: metrics scrape took 2572ms
+2026-11-01T10:12:24Z INFO queue: queue lag 4690ms
+2026-11-02T11:13:31Z INFO cache: cache miss storm (448 keys)
+2026-11-03T12:14:38Z WARN uploads: upload 7232 exceeded soft limit
+2026-11-04T13:15:45Z INFO tls: handshake 5964 renegotiated
+2026-11-05T14:16:52Z INFO http.server: slow response from upstream (9004ms)
+2026-11-06T15:17:59Z WARN uploads: upload 1914 exceeded soft limit
+2026-11-07T16:18:06Z INFO uploads: upload 6352 exceeded soft limit
+2026-11-08T17:19:13Z INFO auth: token refresh for client 6080 delayed
+2026-11-09T18:20:20Z INFO queue: queue lag 5955ms
+2026-11-01T19:21:27Z INFO http.server: slow response from upstream (5455ms)
+2026-11-02T20:22:34Z WARN auth: token refresh for client 2635 delayed
+2026-11-03T21:23:41Z INFO queue: queue lag 1250ms
+2026-11-04T10:24:48Z INFO metrics: metrics scrape took 984ms
+2026-11-05T11:25:55Z INFO scheduler: retrying job 5107 after timeout
+2026-11-06T12:26:02Z INFO metrics: metrics scrape took 953ms
+2026-11-07T13:27:09Z INFO queue: queue lag 2008ms
+2026-11-08T14:28:16Z INFO cache: cache miss storm (9035 keys)
+2026-11-09T15:29:23Z INFO cache: cache miss storm (7121 keys)
+2026-11-01T16:30:30Z INFO metrics: metrics scrape took 8150ms
+2026-11-02T17:31:37Z WARN queue: queue lag 1536ms
+2026-11-03T18:32:44Z INFO scheduler: retrying job 4952 after timeout
+2026-11-04T19:33:51Z INFO http.server: slow response from upstream (926ms)
+2026-11-05T20:34:58Z INFO scheduler: retrying job 649 after timeout
+2026-11-06T21:35:05Z INFO http.server: slow response from upstream (2770ms)
+2026-11-07T10:36:12Z WARN cache: cache miss storm (2664 keys)
+2026-11-08T11:37:19Z INFO cache: cache miss storm (3245 keys)
+2026-11-09T12:38:26Z INFO uploads: upload 5918 exceeded soft limit
+2026-11-01T13:39:33Z WARN cache: cache miss storm (5339 keys)
+2026-11-02T14:40:40Z WARN queue: queue lag 4160ms
+2026-11-03T15:41:47Z INFO tls: handshake 7924 renegotiated
+2026-11-04T16:42:54Z INFO http.server: slow response from upstream (2722ms)
+2026-11-05T17:43:01Z INFO scheduler: retrying job 5761 after timeout
+2026-11-06T18:44:08Z WARN http.server: slow response from upstream (8697ms)
+2026-11-07T19:45:15Z WARN http.server: slow response from upstream (8977ms)
+2026-11-08T20:46:22Z WARN http.server: slow response from upstream (7202ms)
+2026-11-09T21:47:29Z INFO http.server: slow response from upstream (6496ms)
+2026-11-01T10:48:36Z INFO scheduler: retrying job 9198 after timeout
+2026-11-02T11:49:43Z WARN scheduler: retrying job 2877 after timeout
+2026-11-03T12:50:50Z INFO queue: queue lag 85ms
+2026-11-04T13:51:57Z INFO http.server: slow response from upstream (6794ms)
+2026-11-05T14:52:04Z WARN metrics: metrics scrape took 6707ms
+2026-11-06T15:53:11Z WARN uploads: upload 9513 exceeded soft limit
+2026-11-07T16:54:18Z INFO scheduler: retrying job 6180 after timeout
+2026-11-08T17:55:25Z INFO metrics: metrics scrape took 3466ms
+2026-11-09T18:56:32Z INFO http.server: slow response from upstream (5224ms)
+2026-11-01T19:57:39Z INFO auth: token refresh for client 2606 delayed
+2026-11-02T20:58:46Z INFO tls: handshake 1369 renegotiated
+2026-11-03T21:59:53Z INFO tls: handshake 2452 renegotiated
+2026-11-04T10:00:00Z INFO queue: queue lag 9403ms
+2026-11-05T11:01:07Z INFO queue: queue lag 9619ms
+2026-11-06T12:02:14Z INFO queue: queue lag 1439ms
+2026-11-07T13:03:21Z INFO scheduler: retrying job 6177 after timeout
+2026-11-08T14:04:28Z INFO auth: token refresh for client 9941 delayed
+2026-11-09T15:05:35Z WARN queue: queue lag 4214ms
+2026-11-01T16:06:42Z WARN cache: cache miss storm (6045 keys)
+2026-11-02T17:07:49Z INFO cache: cache miss storm (8101 keys)
+2026-11-03T18:08:56Z INFO auth: token refresh for client 1075 delayed
+2026-11-04T19:09:03Z INFO auth: token refresh for client 6080 delayed
+2026-11-05T20:10:10Z WARN metrics: metrics scrape took 9377ms
+2026-11-06T21:11:17Z WARN auth: token refresh for client 5215 delayed
+2026-11-07T10:12:24Z WARN queue: queue lag 1953ms
+2026-11-08T11:13:31Z INFO http.server: slow response from upstream (4846ms)
+2026-11-09T12:14:38Z INFO http.server: slow response from upstream (5770ms)
+2026-11-01T13:15:45Z INFO queue: queue lag 4265ms
+2026-11-02T14:16:52Z WARN http.server: slow response from upstream (7840ms)
+2026-11-03T15:17:59Z INFO http.server: slow response from upstream (1350ms)
+2026-11-04T16:18:06Z INFO http.server: slow response from upstream (7621ms)
+2026-11-05T17:19:13Z INFO tls: handshake 4777 renegotiated
+2026-11-06T18:20:20Z INFO uploads: upload 2248 exceeded soft limit
+2026-11-07T19:21:27Z INFO cache: cache miss storm (8204 keys)
+2026-11-08T20:22:34Z INFO auth: token refresh for client 2700 delayed
+2026-11-09T21:23:41Z INFO scheduler: retrying job 7774 after timeout
+2026-11-01T10:24:48Z INFO metrics: metrics scrape took 4262ms
+2026-11-02T11:25:55Z INFO http.server: slow response from upstream (2649ms)
+2026-11-03T12:26:02Z INFO auth: token refresh for client 6287 delayed
+2026-11-04T13:27:09Z INFO tls: handshake 1621 renegotiated
+2026-11-05T14:28:16Z WARN queue: queue lag 5134ms
+2026-11-06T15:29:23Z WARN http.server: slow response from upstream (3811ms)
+2026-11-07T16:30:30Z WARN tls: handshake 8693 renegotiated
+2026-11-08T17:31:37Z INFO metrics: metrics scrape took 2639ms
+2026-11-09T18:32:44Z INFO cache: cache miss storm (6647 keys)
+2026-11-01T19:33:51Z INFO scheduler: retrying job 7715 after timeout
+2026-11-02T20:34:58Z WARN tls: handshake 4398 renegotiated
+2026-11-03T21:35:05Z INFO uploads: upload 9087 exceeded soft limit
+2026-11-04T10:36:12Z INFO tls: handshake 2666 renegotiated
+2026-11-05T17:41:09Z WARN db.pool: all connections busy, 37 requests queued; the pool size in settings is too small for the worker count
+2026-11-05T11:37:19Z INFO uploads: upload 6034 exceeded soft limit
+2026-11-06T12:38:26Z INFO queue: queue lag 2309ms
+2026-11-07T13:39:33Z INFO tls: handshake 5420 renegotiated
+2026-11-08T14:40:40Z INFO queue: queue lag 5152ms
+2026-11-09T15:41:47Z INFO http.server: slow response from upstream (3361ms)
+2026-11-01T16:42:54Z INFO tls: handshake 4666 renegotiated
+2026-11-02T17:43:01Z INFO tls: handshake 9234 renegotiated
+2026-11-03T18:44:08Z WARN uploads: upload 3250 exceeded soft limit
+2026-11-04T19:45:15Z INFO scheduler: retrying job 3095 after timeout
+2026-11-05T20:46:22Z INFO metrics: metrics scrape took 4811ms
+2026-11-06T21:47:29Z INFO metrics: metrics scrape took 6899ms
+2026-11-07T10:48:36Z INFO http.server: slow response from upstream (9072ms)
+2026-11-08T11:49:43Z INFO cache: cache miss storm (8446 keys)
+2026-11-09T12:50:50Z INFO cache: cache miss storm (1818 keys)
+2026-11-01T13:51:57Z INFO auth: token refresh for client 3174 delayed
+2026-11-02T14:52:04Z INFO http.server: slow response from upstream (816ms)
+2026-11-03T15:53:11Z INFO queue: queue lag 4605ms
+2026-11-04T16:54:18Z INFO uploads: upload 8450 exceeded soft limit
+2026-11-05T17:55:25Z INFO queue: queue lag 9668ms
+2026-11-06T18:56:32Z INFO scheduler: retrying job 9399 after timeout
+2026-11-07T19:57:39Z INFO metrics: metrics scrape took 3682ms
+2026-11-08T20:58:46Z INFO cache: cache miss storm (2002 keys)
+2026-11-09T21:59:53Z INFO auth: token refresh for client 6303 delayed
+2026-11-01T10:00:00Z INFO queue: queue lag 1112ms
+2026-11-02T11:01:07Z INFO queue: queue lag 4440ms
+2026-11-03T12:02:14Z WARN scheduler: retrying job 5977 after timeout
+2026-11-04T13:03:21Z INFO http.server: slow response from upstream (902ms)
+2026-11-05T14:04:28Z WARN queue: queue lag 2649ms
+2026-11-06T15:05:35Z INFO uploads: upload 9041 exceeded soft limit
+2026-11-07T16:06:42Z INFO scheduler: retrying job 6073 after timeout
+2026-11-08T17:07:49Z INFO auth: token refresh for client 2673 delayed
+2026-11-09T18:08:56Z INFO scheduler: retrying job 2457 after timeout
+2026-11-01T19:09:03Z INFO cache: cache miss storm (2632 keys)
+2026-11-02T20:10:10Z INFO auth: token refresh for client 9192 delayed
+2026-11-03T21:11:17Z WARN tls: handshake 7601 renegotiated
+2026-11-04T10:12:24Z INFO http.server: slow response from upstream (3879ms)
+2026-11-05T11:13:31Z INFO queue: queue lag 3888ms
+2026-11-06T12:14:38Z INFO http.server: slow response from upstream (5865ms)
+2026-11-07T13:15:45Z INFO metrics: metrics scrape took 7832ms
+2026-11-08T14:16:52Z WARN queue: queue lag 5507ms
+2026-11-09T15:17:59Z INFO tls: handshake 3652 renegotiated
+2026-11-01T16:18:06Z WARN http.server: slow response from upstream (8252ms)
+2026-11-02T17:19:13Z INFO metrics: metrics scrape took 9906ms
+2026-11-03T18:20:20Z INFO scheduler: retrying job 1148 after timeout
+2026-11-04T19:21:27Z INFO auth: token refresh for client 5443 delayed
+2026-11-05T20:22:34Z INFO cache: cache miss storm (1301 keys)
+2026-11-06T21:23:41Z INFO queue: queue lag 1225ms
+2026-11-07T10:24:48Z INFO tls: handshake 2544 renegotiated
+2026-11-08T11:25:55Z INFO scheduler: retrying job 7087 after timeout
+2026-11-09T12:26:02Z INFO uploads: upload 8423 exceeded soft limit
+2026-11-01T13:27:09Z INFO queue: queue lag 9628ms
+2026-11-02T14:28:16Z WARN http.server: slow response from upstream (2015ms)
+2026-11-03T15:29:23Z INFO scheduler: retrying job 4677 after timeout
+2026-11-04T16:30:30Z INFO http.server: slow response from upstream (792ms)
+2026-11-05T17:31:37Z INFO cache: cache miss storm (8376 keys)
+2026-11-06T18:32:44Z INFO queue: queue lag 3760ms
+2026-11-07T19:33:51Z WARN metrics: metrics scrape took 4252ms
+2026-11-08T20:34:58Z INFO tls: handshake 3944 renegotiated
+2026-11-09T21:35:05Z INFO tls: handshake 3659 renegotiated
+2026-11-01T10:36:12Z INFO queue: queue lag 3260ms
+2026-11-02T11:37:19Z INFO queue: queue lag 8794ms
+2026-11-03T12:38:26Z INFO auth: token refresh for client 5498 delayed
+2026-11-04T13:39:33Z INFO metrics: metrics scrape took 5419ms
+2026-11-05T14:40:40Z INFO metrics: metrics scrape took 6575ms
+2026-11-06T15:41:47Z WARN queue: queue lag 1142ms
+2026-11-07T16:42:54Z INFO scheduler: retrying job 1164 after timeout
+2026-11-08T17:43:01Z INFO http.server: slow response from upstream (4321ms)
+2026-11-09T18:44:08Z WARN cache: cache miss storm (8239 keys)
+2026-11-01T19:45:15Z INFO tls: handshake 3188 renegotiated
+2026-11-02T20:46:22Z WARN cache: cache miss storm (9229 keys)
+2026-11-03T21:47:29Z INFO tls: handshake 1049 renegotiated
+2026-11-04T10:48:36Z INFO tls: handshake 2325 renegotiated
+2026-11-05T11:49:43Z WARN cache: cache miss storm (7175 keys)
+2026-11-06T12:50:50Z INFO scheduler: retrying job 3038 after timeout
+2026-11-07T13:51:57Z INFO http.server: slow response from upstream (1859ms)
+2026-11-08T14:52:04Z INFO uploads: upload 890 exceeded soft limit
+2026-11-09T15:53:11Z INFO metrics: metrics scrape took 5711ms
+2026-11-01T16:54:18Z INFO scheduler: retrying job 6672 after timeout
+2026-11-02T17:55:25Z INFO auth: token refresh for client 7182 delayed
+2026-11-03T18:56:32Z INFO tls: handshake 68 renegotiated
+2026-11-04T19:57:39Z INFO scheduler: retrying job 8921 after timeout
+2026-11-05T20:58:46Z INFO queue: queue lag 2555ms
+2026-11-06T21:59:53Z INFO auth: token refresh for client 1897 delayed
+2026-11-07T10:00:00Z INFO queue: queue lag 3630ms
+2026-11-08T11:01:07Z INFO http.server: slow response from upstream (703ms)
+2026-11-09T12:02:14Z INFO uploads: upload 5024 exceeded soft limit
+2026-11-01T13:03:21Z WARN uploads: upload 9280 exceeded soft limit
+2026-11-02T14:04:28Z INFO metrics: metrics scrape took 8509ms
+2026-11-03T15:05:35Z WARN metrics: metrics scrape took 5537ms
+2026-11-04T16:06:42Z INFO scheduler: retrying job 5821 after timeout
+2026-11-05T17:07:49Z INFO metrics: metrics scrape took 8249ms
+2026-11-06T18:08:56Z INFO scheduler: retrying job 6871 after timeout
+2026-11-07T19:09:03Z INFO queue: queue lag 724ms
+2026-11-08T20:10:10Z INFO auth: token refresh for client 1958 delayed
+2026-11-09T21:11:17Z INFO tls: handshake 8486 renegotiated
+2026-11-01T10:12:24Z INFO tls: handshake 8379 renegotiated
+2026-11-02T11:13:31Z INFO queue: queue lag 4811ms
+2026-11-03T12:14:38Z INFO queue: queue lag 4217ms
+2026-11-04T13:15:45Z INFO tls: handshake 3498 renegotiated
+2026-11-05T14:16:52Z INFO tls: handshake 5029 renegotiated
+2026-11-06T15:17:59Z INFO tls: handshake 1422 renegotiated
+2026-11-07T16:18:06Z INFO uploads: upload 3840 exceeded soft limit
+2026-11-08T17:19:13Z INFO queue: queue lag 6013ms
+2026-11-09T18:20:20Z INFO http.server: slow response from upstream (8995ms)
+2026-11-01T19:21:27Z INFO http.server: slow response from upstream (5918ms)
+2026-11-02T20:22:34Z INFO queue: queue lag 7177ms
+2026-11-03T21:23:41Z INFO auth: token refresh for client 5587 delayed
+2026-11-04T10:24:48Z WARN uploads: upload 1788 exceeded soft limit
+2026-11-05T11:25:55Z WARN scheduler: retrying job 1682 after timeout
+2026-11-06T12:26:02Z INFO uploads: upload 4431 exceeded soft limit
+2026-11-07T13:27:09Z INFO tls: handshake 2158 renegotiated
+2026-11-08T14:28:16Z WARN uploads: upload 7206 exceeded soft limit
+2026-11-09T15:29:23Z WARN auth: token refresh for client 2555 delayed
+2026-11-01T16:30:30Z INFO uploads: upload 3014 exceeded soft limit
+2026-11-02T17:31:37Z INFO scheduler: retrying job 4612 after timeout
+2026-11-03T18:32:44Z INFO http.server: slow response from upstream (5441ms)
+2026-11-04T19:33:51Z INFO http.server: slow response from upstream (893ms)
+2026-11-05T20:34:58Z WARN queue: queue lag 3160ms
+2026-11-06T21:35:05Z INFO scheduler: retrying job 8353 after timeout
+2026-11-07T10:36:12Z INFO cache: cache miss storm (4460 keys)
+2026-11-08T11:37:19Z WARN tls: handshake 9762 renegotiated
+2026-11-09T12:38:26Z INFO auth: token refresh for client 6431 delayed
+2026-11-01T13:39:33Z INFO queue: queue lag 6224ms
+2026-11-02T14:40:40Z INFO http.server: slow response from upstream (1878ms)
+2026-11-03T15:41:47Z INFO uploads: upload 2086 exceeded soft limit
+2026-11-04T16:42:54Z INFO http.server: slow response from upstream (3399ms)
+2026-11-05T17:43:01Z INFO http.server: slow response from upstream (4823ms)
+2026-11-06T18:44:08Z INFO cache: cache miss storm (3953 keys)
+2026-11-07T19:45:15Z WARN metrics: metrics scrape took 9610ms
+2026-11-08T20:46:22Z INFO uploads: upload 606 exceeded soft limit
+2026-11-09T21:47:29Z INFO uploads: upload 8366 exceeded soft limit
+2026-11-01T10:48:36Z INFO tls: handshake 3899 renegotiated
+2026-11-02T11:49:43Z WARN metrics: metrics scrape took 5110ms
+2026-11-03T12:50:50Z INFO queue: queue lag 262ms
+2026-11-04T13:51:57Z INFO metrics: metrics scrape took 5448ms
+2026-11-05T14:52:04Z INFO queue: queue lag 6930ms
+2026-11-06T15:53:11Z INFO metrics: metrics scrape took 9631ms
+2026-11-07T16:54:18Z WARN metrics: metrics scrape took 631ms
+2026-11-08T17:55:25Z INFO auth: token refresh for client 7700 delayed
+2026-11-09T18:56:32Z WARN tls: handshake 233 renegotiated
+2026-11-01T19:57:39Z WARN http.server: slow response from upstream (7578ms)
+2026-11-02T20:58:46Z INFO metrics: metrics scrape took 9827ms
+2026-11-03T21:59:53Z WARN tls: handshake 2628 renegotiated
+2026-11-04T10:00:00Z INFO cache: cache miss storm (7225 keys)
+2026-11-05T11:01:07Z INFO cache: cache miss storm (7577 keys)
+2026-11-06T12:02:14Z INFO metrics: metrics scrape took 1115ms
+2026-11-07T13:03:21Z INFO cache: cache miss storm (3021 keys)
+2026-11-08T14:04:28Z INFO uploads: upload 7097 exceeded soft limit
+2026-11-09T15:05:35Z WARN queue: queue lag 4749ms
+2026-11-01T16:06:42Z INFO uploads: upload 2782 exceeded soft limit
+2026-11-02T17:07:49Z WARN cache: cache miss storm (1877 keys)
+2026-11-03T18:08:56Z INFO uploads: upload 8874 exceeded soft limit
+2026-11-04T19:09:03Z INFO metrics: metrics scrape took 6359ms
+2026-11-05T20:10:10Z INFO uploads: upload 9872 exceeded soft limit
+2026-11-06T21:11:17Z INFO auth: token refresh for client 1393 delayed
+2026-11-07T10:12:24Z INFO uploads: upload 6007 exceeded soft limit
+2026-11-08T11:13:31Z INFO uploads: upload 5391 exceeded soft limit
+2026-11-09T12:14:38Z INFO cache: cache miss storm (2654 keys)
+2026-11-01T13:15:45Z INFO queue: queue lag 5922ms
+2026-11-02T14:16:52Z WARN metrics: metrics scrape took 70ms
+2026-11-03T15:17:59Z INFO scheduler: retrying job 8718 after timeout
+2026-11-04T16:18:06Z INFO tls: handshake 6660 renegotiated
+2026-11-05T17:19:13Z INFO auth: token refresh for client 2833 delayed
+2026-11-06T18:20:20Z INFO tls: handshake 6153 renegotiated
+2026-11-07T19:21:27Z INFO http.server: slow response from upstream (6180ms)
+2026-11-08T20:22:34Z INFO metrics: metrics scrape took 6587ms
+2026-11-09T21:23:41Z WARN http.server: slow response from upstream (8952ms)
+2026-11-01T10:24:48Z INFO tls: handshake 8883 renegotiated
+2026-11-02T11:25:55Z INFO scheduler: retrying job 2868 after timeout
+2026-11-03T12:26:02Z INFO scheduler: retrying job 8230 after timeout
+2026-11-04T13:27:09Z INFO scheduler: retrying job 8358 after timeout
+2026-11-05T14:28:16Z INFO uploads: upload 9031 exceeded soft limit
+2026-11-06T15:29:23Z WARN scheduler: retrying job 1833 after timeout
+2026-11-07T16:30:30Z INFO scheduler: retrying job 5067 after timeout
+2026-11-08T17:31:37Z INFO auth: token refresh for client 8958 delayed
+2026-11-09T18:32:44Z WARN metrics: metrics scrape took 5248ms
+2026-11-01T19:33:51Z INFO scheduler: retrying job 8096 after timeout
+2026-11-02T20:34:58Z INFO tls: handshake 983 renegotiated
+2026-11-03T21:35:05Z INFO cache: cache miss storm (553 keys)
+2026-11-04T10:36:12Z INFO scheduler: retrying job 1160 after timeout
+2026-11-05T11:37:19Z INFO scheduler: retrying job 268 after timeout
+2026-11-06T12:38:26Z WARN metrics: metrics scrape took 1434ms
+2026-11-07T13:39:33Z INFO tls: handshake 2999 renegotiated
+2026-11-08T14:40:40Z INFO metrics: metrics scrape took 5561ms
+2026-11-09T15:41:47Z INFO http.server: slow response from upstream (5524ms)
+2026-11-01T16:42:54Z INFO uploads: upload 1192 exceeded soft limit
+2026-11-02T17:43:01Z INFO http.server: slow response from upstream (838ms)
+2026-11-03T18:44:08Z INFO scheduler: retrying job 4576 after timeout
+2026-11-04T19:45:15Z INFO auth: token refresh for client 3367 delayed
+2026-11-05T20:46:22Z INFO tls: handshake 9071 renegotiated
+2026-11-06T21:47:29Z INFO http.server: slow response from upstream (4700ms)
+2026-11-07T10:48:36Z INFO metrics: metrics scrape took 1508ms
+2026-11-08T11:49:43Z INFO tls: handshake 6266 renegotiated
+2026-11-09T12:50:50Z WARN tls: handshake 7480 renegotiated
+2026-11-01T13:51:57Z INFO metrics: metrics scrape took 4616ms
+2026-11-02T14:52:04Z INFO auth: token refresh for client 2192 delayed
+2026-11-03T15:53:11Z WARN auth: token refresh for client 757 delayed
+2026-11-04T16:54:18Z INFO metrics: metrics scrape took 3569ms
+2026-11-05T17:55:25Z INFO tls: handshake 7571 renegotiated
+2026-11-06T18:56:32Z WARN uploads: upload 445 exceeded soft limit
+2026-11-07T19:57:39Z WARN uploads: upload 3446 exceeded soft limit
+2026-11-08T20:58:46Z INFO scheduler: retrying job 8140 after timeout
+2026-11-09T21:59:53Z INFO queue: queue lag 8605ms
+2026-11-01T10:00:00Z WARN scheduler: retrying job 3033 after timeout
+2026-11-02T11:01:07Z INFO tls: handshake 3251 renegotiated
+2026-11-03T12:02:14Z INFO metrics: metrics scrape took 9366ms
+2026-11-04T13:03:21Z INFO cache: cache miss storm (4531 keys)
+2026-11-05T14:04:28Z INFO uploads: upload 7913 exceeded soft limit
+2026-11-06T15:05:35Z WARN auth: token refresh for client 9730 delayed
+2026-11-07T16:06:42Z INFO metrics: metrics scrape took 7175ms
+2026-11-08T17:07:49Z INFO http.server: slow response from upstream (4170ms)
+2026-11-09T18:08:56Z INFO scheduler: retrying job 2794 after timeout
+2026-11-01T19:09:03Z INFO auth: token refresh for client 7142 delayed
+2026-11-02T20:10:10Z WARN tls: handshake 7166 renegotiated
+2026-11-03T21:11:17Z INFO metrics: metrics scrape took 2568ms
+2026-11-04T10:12:24Z INFO queue: queue lag 8358ms
+2026-11-05T11:13:31Z INFO scheduler: retrying job 3633 after timeout
+2026-11-06T12:14:38Z WARN queue: queue lag 4557ms
+2026-11-07T13:15:45Z INFO scheduler: retrying job 3007 after timeout
+2026-11-08T14:16:52Z INFO metrics: metrics scrape took 7793ms
+2026-11-09T15:17:59Z WARN metrics: metrics scrape took 8262ms
+2026-11-01T16:18:06Z INFO tls: handshake 283 renegotiated
+2026-11-02T17:19:13Z WARN metrics: metrics scrape took 637ms
+2026-11-03T18:20:20Z WARN cache: cache miss storm (3575 keys)
+2026-11-04T19:21:27Z INFO auth: token refresh for client 9395 delayed
+2026-11-05T20:22:34Z INFO scheduler: retrying job 6099 after timeout
+2026-11-06T21:23:41Z WARN cache: cache miss storm (1078 keys)
+2026-11-07T10:24:48Z INFO scheduler: retrying job 2523 after timeout
+2026-11-08T11:25:55Z INFO auth: token refresh for client 991 delayed
+2026-11-09T12:26:02Z INFO http.server: slow response from upstream (4079ms)
+2026-11-01T13:27:09Z INFO metrics: metrics scrape took 4198ms
+2026-11-02T14:28:16Z INFO auth: token refresh for client 4317 delayed
+2026-11-03T15:29:23Z INFO tls: handshake 4112 renegotiated
+2026-11-04T16:30:30Z INFO http.server: slow response from upstream (7571ms)
+2026-11-05T17:31:37Z INFO metrics: metrics scrape took 3985ms
+2026-11-06T18:32:44Z INFO queue: queue lag 3671ms
+2026-11-07T19:33:51Z INFO http.server: slow response from upstream (5405ms)
+2026-11-08T20:34:58Z WARN cache: cache miss storm (8043 keys)
+2026-11-09T21:35:05Z INFO http.server: slow response from upstream (3434ms)
+2026-11-01T10:36:12Z INFO uploads: upload 5144 exceeded soft limit
+2026-11-02T11:37:19Z WARN queue: queue lag 8750ms
+2026-11-03T12:38:26Z INFO queue: queue lag 5129ms
+2026-11-04T13:39:33Z INFO queue: queue lag 8400ms
+2026-11-05T14:40:40Z WARN tls: handshake 9592 renegotiated
+2026-11-06T15:41:47Z INFO tls: handshake 2929 renegotiated
+2026-11-07T16:42:54Z WARN queue: queue lag 3468ms
+2026-11-08T17:43:01Z INFO http.server: slow response from upstream (7568ms)
+2026-11-09T18:44:08Z INFO metrics: metrics scrape took 1318ms
+2026-11-01T19:45:15Z WARN uploads: upload 155 exceeded soft limit
+2026-11-02T20:46:22Z INFO http.server: slow response from upstream (8009ms)
+2026-11-03T21:47:29Z INFO scheduler: retrying job 7710 after timeout
+2026-11-04T10:48:36Z INFO scheduler: retrying job 7121 after timeout
+2026-11-05T11:49:43Z INFO metrics: metrics scrape took 6450ms
+2026-11-06T12:50:50Z INFO http.server: slow response from upstream (368ms)
+2026-11-07T13:51:57Z WARN queue: queue lag 5334ms
+2026-11-08T14:52:04Z INFO metrics: metrics scrape took 1122ms
+2026-11-09T15:53:11Z INFO scheduler: retrying job 1304 after timeout
+2026-11-01T16:54:18Z INFO auth: token refresh for client 4848 delayed
+2026-11-02T17:55:25Z INFO auth: token refresh for client 1903 delayed
+2026-11-03T18:56:32Z INFO cache: cache miss storm (4908 keys)
+2026-11-04T19:57:39Z INFO http.server: slow response from upstream (2953ms)
+2026-11-05T20:58:46Z WARN queue: queue lag 2014ms
+2026-11-06T21:59:53Z WARN cache: cache miss storm (4926 keys)
+2026-11-07T10:00:00Z WARN tls: handshake 6286 renegotiated
+2026-11-08T11:01:07Z WARN cache: cache miss storm (3746 keys)
+2026-11-09T12:02:14Z INFO queue: queue lag 5281ms
+2026-11-01T13:03:21Z WARN tls: handshake 6451 renegotiated
+2026-11-02T14:04:28Z INFO auth: token refresh for client 9615 delayed
+2026-11-03T15:05:35Z WARN http.server: slow response from upstream (4311ms)
+2026-11-04T16:06:42Z INFO metrics: metrics scrape took 7226ms
+2026-11-05T17:07:49Z INFO queue: queue lag 5931ms
+2026-11-06T18:08:56Z INFO scheduler: retrying job 6979 after timeout
+2026-11-07T19:09:03Z INFO scheduler: retrying job 3910 after timeout
+2026-11-08T20:10:10Z INFO cache: cache miss storm (6829 keys)
+2026-11-09T21:11:17Z INFO cache: cache miss storm (7290 keys)
+2026-11-01T10:12:24Z WARN auth: token refresh for client 1043 delayed
+2026-11-02T11:13:31Z INFO cache: cache miss storm (6646 keys)
+2026-11-03T12:14:38Z INFO auth: token refresh for client 6161 delayed
+2026-11-04T13:15:45Z INFO uploads: upload 7765 exceeded soft limit
+2026-11-05T14:16:52Z INFO cache: cache miss storm (453 keys)
+2026-11-06T15:17:59Z INFO scheduler: retrying job 1345 after timeout
+2026-11-07T16:18:06Z INFO cache: cache miss storm (9911 keys)
+2026-11-08T17:19:13Z INFO cache: cache miss storm (4755 keys)
+2026-11-09T18:20:20Z WARN queue: queue lag 4136ms
+2026-11-01T19:21:27Z INFO metrics: metrics scrape took 778ms
+2026-11-02T20:22:34Z WARN cache: cache miss storm (5012 keys)
+2026-11-03T21:23:41Z INFO http.server: slow response from upstream (1655ms)
+2026-11-04T10:24:48Z INFO queue: queue lag 9383ms
+2026-11-05T11:25:55Z INFO metrics: metrics scrape took 8151ms
+2026-11-06T12:26:02Z INFO auth: token refresh for client 9421 delayed
+2026-11-07T13:27:09Z INFO queue: queue lag 4624ms
+2026-11-08T14:28:16Z INFO tls: handshake 4910 renegotiated
+2026-11-09T15:29:23Z INFO auth: token refresh for client 1552 delayed
+2026-11-01T16:30:30Z INFO tls: handshake 3759 renegotiated
+2026-11-02T17:31:37Z INFO uploads: upload 5197 exceeded soft limit
+2026-11-03T18:32:44Z INFO auth: token refresh for client 6135 delayed
+2026-11-04T19:33:51Z WARN metrics: metrics scrape took 8416ms
+2026-11-05T20:34:58Z INFO auth: token refresh for client 7124 delayed
+2026-11-06T21:35:05Z INFO tls: handshake 3352 renegotiated
+2026-11-07T10:36:12Z INFO scheduler: retrying job 9152 after timeout
+2026-11-08T11:37:19Z INFO http.server: slow response from upstream (4226ms)
+2026-11-09T12:38:26Z INFO scheduler: retrying job 4255 after timeout
+2026-11-01T13:39:33Z WARN metrics: metrics scrape took 7588ms
+2026-11-02T14:40:40Z INFO scheduler: retrying job 4931 after timeout
+2026-11-03T15:41:47Z INFO cache: cache miss storm (7802 keys)
+2026-11-04T16:42:54Z INFO queue: queue lag 3141ms
+2026-11-05T17:43:01Z WARN queue: queue lag 6970ms
+2026-11-06T18:44:08Z INFO metrics: metrics scrape took 9213ms
+2026-11-07T19:45:15Z WARN auth: token refresh for client 9341 delayed
+2026-11-08T20:46:22Z WARN queue: queue lag 3088ms
+2026-11-09T21:47:29Z INFO queue: queue lag 8403ms
+2026-11-01T10:48:36Z WARN uploads: upload 610 exceeded soft limit
+2026-11-02T11:49:43Z INFO cache: cache miss storm (1256 keys)
+2026-11-03T12:50:50Z INFO scheduler: retrying job 4395 after timeout
+2026-11-04T13:51:57Z WARN tls: handshake 5456 renegotiated
+2026-11-05T14:52:04Z INFO auth: token refresh for client 3023 delayed
+2026-11-06T15:53:11Z INFO scheduler: retrying job 1461 after timeout
+2026-11-07T16:54:18Z INFO scheduler: retrying job 7848 after timeout
+2026-11-08T17:55:25Z INFO uploads: upload 8605 exceeded soft limit
+2026-11-09T18:56:32Z INFO scheduler: retrying job 9035 after timeout
+2026-11-01T19:57:39Z INFO metrics: metrics scrape took 4738ms
+2026-11-02T20:58:46Z INFO auth: token refresh for client 4392 delayed
+2026-11-03T21:59:53Z WARN metrics: metrics scrape took 208ms
+2026-11-04T10:00:00Z INFO queue: queue lag 6234ms
+2026-11-05T11:01:07Z INFO tls: handshake 7228 renegotiated
+2026-11-06T12:02:14Z INFO queue: queue lag 1548ms
+2026-11-07T13:03:21Z WARN metrics: metrics scrape took 4154ms
+2026-11-08T14:04:28Z INFO metrics: metrics scrape took 9734ms
+2026-11-09T15:05:35Z WARN cache: cache miss storm (6883 keys)
+2026-11-01T16:06:42Z INFO cache: cache miss storm (7356 keys)
+2026-11-02T17:07:49Z INFO auth: token refresh for client 968 delayed
+2026-11-03T18:08:56Z INFO uploads: upload 2051 exceeded soft limit
+2026-11-04T19:09:03Z WARN http.server: slow response from upstream (9017ms)
+2026-11-05T20:10:10Z WARN scheduler: retrying job 2539 after timeout
+2026-11-06T21:11:17Z INFO tls: handshake 5674 renegotiated
+2026-11-07T10:12:24Z INFO queue: queue lag 3144ms
+2026-11-08T11:13:31Z INFO cache: cache miss storm (9827 keys)
+2026-11-09T12:14:38Z INFO queue: queue lag 4755ms
+2026-11-01T13:15:45Z INFO uploads: upload 8217 exceeded soft limit
+2026-11-02T14:16:52Z INFO uploads: upload 634 exceeded soft limit
+2026-11-03T15:17:59Z INFO uploads: upload 4273 exceeded soft limit
+2026-11-04T16:18:06Z WARN auth: token refresh for client 8592 delayed
+2026-11-05T17:19:13Z WARN tls: handshake 7575 renegotiated
+2026-11-06T18:20:20Z INFO tls: handshake 1808 renegotiated
+2026-11-07T19:21:27Z INFO scheduler: retrying job 4076 after timeout
+2026-11-08T20:22:34Z INFO scheduler: retrying job 2233 after timeout
+2026-11-09T21:23:41Z WARN metrics: metrics scrape took 5487ms
+2026-11-01T10:24:48Z INFO metrics: metrics scrape took 7311ms
+2026-11-02T11:25:55Z INFO tls: handshake 2851 renegotiated
+2026-11-03T12:26:02Z INFO http.server: slow response from upstream (7317ms)
+2026-11-04T13:27:09Z INFO cache: cache miss storm (7424 keys)
+2026-11-05T14:28:16Z INFO http.server: slow response from upstream (7886ms)
+2026-11-06T15:29:23Z INFO queue: queue lag 6787ms
+2026-11-07T16:30:30Z INFO metrics: metrics scrape took 830ms
+2026-11-08T17:31:37Z INFO queue: queue lag 5570ms
+2026-11-09T18:32:44Z WARN auth: token refresh for client 6821 delayed
+2026-11-01T19:33:51Z INFO queue: queue lag 8289ms
+2026-11-02T20:34:58Z INFO http.server: slow response from upstream (621ms)
+2026-11-03T21:35:05Z INFO queue: queue lag 3639ms
+2026-11-04T10:36:12Z INFO uploads: upload 449 exceeded soft limit
+2026-11-05T11:37:19Z INFO cache: cache miss storm (6938 keys)
+2026-11-06T12:38:26Z WARN tls: handshake 6131 renegotiated
+2026-11-07T13:39:33Z WARN cache: cache miss storm (9519 keys)
+2026-11-08T14:40:40Z INFO uploads: upload 6293 exceeded soft limit
+2026-11-09T15:41:47Z WARN auth: token refresh for client 1082 delayed
+2026-11-01T16:42:54Z WARN tls: handshake 1708 renegotiated
+2026-11-02T17:43:01Z INFO tls: handshake 6635 renegotiated
+2026-11-03T18:44:08Z WARN cache: cache miss storm (7091 keys)
+2026-11-04T19:45:15Z INFO http.server: slow response from upstream (9826ms)
+2026-11-05T20:46:22Z INFO tls: handshake 759 renegotiated
+2026-11-06T21:47:29Z INFO queue: queue lag 55ms
+2026-11-07T10:48:36Z INFO tls: handshake 5766 renegotiated
+2026-11-08T11:49:43Z WARN tls: handshake 1705 renegotiated
+2026-11-09T12:50:50Z INFO auth: token refresh for client 5446 delayed
+2026-11-01T13:51:57Z INFO auth: token refresh for client 9295 delayed
+2026-11-02T14:52:04Z INFO queue: queue lag 7062ms
+2026-11-03T15:53:11Z INFO tls: handshake 7841 renegotiated
+2026-11-04T16:54:18Z INFO auth: token refresh for client 4753 delayed
+2026-11-05T17:55:25Z INFO http.server: slow response from upstream (5259ms)
+2026-11-06T18:56:32Z INFO http.server: slow response from upstream (516ms)
+2026-11-07T19:57:39Z INFO scheduler: retrying job 3910 after timeout
+2026-11-08T20:58:46Z INFO queue: queue lag 8673ms
+2026-11-09T21:59:53Z INFO uploads: upload 1664 exceeded soft limit
+2026-11-01T10:00:00Z WARN metrics: metrics scrape took 8464ms
+2026-11-02T11:01:07Z INFO queue: queue lag 2525ms
+2026-11-03T12:02:14Z INFO tls: handshake 9160 renegotiated
+2026-11-04T13:03:21Z INFO auth: token refresh for client 314 delayed
+2026-11-05T14:04:28Z WARN auth: token refresh for client 868 delayed
+2026-11-06T15:05:35Z INFO cache: cache miss storm (25 keys)
+2026-11-07T16:06:42Z INFO queue: queue lag 5357ms
+2026-11-08T17:07:49Z INFO uploads: upload 2562 exceeded soft limit
+2026-11-09T18:08:56Z INFO queue: queue lag 4984ms
+2026-11-01T19:09:03Z INFO http.server: slow response from upstream (7539ms)
+2026-11-02T20:10:10Z WARN scheduler: retrying job 1988 after timeout
+2026-11-03T21:11:17Z INFO metrics: metrics scrape took 5043ms
+2026-11-04T10:12:24Z INFO metrics: metrics scrape took 898ms
+2026-11-05T11:13:31Z INFO auth: token refresh for client 2990 delayed
+2026-11-06T12:14:38Z INFO tls: handshake 2129 renegotiated
+2026-11-07T13:15:45Z INFO scheduler: retrying job 6442 after timeout
+2026-11-08T14:16:52Z WARN scheduler: retrying job 4526 after timeout
+2026-11-09T15:17:59Z INFO auth: token refresh for client 2227 delayed
+2026-11-01T16:18:06Z INFO uploads: upload 3979 exceeded soft limit
+2026-11-02T17:19:13Z INFO http.server: slow response from upstream (3314ms)
+2026-11-03T18:20:20Z INFO auth: token refresh for client 5029 delayed
+2026-11-04T19:21:27Z INFO uploads: upload 4627 exceeded soft limit
+2026-11-05T20:22:34Z INFO tls: handshake 7263 renegotiated
+2026-11-06T21:23:41Z INFO cache: cache miss storm (5728 keys)
+2026-11-07T10:24:48Z INFO queue: queue lag 2661ms
+2026-11-08T11:25:55Z INFO metrics: metrics scrape took 119ms
+2026-11-09T12:26:02Z WARN cache: cache miss storm (1377 keys)
+2026-11-01T13:27:09Z INFO scheduler: retrying job 7443 after timeout
+2026-11-02T14:28:16Z WARN http.server: slow response from upstream (7376ms)
+2026-11-03T15:29:23Z INFO cache: cache miss storm (6512 keys)
+2026-11-04T16:30:30Z INFO uploads: upload 3975 exceeded soft limit
+2026-11-05T17:31:37Z INFO queue: queue lag 7445ms
+2026-11-06T18:32:44Z INFO uploads: upload 6318 exceeded soft limit
+2026-11-07T19:33:51Z INFO cache: cache miss storm (6868 keys)
+2026-11-08T20:34:58Z INFO auth: token refresh for client 1931 delayed
+2026-11-09T21:35:05Z WARN metrics: metrics scrape took 5340ms
+2026-11-01T10:36:12Z INFO tls: handshake 3083 renegotiated
+2026-11-02T11:37:19Z INFO tls: handshake 6233 renegotiated
+2026-11-03T12:38:26Z INFO cache: cache miss storm (7377 keys)
+2026-11-04T13:39:33Z WARN cache: cache miss storm (7015 keys)
+2026-11-05T14:40:40Z WARN auth: token refresh for client 4247 delayed
+2026-11-06T15:41:47Z INFO queue: queue lag 3805ms
+2026-11-07T16:42:54Z WARN scheduler: retrying job 3136 after timeout
+2026-11-08T17:43:01Z WARN http.server: slow response from upstream (6274ms)
+2026-11-09T18:44:08Z WARN uploads: upload 2033 exceeded soft limit
+2026-11-01T19:45:15Z WARN cache: cache miss storm (2566 keys)
+2026-11-02T20:46:22Z WARN auth: token refresh for client 8447 delayed
+2026-11-03T21:47:29Z INFO scheduler: retrying job 5326 after timeout
+2026-11-04T10:48:36Z WARN tls: handshake 4724 renegotiated
+2026-11-05T11:49:43Z INFO tls: handshake 2848 renegotiated
+2026-11-06T12:50:50Z INFO auth: token refresh for client 6782 delayed
+2026-11-07T13:51:57Z INFO http.server: slow response from upstream (8795ms)
+2026-11-08T14:52:04Z INFO tls: handshake 3510 renegotiated
+2026-11-09T15:53:11Z INFO queue: queue lag 7685ms
+2026-11-01T16:54:18Z INFO queue: queue lag 1529ms
+2026-11-02T17:55:25Z INFO cache: cache miss storm (5091 keys)
+2026-11-03T18:56:32Z INFO queue: queue lag 6804ms
+2026-11-04T19:57:39Z WARN uploads: upload 7109 exceeded soft limit
+2026-11-05T20:58:46Z WARN uploads: upload 1770 exceeded soft limit
+2026-11-06T21:59:53Z INFO metrics: metrics scrape took 5064ms
+2026-11-07T10:00:00Z WARN cache: cache miss storm (6786 keys)
+2026-11-08T11:01:07Z WARN uploads: upload 2824 exceeded soft limit
+2026-11-09T12:02:14Z WARN metrics: metrics scrape took 5408ms
+2026-11-01T13:03:21Z WARN auth: token refresh for client 5177 delayed
+2026-11-02T14:04:28Z WARN tls: handshake 618 renegotiated
+2026-11-03T15:05:35Z INFO tls: handshake 889 renegotiated
+2026-11-04T16:06:42Z INFO scheduler: retrying job 5675 after timeout
+2026-11-05T17:07:49Z INFO auth: token refresh for client 3540 delayed
+2026-11-06T18:08:56Z WARN metrics: metrics scrape took 4903ms
+2026-11-07T19:09:03Z WARN tls: handshake 8741 renegotiated
+2026-11-08T20:10:10Z INFO cache: cache miss storm (1094 keys)
+2026-11-09T21:11:17Z INFO scheduler: retrying job 1523 after timeout
+2026-11-01T10:12:24Z INFO queue: queue lag 8654ms
+2026-11-02T11:13:31Z INFO auth: token refresh for client 1106 delayed
+2026-11-03T12:14:38Z INFO scheduler: retrying job 7022 after timeout
+2026-11-04T13:15:45Z INFO metrics: metrics scrape took 728ms
+2026-11-05T14:16:52Z WARN cache: cache miss storm (5333 keys)
+2026-11-06T15:17:59Z WARN http.server: slow response from upstream (4584ms)
+2026-11-07T16:18:06Z WARN uploads: upload 3826 exceeded soft limit
+2026-11-08T17:19:13Z INFO auth: token refresh for client 7673 delayed
+2026-11-09T18:20:20Z INFO scheduler: retrying job 7436 after timeout
+2026-11-01T19:21:27Z INFO uploads: upload 9772 exceeded soft limit
+2026-11-02T20:22:34Z INFO queue: queue lag 3133ms
+2026-11-03T21:23:41Z INFO auth: token refresh for client 4490 delayed
+2026-11-04T10:24:48Z INFO metrics: metrics scrape took 9101ms
+2026-11-05T11:25:55Z WARN uploads: upload 3789 exceeded soft limit
+2026-11-06T12:26:02Z INFO uploads: upload 165 exceeded soft limit
+2026-11-07T13:27:09Z WARN tls: handshake 6101 renegotiated
+2026-11-08T14:28:16Z WARN auth: token refresh for client 3816 delayed
+2026-11-09T15:29:23Z INFO metrics: metrics scrape took 3425ms
+2026-11-01T16:30:30Z WARN uploads: upload 9398 exceeded soft limit
+2026-11-02T17:31:37Z WARN uploads: upload 1369 exceeded soft limit
+2026-11-03T18:32:44Z INFO http.server: slow response from upstream (9663ms)
+2026-11-04T19:33:51Z INFO queue: queue lag 8167ms
+2026-11-05T20:34:58Z WARN metrics: metrics scrape took 9026ms
+2026-11-06T21:35:05Z WARN metrics: metrics scrape took 609ms
+2026-11-07T10:36:12Z INFO tls: handshake 5354 renegotiated
+2026-11-08T11:37:19Z INFO tls: handshake 4253 renegotiated
+2026-11-09T12:38:26Z INFO auth: token refresh for client 7271 delayed
+2026-11-01T13:39:33Z INFO metrics: metrics scrape took 8777ms
+2026-11-02T14:40:40Z INFO tls: handshake 3249 renegotiated
+2026-11-03T15:41:47Z WARN auth: token refresh for client 5629 delayed
+2026-11-04T16:42:54Z INFO http.server: slow response from upstream (4872ms)
+2026-11-05T17:43:01Z INFO uploads: upload 9473 exceeded soft limit
+2026-11-06T18:44:08Z INFO scheduler: retrying job 6791 after timeout
+2026-11-07T19:45:15Z INFO auth: token refresh for client 6128 delayed
+2026-11-08T20:46:22Z INFO scheduler: retrying job 4980 after timeout
+2026-11-09T21:47:29Z WARN auth: token refresh for client 4434 delayed
+2026-11-01T10:48:36Z INFO tls: handshake 9203 renegotiated
+2026-11-02T11:49:43Z INFO uploads: upload 225 exceeded soft limit
+2026-11-03T12:50:50Z INFO metrics: metrics scrape took 3768ms
+2026-11-04T13:51:57Z INFO uploads: upload 7059 exceeded soft limit
+2026-11-05T14:52:04Z INFO auth: token refresh for client 401 delayed
+2026-11-06T15:53:11Z INFO auth: token refresh for client 232 delayed
+2026-11-07T16:54:18Z INFO auth: token refresh for client 3485 delayed
+2026-11-08T17:55:25Z INFO uploads: upload 6026 exceeded soft limit
+2026-11-09T18:56:32Z INFO uploads: upload 8335 exceeded soft limit
+2026-11-01T19:57:39Z WARN scheduler: retrying job 4107 after timeout
+2026-11-02T20:58:46Z WARN cache: cache miss storm (8182 keys)
+2026-11-03T21:59:53Z INFO auth: token refresh for client 8626 delayed
+2026-11-04T10:00:00Z INFO http.server: slow response from upstream (6903ms)
+2026-11-05T11:01:07Z INFO auth: token refresh for client 7801 delayed
+2026-11-06T12:02:14Z INFO tls: handshake 2207 renegotiated
+2026-11-07T13:03:21Z INFO metrics: metrics scrape took 9976ms
+2026-11-08T14:04:28Z INFO cache: cache miss storm (4068 keys)
+2026-11-09T15:05:35Z INFO metrics: metrics scrape took 3238ms
+2026-11-01T16:06:42Z INFO metrics: metrics scrape took 8785ms
+2026-11-02T17:07:49Z INFO tls: handshake 8174 renegotiated
+2026-11-03T18:08:56Z INFO uploads: upload 3161 exceeded soft limit
+2026-11-04T19:09:03Z WARN metrics: metrics scrape took 8491ms
+2026-11-05T20:10:10Z INFO tls: handshake 749 renegotiated
+2026-11-06T21:11:17Z INFO uploads: upload 1411 exceeded soft limit
+2026-11-07T10:12:24Z INFO auth: token refresh for client 1938 delayed
+2026-11-08T11:13:31Z INFO tls: handshake 8417 renegotiated
+2026-11-09T12:14:38Z INFO scheduler: retrying job 8478 after timeout
+2026-11-01T13:15:45Z WARN scheduler: retrying job 2083 after timeout
+2026-11-02T14:16:52Z INFO auth: token refresh for client 9556 delayed
+2026-11-03T15:17:59Z WARN uploads: upload 1304 exceeded soft limit
+2026-11-04T16:18:06Z INFO tls: handshake 6530 renegotiated
+2026-11-05T17:19:13Z INFO metrics: metrics scrape took 337ms
+2026-11-06T18:20:20Z WARN tls: handshake 3291 renegotiated
+2026-11-07T19:21:27Z INFO metrics: metrics scrape took 7553ms
+2026-11-08T20:22:34Z INFO metrics: metrics scrape took 5531ms
+2026-11-09T21:23:41Z INFO scheduler: retrying job 3130 after timeout
+2026-11-01T10:24:48Z INFO uploads: upload 1290 exceeded soft limit
+2026-11-02T11:25:55Z INFO queue: queue lag 8870ms
+2026-11-03T12:26:02Z INFO http.server: slow response from upstream (6308ms)
+2026-11-04T13:27:09Z WARN tls: handshake 4436 renegotiated
+2026-11-05T14:28:16Z INFO uploads: upload 8941 exceeded soft limit
+2026-11-06T15:29:23Z INFO http.server: slow response from upstream (8026ms)
+2026-11-07T16:30:30Z INFO scheduler: retrying job 3356 after timeout
+2026-11-08T17:31:37Z WARN uploads: upload 3093 exceeded soft limit
+2026-11-09T18:32:44Z INFO cache: cache miss storm (8669 keys)
+2026-11-01T19:33:51Z INFO http.server: slow response from upstream (268ms)
+2026-11-02T20:34:58Z WARN tls: handshake 9758 renegotiated
+2026-11-03T21:35:05Z INFO auth: token refresh for client 488 delayed
+2026-11-04T10:36:12Z INFO queue: queue lag 8664ms
+2026-11-05T11:37:19Z INFO http.server: slow response from upstream (2249ms)
+2026-11-06T12:38:26Z INFO tls: handshake 3448 renegotiated
+2026-11-07T13:39:33Z INFO metrics: metrics scrape took 467ms
+2026-11-08T14:40:40Z INFO auth: token refresh for client 7984 delayed
+2026-11-09T15:41:47Z INFO queue: queue lag 63ms
+2026-11-01T16:42:54Z WARN queue: queue lag 944ms
+2026-11-02T17:43:01Z WARN cache: cache miss storm (9586 keys)
+2026-11-03T18:44:08Z WARN http.server: slow response from upstream (2238ms)
+2026-11-04T19:45:15Z WARN tls: handshake 2876 renegotiated
+2026-11-05T20:46:22Z WARN scheduler: retrying job 2163 after timeout
+2026-11-06T21:47:29Z INFO queue: queue lag 4370ms
+2026-11-07T10:48:36Z INFO cache: cache miss storm (1898 keys)
+2026-11-08T11:49:43Z INFO tls: handshake 9346 renegotiated
+2026-11-09T12:50:50Z INFO cache: cache miss storm (8493 keys)
+2026-11-01T13:51:57Z INFO metrics: metrics scrape took 281ms
+2026-11-02T14:52:04Z INFO cache: cache miss storm (3800 keys)
+2026-11-03T15:53:11Z INFO uploads: upload 2041 exceeded soft limit
+2026-11-04T16:54:18Z WARN http.server: slow response from upstream (2980ms)
+2026-11-05T17:55:25Z INFO http.server: slow response from upstream (7834ms)
+2026-11-06T18:56:32Z INFO tls: handshake 6694 renegotiated
+2026-11-07T19:57:39Z INFO auth: token refresh for client 2356 delayed
+2026-11-08T20:58:46Z WARN tls: handshake 2758 renegotiated
+2026-11-09T21:59:53Z INFO http.server: slow response from upstream (9112ms)
+2026-11-01T10:00:00Z INFO metrics: metrics scrape took 1948ms
+2026-11-02T11:01:07Z WARN metrics: metrics scrape took 1756ms
+2026-11-03T12:02:14Z INFO cache: cache miss storm (8531 keys)
+2026-11-04T13:03:21Z INFO scheduler: retrying job 4416 after timeout
+2026-11-05T14:04:28Z WARN http.server: slow response from upstream (9472ms)
+2026-11-06T15:05:35Z INFO queue: queue lag 2123ms
+2026-11-07T16:06:42Z WARN uploads: upload 6913 exceeded soft limit
+2026-11-08T17:07:49Z WARN cache: cache miss storm (3944 keys)
+2026-11-09T18:08:56Z WARN uploads: upload 2425 exceeded soft limit
+2026-11-01T19:09:03Z INFO queue: queue lag 6095ms
+2026-11-02T20:10:10Z INFO auth: token refresh for client 7228 delayed
+2026-11-03T21:11:17Z INFO http.server: slow response from upstream (1878ms)
+2026-11-04T10:12:24Z WARN queue: queue lag 7364ms
+2026-11-05T11:13:31Z INFO scheduler: retrying job 6022 after timeout
+2026-11-06T12:14:38Z INFO http.server: slow response from upstream (9271ms)
+2026-11-07T13:15:45Z INFO http.server: slow response from upstream (851ms)
+2026-11-08T14:16:52Z WARN auth: token refresh for client 5315 delayed
+2026-11-09T15:17:59Z INFO http.server: slow response from upstream (3959ms)
+2026-11-01T16:18:06Z INFO tls: handshake 7704 renegotiated
+2026-11-02T17:19:13Z WARN tls: handshake 1922 renegotiated
+2026-11-03T18:20:20Z INFO metrics: metrics scrape took 5997ms
+2026-11-04T19:21:27Z INFO cache: cache miss storm (9737 keys)
+2026-11-05T20:22:34Z INFO tls: handshake 1001 renegotiated
+2026-11-06T21:23:41Z INFO queue: queue lag 1133ms
+2026-11-07T10:24:48Z WARN tls: handshake 2145 renegotiated
+2026-11-08T11:25:55Z INFO cache: cache miss storm (6906 keys)
+2026-11-09T12:26:02Z INFO queue: queue lag 8257ms
+2026-11-01T13:27:09Z INFO cache: cache miss storm (7211 keys)
+2026-11-02T14:28:16Z INFO uploads: upload 9396 exceeded soft limit
+2026-11-03T15:29:23Z INFO uploads: upload 7212 exceeded soft limit
+2026-11-04T16:30:30Z INFO scheduler: retrying job 1079 after timeout
+2026-11-05T17:31:37Z INFO uploads: upload 1825 exceeded soft limit
+2026-11-06T18:32:44Z WARN auth: token refresh for client 2880 delayed
+2026-11-07T19:33:51Z INFO uploads: upload 7348 exceeded soft limit
+2026-11-08T20:34:58Z INFO cache: cache miss storm (9192 keys)
+2026-11-09T21:35:05Z INFO metrics: metrics scrape took 5025ms
+2026-11-01T10:36:12Z INFO scheduler: retrying job 4182 after timeout
+2026-11-02T11:37:19Z WARN auth: token refresh for client 2566 delayed
+2026-11-03T12:38:26Z INFO auth: token refresh for client 7196 delayed
+2026-11-04T13:39:33Z INFO metrics: metrics scrape took 9634ms
+2026-11-05T14:40:40Z WARN metrics: metrics scrape took 2167ms
+2026-11-06T15:41:47Z INFO metrics: metrics scrape took 2851ms
+2026-11-07T16:42:54Z INFO queue: queue lag 6625ms
+2026-11-08T17:43:01Z WARN tls: handshake 2545 renegotiated
+2026-11-09T18:44:08Z INFO uploads: upload 6981 exceeded soft limit
+2026-11-01T19:45:15Z INFO auth: token refresh for client 8617 delayed
+2026-11-02T20:46:22Z INFO uploads: upload 6257 exceeded soft limit
+2026-11-03T21:47:29Z INFO auth: token refresh for client 2115 delayed
+2026-11-04T10:48:36Z WARN uploads: upload 8412 exceeded soft limit
+2026-11-05T11:49:43Z INFO metrics: metrics scrape took 2911ms
+2026-11-06T12:50:50Z INFO uploads: upload 48 exceeded soft limit
+2026-11-07T13:51:57Z INFO queue: queue lag 1139ms
+2026-11-08T14:52:04Z INFO auth: token refresh for client 3477 delayed
+2026-11-09T15:53:11Z INFO cache: cache miss storm (9021 keys)
+2026-11-01T16:54:18Z INFO tls: handshake 9811 renegotiated
+2026-11-02T17:55:25Z INFO metrics: metrics scrape took 4599ms
+2026-11-03T18:56:32Z INFO uploads: upload 9280 exceeded soft limit
+2026-11-04T19:57:39Z INFO cache: cache miss storm (384 keys)
+2026-11-05T20:58:46Z INFO scheduler: retrying job 8665 after timeout
+2026-11-06T21:59:53Z WARN cache: cache miss storm (3167 keys)

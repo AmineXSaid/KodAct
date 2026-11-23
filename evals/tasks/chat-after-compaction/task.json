@@ -1,0 +1,13 @@
+{
+  "instruction": "logs/service.log has a warning caused by one setting in service/settings.toml. Find which setting it is and tell me its current value. Don't change any file yet.",
+  "followups": [
+    "Run ./check.sh and tell me how many checks fail. Still don't change anything.",
+    "Set that setting to 64, then run ./check.sh again.",
+    "Write CHANGES.md with exactly two lines: `<setting>: <old value> -> <new value>`, then `failures: <failed before> -> <failed after>`."
+  ],
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "context",
+  "tags": ["chat", "followups", "compaction", "small-window"],
+  "timeout_secs": 900,
+  "env": {"KODACT_CONTEXT_WINDOW": "32000"}
+}

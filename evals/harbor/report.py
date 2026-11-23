@@ -273,7 +273,9 @@ class Trial:
     def __init__(self, path: Path):
         self.path = path
         self.result = load_json(path / "result.json") or {}
-        self.task = self.result.get("task_name") or path.name.split("__")[0]
+        # A registry dataset (Terminal-Bench 2.1) records org/task: the task's own name, as 2.0's,
+        # so the tasks of two versions line up in a comparison.
+        self.task = (self.result.get("task_name") or path.name.split("__")[0]).split("/")[-1]
         rewards = (self.result.get("verifier_result") or {}).get("rewards") or {}
         reward = rewards.get("reward")
         if reward is None:
@@ -627,6 +629,10 @@ class Job:
         self.config = load_json(path / "config.json") or {}
         self.result = load_json(path / "result.json") or {}
         self.trials = [Trial(p) for p in sorted(path.iterdir()) if p.is_dir() and (p / "result.json").is_file()]
+        # Which Terminal-Bench: terminal-bench@2.0, or terminal-bench/terminal-bench-2-1@latest.
+        ds = (self.config.get("datasets") or [{}])[0]
+        at = ds.get("version") or ds.get("ref")
+        self.dataset = (ds.get("name") or "?") + (f"@{at}" if at else "")
         agents = self.config.get("agents") or [{}]
         self.agent = agents[0].get("name", "?")
         self.model = (agents[0].get("model_name") or "").split("/", 1)[-1] or (self.trials[0].result.get("config", {}).get("agent", {}).get("model_name") if self.trials else "?")
@@ -667,6 +673,7 @@ class Job:
             f"- model: `{self.model}`"
             + (f", served by `{self.served}`" if self.served else "")
             + (f" (window {self.served_window} tokens)" if self.served_window else ""),
+            f"- dataset: `{self.dataset}`",
             f"- tasks in parallel: {self.concurrency}",
             f"- started {self.started}, finished {self.finished}: {fmt_s(wall)} wall clock, "
             f"{fmt_s(busy)} of agent time in total (wall clock includes waiting and any sleep of the machine)",

@@ -31,6 +31,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import warm_uv_cache
+
 HERE = Path(__file__).resolve().parent
 OFF = ("off", "none", "0", "no", "false")
 # Each cache's variable and its folder in ~/.kodact-harbor.
@@ -132,10 +134,16 @@ def plan(environ, home: Path, jobs: Path, arch: str) -> tuple[list[Step], dict[s
         if images:
             steps.append(("warm_apt_cache.py", images, "KODACT_HARBOR_APT_CACHE", apt))
     uv = where["KODACT_HARBOR_UV_CACHE"]
-    if uv is not None:
-        # Each task's tests have a cache of their own (tasks/<task>, complete once it holds
-        # .kodact-done). The tasks the shared cache was made for (.kodact-tasks) get theirs too.
-        done = {p.parent.name for p in (uv / "tasks").glob("*/.kodact-done")} | listed(uv / ".kodact-no-uvx")
+    if uv is not None and warm_uv_cache.version(environ) is not None:
+        # Each task's tests have a cache of their own (tasks/<task>, complete once its .kodact-done
+        # names this Terminal-Bench version's scripts: 2.1 changed some tasks' tests). The tasks the
+        # shared cache was made for (.kodact-tasks) get theirs too.
+        made = {
+            p.parent.name
+            for p in (uv / "tasks").glob("*/.kodact-done")
+            if warm_uv_cache.is_made(p.read_text(errors="replace"), environ)
+        }
+        done = made | listed(uv / warm_uv_cache.no_uvx_list(environ))
         tasks = sorted((unjudged_tasks(jobs) | listed(uv / ".kodact-tasks")) - done)
         if tasks:
             steps.append(("warm_uv_cache.py", tasks, "KODACT_HARBOR_UV_CACHE", uv))
@@ -147,8 +155,8 @@ def shared_uv_leftovers(uv: Path | None) -> list[Path]:
     any more (each task has its own folder), so it is only disk to free."""
     if uv is None or not uv.is_dir():
         return []
-    keep = {"tasks", ".kodact-no-uvx", ".kodact-tasks"}
-    return sorted(p for p in uv.iterdir() if p.name not in keep)
+    keep = {"tasks", ".kodact-tasks"}
+    return sorted(p for p in uv.iterdir() if p.name not in keep and not p.name.startswith(".kodact-no-uvx"))
 
 
 def host_arch() -> str:

@@ -537,14 +537,20 @@ pub(super) fn menu(app: &App, left: usize, w: usize, lead: &str) -> Vec<Line<'st
         .map(|(i, c)| {
             let l = fit(&label(c), pad);
             let l = format!("{lead}{l}{}", " ".repeat(pad.saturating_sub(text_width(&l))));
-            let desc = fit(&c.description, w.saturating_sub(text_width(&l) + 2));
+            let is_skill = app.skills.iter().any(|s| s.eq_ignore_ascii_case(&c.name));
+            let desc_room = w.saturating_sub(text_width(&l) + 2 + if is_skill { 8 } else { 0 });
+            let desc = fit(&c.description, desc_room);
             let selected = first + i == sel;
             let st = if selected { t.selected() } else { Style::default() };
             let mut spans = vec![];
             if left > 0 {
                 spans.push(Span::raw(" ".repeat(left)));
             }
-            spans.extend([Span::styled(l, st), Span::raw("  "), Span::styled(desc, t.dim())]);
+            spans.extend([Span::styled(l, st), Span::raw("  ")]);
+            if is_skill {
+                spans.push(Span::styled("skill · ", if selected { t.accent() } else { t.subtle() }));
+            }
+            spans.push(Span::styled(desc, t.dim()));
             if selected {
                 return tint_row(&t, spans, left, w);
             }

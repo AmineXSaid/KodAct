@@ -15,9 +15,12 @@ agent copies that folder alone into the task's container, and the run scripts
 point the tests' uv at it (UV_CACHE_DIR, see verifier-ca.sh), so the packages come
 from disk. uv still asks the index whether they changed, which is small.
 
-The task scripts come from the Terminal-Bench 2.0 repository at the commit the
-dataset pins (KODACT_HARBOR_TB2_COMMIT to change it). With KODACT_HARBOR_CA_BUNDLE
-set, uv on this machine trusts it too.
+The task scripts come from the repository of the Terminal-Bench version the run uses
+(KODACT_HARBOR_DATASET, as dataset.sh sets it: 2.1 by default, or 2.0), at the commit its
+dataset was made from (KODACT_HARBOR_TB21_COMMIT, KODACT_HARBOR_TB2_COMMIT change it). A
+task's cache records what it was made from; one made from another version's scripts is made
+again, into the same folder, so what the two share isn't downloaded twice. With
+KODACT_HARBOR_CA_BUNDLE set, uv on this machine trusts it too.
 """
 
 import os
@@ -29,8 +32,23 @@ import sys
 import urllib.request
 from pathlib import Path
 
-REPO = "https://raw.githubusercontent.com/laude-institute/terminal-bench-2"
-COMMIT = os.environ.get("KODACT_HARBOR_TB2_COMMIT") or "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c"
+# Each version's task scripts: the repository, the variable that changes the commit, the commit
+# its dataset was made from, and a task's test script in it. 2.1's tasks sit under tasks/.
+SOURCES = {
+    "2.0": (
+        "https://raw.githubusercontent.com/laude-institute/terminal-bench-2",
+        "KODACT_HARBOR_TB2_COMMIT",
+        "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+        "{task}/tests/test.sh",
+    ),
+    "2.1": (
+        "https://raw.githubusercontent.com/harbor-framework/terminal-bench-2-1",
+        "KODACT_HARBOR_TB21_COMMIT",
+        "12b7565679ce5006230b820666353673a133db93",
+        "tasks/{task}/tests/test.sh",
+    ),
+}
+DEFAULT_DATASET = "terminal-bench/terminal-bench-2-1"
 ATTEMPTS = 3
 # uvx options that take a value; anything else starting with "-" is a flag.
 WITH_VALUE = {
@@ -39,8 +57,41 @@ WITH_VALUE = {
 }
 
 
-def test_script(task: str) -> str:
-    url = f"{REPO}/{COMMIT}/{task}/tests/test.sh"
+def version(environ=os.environ) -> str | None:
+    """The Terminal-Bench version KODACT_HARBOR_DATASET names (2.1 when unset), or None for a
+    dataset whose task scripts this script doesn't know."""
+    dataset = (environ.get("KODACT_HARBOR_DATASET") or DEFAULT_DATASET).strip()
+    if dataset == "terminal-bench@2.0":
+        return "2.0"
+    if dataset.split("@", 1)[0] == "terminal-bench/terminal-bench-2-1":
+        return "2.1"
+    return None
+
+
+def source_id(environ=os.environ) -> str:
+    """What a task's cache is made from, written in its .kodact-done: the version and the commit."""
+    v = version(environ) or "?"
+    _, var, commit, _ = SOURCES.get(v, ("", "", "", ""))
+    return f"terminal-bench {v} @ {environ.get(var) or commit}"
+
+
+def is_made(marker: str, environ=os.environ) -> bool:
+    """Whether a task's cache, whose .kodact-done says `marker`, was made from this version's
+    scripts. An empty one predates the record, and was made from 2.0's."""
+    text = marker.strip()
+    return text == source_id(environ) or (text == "" and version(environ) == "2.0")
+
+
+def no_uvx_list(environ=os.environ) -> str:
+    """The list of tasks found to need nothing, for this version: 2.0's keeps its old name."""
+    v = version(environ)
+    return NO_UVX if v == "2.0" else f"{NO_UVX}-{v}"
+
+
+def test_script(task: str, environ=os.environ) -> str:
+    repo, var, commit, path = SOURCES[version(environ) or "2.1"]
+    # A registry dataset names its tasks org/task: the folder is the task's own name.
+    url = f"{repo}/{environ.get(var) or commit}/{path.format(task=task.split('/')[-1])}"
     with urllib.request.urlopen(url, timeout=60) as r:
         return r.read().decode()
 
@@ -120,9 +171,12 @@ def prune_environments(cache: Path) -> int:
 
 
 def main() -> None:
-    tasks = sys.argv[1:]
+    tasks = [t.split("/")[-1] for t in sys.argv[1:]]
     if not tasks:
         sys.exit(__doc__)
+    if version() is None:
+        print(f"no task scripts known for {os.environ.get('KODACT_HARBOR_DATASET')}: nothing to cache")
+        return
     cache = Path(os.environ.get("KODACT_HARBOR_UV_CACHE") or Path.home() / ".kodact-harbor" / "uv-cache").expanduser()
     cache.mkdir(parents=True, exist_ok=True)
     env = {k: v for k, v in os.environ.items() if k != "UV_CACHE_DIR"}
@@ -134,16 +188,23 @@ def main() -> None:
         env["SSL_CERT_FILE"] = str(Path(ca).resolve())
     failed, no_uvx = [], []
     for task in tasks:
-        script = test_script(task)
+        # A script that can't be read (no such task in this version, the network) fails that task
+        # alone: the others still get their caches.
+        try:
+            script = test_script(task)
+        except (OSError, ValueError) as e:
+            print(f"{task}: its test script could not be read ({e})", flush=True)
+            failed.append(task)
+            continue
         words = uvx_line(script)
         if not words:
             print(f"{task}: its tests don't use uvx, nothing to cache")
             no_uvx.append(task)
             continue
-        version = uv_version(script)
+        pinned = uv_version(script)
         # The tests' own uv version, so the cache has the layout that version reads.
         # The outer uvx only fetches that uv; it keeps it in its usual cache, not this one.
-        runner = ["uvx", "--from", f"uv=={version}", "uvx"] if version else ["uvx"]
+        runner = ["uvx", "--from", f"uv=={pinned}", "uvx"] if pinned else ["uvx"]
         own = cache / TASKS / task
         own.mkdir(parents=True, exist_ok=True)
         cmd = runner + ["--cache-dir", str(own)] + warm_args(words)
@@ -157,10 +218,10 @@ def main() -> None:
             failed.append(task)
         dropped = prune_environments(own)
         if task not in failed:
-            (own / DONE).write_text("")
+            (own / DONE).write_text(source_id() + "\n")
         size = sum(p.stat().st_size for p in own.rglob("*") if p.is_file() and not p.is_symlink())
         print(f"{task}: {own} ({size / 1e9:.2f} GB)" + (f", {dropped} environments built here dropped" if dropped else ""))
-    record(cache, NO_UVX, no_uvx)
+    record(cache, no_uvx_list(), no_uvx)
     if failed:
         sys.exit(f"failed: {' '.join(failed)}")
     print("the run scripts use it whenever it exists")

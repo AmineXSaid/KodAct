@@ -2,6 +2,115 @@
 
 ## 0.1.0 (unreleased)
 
+### Chat evals, and keeping the latest steps through compaction
+- **`kodact-eval` tasks can be chats:** `"followups": [...]` sends each as
+  the next turn once the previous one has ended, in one session. New task
+  `chat-after-compaction`: four turns on a 32k window, the last needing facts
+  from the first two (the setting, its old value, the failures before).
+- **`compaction.keepRecent`** (off until measured, `KODACT_KEEP_RECENT=1`):
+  an automatic compaction keeps the most recent complete steps, up to a tenth
+  of the window, word for word after the summary. evals/README.md has the
+  A/B command.
+
+### Unattended runs: no stop-and-ask rule, no scheduling tools, no TodoWrite push
+- **The attended rule "tell the user what is missing" is left out of
+  unattended runs,** which were also told to install what is missing: two
+  rules that disagreed.
+- **CronCreate, CronList, CronDelete and ScheduleWakeup are left out:**
+  nobody comes back after the run. On 2026-11-17 a quick-thinking run
+  scheduled a wake-up to check its background job and hit the time limit
+  waiting. So `/loop` and scheduled prompts aren't available with
+  `--autonomous`; run them without it.
+- **The unattended section no longer asks for TodoWrite;** TodoWrite stays
+  available.
+
+### WebFetch: the page itself on request, error pages quoted, scheme-less URLs
+- **`prompt` is optional.** Without one, WebFetch returns the page itself
+  (cut when long, saved in full to a file) and makes no second model call:
+  the small model's answer loses exact code, flags and versions.
+- **A failed fetch quotes the start of the error page** (up to 2,000
+  characters): an API's 4xx usually says what was wrong.
+- **A URL without a scheme is taken as https** (http for `localhost` or a
+  loopback address). A host that only looks local (`127.evil.example`) is
+  now always upgraded to https, written with `http://` or not.
+
+### Loop guard: a reworded description is the same call
+- **The same command with a different Bash `description` counts as a
+  repeat.** The description is free text; a model that rewords it each time
+  ran the same failing command again and again without a reminder.
+
+### Edit and MultiEdit: mixed line endings kept; MultiEdit without a Read
+- **A file with both CRLF and LF lines keeps the ending of every line a line
+  diff finds unchanged,** wherever the edits are; the lines an edit wrote take
+  the ending most of the file uses. One CRLF line used
+  to turn every line of the file to CRLF, a whole-file diff for a one-line
+  change. Files all CRLF or all LF are written as before.
+- **`edit.withoutRead` covers MultiEdit too:** a file never read may be
+  changed when every `old_string` is in it exactly. MultiEdit used to keep the
+  read-first rule even with the option on.
+
+### Bash: seconds caught, no pagers, background output saved
+- **A `timeout` under 1,000 is refused with the milliseconds to pass.** A
+  model that writes seconds (`timeout: 30`) sent its command to the
+  background after 30 ms and then polled it.
+- **Commands run with `PAGER=cat`, `GIT_PAGER=cat` and
+  `GIT_TERMINAL_PROMPT=0`** (the session's own variables still win): with no
+  terminal and stdin closed, a pager or a credential prompt waited until the
+  timeout.
+- **BashOutput saves long output in full and says where,** as Bash does; it
+  used to cut the middle out with no copy kept.
+
+### Read says what it left out
+- **"Showing lines X-Y of Z" comes whenever lines remain after the range,**
+  also when the model passed `limit`: a range read gave no sign the file went
+  on.
+- **A range stops at 256 KB of lines** (on a whole line, with the same note),
+  the size a whole-file read may have: 2,000 lines of 2,000 characters could
+  bring in 4 MB at once.
+
+### A last-stage time warning
+- **In the last twelfth of `--max-time` (at least 90 seconds), the model is
+  told once more, more firmly:** start nothing new, make sure every file the
+  request asks for is on disk in the best working version, check it once,
+  then end (unattended: call Finish). The run stops at the limit wherever it
+  is, and keeps only what is on disk then: 24 of the 41 failures of the
+  quick-thinking Harbor run of 2026-11-17 were timeouts. The first warning, at
+  a fifth, is unchanged; when both are due at once only the last is said.
+
+### Compaction on reasoning models
+- **A session whose replies carry reasoning is asked for its summary
+  directly,** without the written `<analysis>` pass. On 2026-11-17, 34 of 35
+  summaries of a 100k-window reasoning model reasoned to the output cap and
+  wrote nothing, 10 to 15 minutes lost each time; the prompt had asked it to
+  think the whole conversation through first. Models without reasoning keep
+  the pass.
+- **The files read or written come back by name after compaction** (at most
+  60, the rest counted), so a path the summary dropped isn't guessed again.
+
+### Finish: a separate check before an unattended run ends verified
+- **A Finish that claims `verified` is checked by a separate request,** the
+  same evaluator `/goal` uses: it reads the run's tool output as evidence and
+  the model's own words as claims, against the run's request. A "not met"
+  sends the model back once with the reason; anything else lets the claim
+  stand, so the check can't cost a run that would have passed. Once a turn,
+  while more than the last fifth of `--max-time` is left.
+  `verification.finishCheck` (or `KODACT_FINISH_CHECK=0`) turns it off. All
+  13 false successes of the deep-thinking run of 2026-11-16 claimed
+  `verified`: the model graded its own work.
+- The evaluator moved to `kodact_engine::judge`; `/goal` uses it unchanged.
+
+### Finish: no claim of verified without its parts
+- **A Finish that lists no requirements is recorded `verified: false`,** and
+  so is a requirement marked met with no evidence. An empty list counted as
+  every requirement met, so `verified: true` with nothing listed passed. The
+  first such Finish of a turn, with more than the last fifth of the time
+  left, is answered with a request for the list.
+- **An unattended run that did work and ends in plain text is asked once for
+  Finish,** after every other check, so the result carries the claim a
+  script reads. 9 of the 16 false successes of the quick-thinking run of
+  2026-11-17 ended this way. A second plain reply still ends the run; near
+  the end of the time, and in sub-agents, nothing is asked.
+
 ### Burgundy palette and a welcome page with suggestion cards
 - **Lime is gone: KodAct's colours are a painter's palette around one wine.**
   Rose (lit burgundy) is the brand: the prompt mark, selections, keys and the

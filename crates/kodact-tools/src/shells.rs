@@ -89,6 +89,11 @@ fn build(
     };
     c.current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     c.env("KODACT", "1");
+    // Nobody can page or type a password: output goes to a pipe and stdin is closed. A pager or a
+    // credential prompt would wait until the timeout. The session's own variables still win.
+    for (k, v) in NON_INTERACTIVE {
+        c.env(k, v);
+    }
     c.envs(env);
     kodact_platform::process::isolate(&mut c);
     let mut c = Command::from(c);
@@ -104,6 +109,9 @@ fn spawn(p: &mut Prepared) -> Result<(Child, Option<ProcessTree>), StartError> {
 
 /// Output kept from each stream: the first and the last this many bytes.
 const KEEP_BYTES: usize = 4 << 20;
+
+/// Variables every command gets, for programs that would otherwise wait on a person.
+const NON_INTERACTIVE: [(&str, &str); 3] = [("PAGER", "cat"), ("GIT_PAGER", "cat"), ("GIT_TERMINAL_PROMPT", "0")];
 
 /// One stream's output as it arrives. The first and the last `keep` bytes are kept, so a
 /// command that prints gigabytes can't fill memory, and what was already read is remembered.

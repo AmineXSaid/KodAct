@@ -170,13 +170,16 @@ the files as they are then). Other slash commands and `!shell` lines aren't scan
   - `--max-budget-usd X` caps spend; it fails closed when the model's pricing
     is unknown;
   - `--autonomous` (or `KODACT_AUTONOMOUS=1`) is for runs nobody watches. It
-    removes the question and plan-approval tools, tells the model to finish
+    removes the question, plan-approval and scheduling tools (Cron*,
+    ScheduleWakeup: `/loop` and scheduled prompts need a run without
+    `--autonomous`), tells the model to finish
     without asking, reminds it once to make a real attempt if it tries to
     end a turn without using any tool, and retries model calls that fail for a
     reason that passes (rate limit, overload, server error, lost connection)
     instead of ending the run (contract C21);
   - `--max-time T` (`900`, `15m`, `1h`) tells the model its time limit up
-    front, warns it when a fifth of the time (at least a minute) is left, and
+    front, warns it when a fifth of the time (at least a minute) is left and
+    again, more firmly, in the last twelfth (at least 90 seconds), and
     stops the run at the limit: a model call or a tool in flight is cut, the
     work done so far stays in place, and the result is an error with
     `stop_reason: "max_time"` (KodAct extension; a script gets a result instead
@@ -194,6 +197,10 @@ the files as they are then). Other slash commands and `!shell` lines aren't scan
 - **Web:**
   - `WebFetch` answers its `prompt` from the page with the small model
     (`smallFastModel` setting), so whole pages stay out of the context.
+    Without a `prompt` it returns the page itself (cut when long, and saved in
+    full to a file), for exact text such as code or flags. A failed fetch
+    quotes the start of the error page; a URL without a scheme is taken as
+    https (http for localhost or a loopback address).
   - `WebSearch` uses the provider's web-search server tool.
   - Both need permission. Allow sites with rules like
     `WebFetch(domain:docs.rs)`.
@@ -358,7 +365,7 @@ Measures the harness; see `evals/README.md`. `run` writes `report.json` and
  "permission_denials": [{"tool_name": "Bash", "tool_use_id": "…", "tool_input": {}}],
  "errors": [], "structured_output": null,
  "verification": {"missing": ["out/report.txt"], "over_limit": [{"file": "tiny.py", "size": 150, "limit": 99}]},
- "finish": {"summary": "…", "requirements": [{"requirement": "…", "evidence": "…", "met": true}], "verified": true},
+ "finish": {"summary": "…", "requirements": [{"requirement": "…", "scope": "…", "evidence": "…", "met": true}], "verified": true},
  "uuid": "uuid", "exit_code": 0}
 ```
 
@@ -406,22 +413,32 @@ its last command (`pytest | tail` ends 0 whatever the tests did), and a check
 that does pass may test one case of many. To gate on a check, run it yourself
 after `kodact` exits.
 
-An unattended run (`--autonomous`) ends with the Finish tool, and the
-result says so in `finish`: the model's summary, the requirements it read in
-the request, each with its evidence and whether it is met, and its claim of
-whether this run's tool output showed them met. Evidence is a check run
-after the last change that would have failed had the requirement not been
-met, run in the form the request describes; a guess no check could tell
-apart is named in the summary. `verified` is false whenever a requirement is
-listed as not met. The first Finish of a run that lists one, while more than
-the last fifth of its `--max-time` is left (or with no limit), is answered
-with those requirements and the time left, and the run goes on. `verified`
-is still the model's word, not a check KodAct ran:
+An unattended run (`--autonomous`) ends with the Finish tool, and the result
+says so in `finish`: the model's summary, the requirements it read in the
+request, each with what it covers (`scope`: every size, input, file or output
+it names, and whether a limit counts them one by one or together), its
+evidence and whether it is met, and its claim of whether this run's tool
+output showed them met. Evidence is a check run after the last change that
+would have failed had the requirement not been met, run in the form the
+request describes; a guess no check could tell apart is named in the summary,
+and a check of some of the cases a requirement covers shows only those.
+`verified` is false whenever a requirement is listed as not met, marked met
+with no evidence, or none is listed at all. The first Finish of a run that
+lists one, while more than the last fifth of its `--max-time` is left (or with
+no limit), is answered with those requirements and the time left, and the run
+goes on; a Finish that lists none is asked for the list the same way. A reply
+that ends in plain text after the turn did work is asked once to call Finish,
+with the same time limit, so the result has a claim to read. A Finish that
+claims `verified` is then checked by a separate request, the same check as
+`/goal`'s: it reads the run's tool output as evidence and the model's words as
+claims, and a "not met" sends the model back once with the reason
+(`verification.finishCheck`). `verified` is still the model's word, not a
+check KodAct ran:
 
 ```json
 "finish": {"summary": "Fixed both bugs; the tests pass.", "verified": true, "requirements": [
-  {"requirement": "word_count ignores empty words", "evidence": "`python3 -m pytest -q` passed test_spaces", "met": true},
-  {"requirement": "average_word_length returns the exact mean", "evidence": "`python3 -c ...` printed 1.5 for \"a ab\"", "met": true}]}
+  {"requirement": "word_count ignores empty words", "scope": "leading, trailing and repeated spaces", "evidence": "`python3 -m pytest -q` passed test_spaces, which tries all three", "met": true},
+  {"requirement": "average_word_length returns the exact mean", "scope": "any text", "evidence": "`python3 -c ...` printed 1.5 for \"a ab\"", "met": true}]}
 ```
 
 To see what the model did not show met:
@@ -751,19 +768,21 @@ listed in the system prompt's environment section.
 | `verification.enabled` | `true` | `false` turns the loop off (as does `KODACT_VERIFY=0`) |
 | `verification.commands` | detected | The project's check commands |
 | `verification.maxReminders` | `1` | Reminders per user turn |
+| `verification.finishCheck` | `true` | Unattended runs: a Finish that claims `verified` is checked by a separate request against the run's request, once a turn, while more than the last fifth of `--max-time` is left. A "not met" sends the model back with the reason; a check that fails or can't be read lets the claim stand. `goalCheckModel` picks its model. `false` (or `KODACT_FINISH_CHECK=0`) turns it off, as does `reminders: false` |
 | `verification.syntaxCheck` | `true` | `false` stops the parse check after edits (off too with the loop off) |
 | `verification.languageServer` | `false` | `true` asks a language server for the errors after an edit (below) |
 | `verification.languageServers` | built-in | Extension to command, tried before the built-in ones: `{"py": ["pylsp"]}` |
 | `verification.languageServerWaitMs` | `3000` | How long an edit waits for the server's answer |
 | `verification.format` | `false` | `true` runs a file through its formatter after an edit and says what moved, when the file was already in that formatter's style before the edit (a new file: only with a formatter named below). Built-in, each used when installed: `rustfmt`, `ruff format` or `black`, `gofmt`, `prettier`, `clang-format` |
 | `verification.formatters` | built-in | Extension to a command that formats stdin to stdout, used instead of the built-in one: `{"py": ["black", "-q", "-"]}`. `{file}` in an argument is the file's path; an empty list turns an extension off |
+| `compaction.keepRecent` | `false` | `true` keeps the most recent complete steps word for word after an automatic compaction, up to a tenth of the window, after the summary (which still covers them), without their reasoning. Each kept tool call keeps its result. A long chat keeps exactly what was just done instead of a summary of it. `KODACT_KEEP_RECENT=1` or `0` overrides the setting for A/B runs. Off until measured (task `chat-after-compaction`) |
 | `compaction.background` | `false` | `true` writes the compaction summary ahead, in the background, once the conversation is within a lead of the compaction threshold (a fifth of the threshold, or twice the largest step the conversation has grown by in one request, at most half), and holds it until compaction is due. The summary request reuses the request the model just answered, so the provider reads it from its cache, and nobody waits for a summary at the limit. When compaction is due, the held summary replaces what it covers and the messages since are kept word for word, without their reasoning. A summary that falls more than two fifths of the window behind is replaced by a newer one; one for a conversation that was rewritten since (a rewind, `/compact`, `/clear`) or for another model is not used. Not with a `PreCompact` hook. `KODACT_BACKGROUND_SUMMARY=1` or `0` overrides the setting for A/B runs. Off until measured |
 | `prompt.short` | `false` | `true` uses the shorter built-in system prompt (about 2,300 characters against 6,200): facts about the harness, rules about your own work, and the rules eval tasks show models need, each with its reason. The environment, unattended, output-style and appended sections are added as with the full one; `--system-prompt` and `KODACT_PROMPTS_DIR` still replace it. `KODACT_SHORT_PROMPT=1` or `0` overrides the setting for A/B runs. Off until measured on a small and a large model |
 | `nudges.shellEdit`, `.constraints`, `.namedChecks`, `.passingSnapshots`, `.limitVerdicts`, `.staleDeliverables`, `.adaptiveEffort`, `.thinkingTimeBox`, `.todoTracking`, `.clock` | `false` | The nudges (below), each on its own |
 | `tools.notes`, `tools.checkpoint` | `false` | `true` (or `KODACT_NOTES=1`, `KODACT_CHECKPOINTS=1`) offers the Notes tool (notes given back after compaction and kept next to the transcript) and the Checkpoint tool (save and restore the project's files). Off by default: together they add about 1,900 characters to every request, and in the first 79 measured runs models called Notes never and Checkpoint twice. `nudges.passingSnapshots` brings Checkpoint with it |
 | `edit.lineRanges` | `false` | `true` (or `KODACT_EDIT_LINES=1`) lets Edit name the lines to replace (`start_line`, `end_line`, `anchor`) instead of retyping them as `old_string`. The anchor is the text of the first line: an edit whose line numbers moved since the file was read is refused with the lines as they are now |
 | `carryReasoning` | `false` | `true` (or `KODACT_CARRY_REASONING=1`; `0`, `false`, `no` or `off` turn it off): where the endpoint drops the model's reasoning between requests (chat completions, for every model but Gemini's), the reasoning of every reply still in the conversation goes back with each request, as `reasoning_content`. DeepSeek's thinking mode asks for exactly that when tools are used ("the `reasoning_content` of all previous turns should be passed back to the API"), and answers 400 without it. The reasoning counts toward the context like the rest of the conversation, and compaction summarizes it away with the rest: each reply's reasoning is added to every later request until then (with a prompt cache, read from the cache after the first). KodAct's own reminders that come with tool results then go in the last tool result, not in a user message, where a chat template that keeps reasoning only after the last user message (DeepSeek-V3.2's, Qwen3's) would drop it. Sub-agents follow the session. An endpoint that refuses the field (a 400 or 422 naming `reasoning_content`, not one asking for it) gets the request again without it, and requests to that model go without it for the rest of the session, with a warning. `scripts/probe-reasoning.py MODEL` tells whether an endpoint refuses the field, requires it, drops it or passes it to the model. Off until measured (eval task `layer-order`) |
-| `edit.withoutRead` | `false` | `true` (or `KODACT_EDIT_UNREAD=1`) lets Edit change a file that was never read when it is inside the working directories and the call's `old_string` is in the file exactly (once, or with `replace_all`): the text was copied from a search result or a command's output, so a Read first would only cost a model call. Everything else keeps the read-first rule: text that doesn't match, a file changed since it was read, a file outside the working directories, Write, MultiEdit and line-range edits. Off until measured (task `edit-from-search`). Without it, a file a shell command printed whole (`cat pack.py`), in output still in the conversation, already counts as read for Edit, MultiEdit and Write |
+| `edit.withoutRead` | `false` | `true` (or `KODACT_EDIT_UNREAD=1`) lets Edit and MultiEdit change a file that was never read when it is inside the working directories and the call's `old_string` is in the file exactly (once, or with `replace_all`; for MultiEdit, every edit's, in the file as it is): the text was copied from a search result or a command's output, so a Read first would only cost a model call. Everything else keeps the read-first rule: text that doesn't match, a file changed since it was read, a file outside the working directories, Write and line-range edits. Off until measured (task `edit-from-search`). Without it, a file a shell command printed whole (`cat pack.py`), in output still in the conversation, already counts as read for Edit, MultiEdit and Write |
 
 **Nudges** (`nudges.<name>: true`, or `KODACT_NUDGES`). Each follows what the
 model does, never what the task is or which model runs it, and each is **off

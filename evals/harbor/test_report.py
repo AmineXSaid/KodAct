@@ -465,3 +465,19 @@ def test_a_trial_docker_had_no_network_for_says_so_and_how_to_clear_it(tmp_path)
     text = job.report()
     assert "valid trials (model reached, verifier ran): 1/2" in text, text[:900]
     assert "docker network ls --filter name=__env_default" in text, text[:2000]
+
+
+def test_a_terminal_bench_2_1_job_names_its_dataset_and_its_tasks_by_their_own_names(tmp_path):
+    # Harbor records a registry dataset's tasks as org/task; the report shows the task's own name,
+    # as for 2.0, so two versions' jobs line up task by task, and says which dataset ran.
+    job = make_job(tmp_path, [("fix-git", 1.0, 30, []), ("mteb-leaderboard", 0.0, 30, [])])
+    trial = job.path / "fix-git__T" / "result.json"  # Harbor names the folder with the short name
+    trial.write_text(json.dumps(json.loads(trial.read_text()) | {"task_name": "terminal-bench/fix-git"}))
+    assert [t.task for t in report.Job(job.path).trials] == ["fix-git", "mteb-leaderboard"]
+    config = json.loads((job.path / "config.json").read_text())
+    config["datasets"] = [{"name": "terminal-bench/terminal-bench-2-1", "ref": "latest"}]
+    (job.path / "config.json").write_text(json.dumps(config))
+    assert "- dataset: `terminal-bench/terminal-bench-2-1@latest`" in report.Job(job.path).report()
+    config["datasets"] = [{"name": "terminal-bench", "version": "2.0"}]
+    (job.path / "config.json").write_text(json.dumps(config))
+    assert "- dataset: `terminal-bench@2.0`" in report.Job(job.path).report()

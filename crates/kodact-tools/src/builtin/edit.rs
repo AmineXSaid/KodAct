@@ -300,17 +300,78 @@ impl Edit {
     /// An exact-text edit to a file never read, inside the working directories, whose
     /// `old_string` the file holds (once, or at least once with `replace_all`).
     fn known_text(&self, input: &Value, path: &std::path::Path, ctx: &ToolContext) -> bool {
-        let old = str_arg(input, "old_string").replace("\r\n", "\n");
-        if !self.unread || old.is_empty() || input.get("start_line").is_some() || !ctx.files.never_read(path) {
-            return false;
-        }
-        if !ctx.working_dirs.read().unwrap().iter().any(|d| path.starts_with(d)) {
-            return false;
-        }
-        let Ok(content) = std::fs::read_to_string(path) else { return false };
-        let found = content.replace("\r\n", "\n").matches(old.as_str()).count();
-        found == 1 || (found > 1 && input.get("replace_all").and_then(Value::as_bool).unwrap_or(false))
+        self.unread && input.get("start_line").is_none() && known_edits(std::slice::from_ref(input), path, ctx)
     }
+}
+
+/// Edits (`old_string`, `replace_all`) to a file never read, inside the working directories,
+/// each of whose `old_string` the file holds: once, or at least once with `replace_all`. Each is
+/// looked for in the file as it is; a later edit that matches only what an earlier one wrote
+/// isn't known text.
+fn known_edits(edits: &[Value], path: &std::path::Path, ctx: &ToolContext) -> bool {
+    if edits.is_empty() || !ctx.files.never_read(path) {
+        return false;
+    }
+    if !ctx.working_dirs.read().unwrap().iter().any(|d| path.starts_with(d)) {
+        return false;
+    }
+    let Ok(content) = std::fs::read_to_string(path) else { return false };
+    let content = content.replace("\r\n", "\n");
+    edits.iter().all(|e| {
+        let old = str_arg(e, "old_string").replace("\r\n", "\n");
+        let found = if old.is_empty() { 0 } else { content.matches(old.as_str()).count() };
+        found == 1 || (found > 1 && e.get("replace_all").and_then(Value::as_bool).unwrap_or(false))
+    })
+}
+
+/// `updated`, an edit's result written with LF, back in `original`'s line endings. A file
+/// all CRLF is written all CRLF and one all LF stays LF, as before. A file with both keeps the
+/// ending of every line a line diff finds unchanged, wherever it is (edits at several places, by
+/// MultiEdit or `replace_all`, included), and the lines the edit wrote take the ending most of
+/// the file uses: one CRLF used to turn every line of the file to CRLF.
+pub(crate) fn with_line_endings(original: &str, updated: &str) -> String {
+    let crlf = original.matches("\r\n").count();
+    if crlf == 0 {
+        return updated.to_string();
+    }
+    let lf = original.matches('\n').count() - crlf;
+    if lf == 0 {
+        return updated.replace('\n', "\r\n");
+    }
+    let old: Vec<&str> = original.split_inclusive('\n').collect();
+    // Each line as the edit saw it (its CRLF made LF), so equal lines compare equal.
+    let seen: Vec<String> = old.iter().map(|l| l.replace("\r\n", "\n")).collect();
+    let seen: Vec<&str> = seen.iter().map(String::as_str).collect();
+    let new: Vec<&str> = updated.split_inclusive('\n').collect();
+    let edited_ending = if crlf > lf { "\r\n" } else { "\n" };
+    let mut out = String::with_capacity(updated.len() + crlf);
+    let written = |line: &str, out: &mut String| match line.strip_suffix('\n') {
+        Some(body) => {
+            out.push_str(body);
+            out.push_str(edited_ending);
+        }
+        None => out.push_str(line),
+    };
+    // Bounded: past the deadline the diff is coarser (more lines count as edited), never wrong. A
+    // change to every other line of 50,000 took 10 s without one.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    for op in similar::capture_diff_slices_deadline(similar::Algorithm::Myers, &seen, &new, Some(deadline)) {
+        match op {
+            similar::DiffOp::Equal { old_index, len, .. } => {
+                for line in &old[old_index..old_index + len] {
+                    out.push_str(line);
+                }
+            }
+            similar::DiffOp::Delete { .. } => {}
+            similar::DiffOp::Insert { new_index, new_len, .. }
+            | similar::DiffOp::Replace { new_index, new_len, .. } => {
+                for line in &new[new_index..new_index + new_len] {
+                    written(line, &mut out);
+                }
+            }
+        }
+    }
+    out
 }
 
 const LINE_RANGE_HELP: &str = "\n\nInstead of `old_string`, you may name the lines to replace: `start_line` and \
@@ -422,7 +483,7 @@ impl Tool for Edit {
                 Ok(u) => u,
                 Err(e) => return ToolOutput::error(e),
             };
-            let out = if crlf { updated.replace('\n', "\r\n") } else { updated.clone() };
+            let out = if crlf { with_line_endings(&content, &updated) } else { updated.clone() };
             return match write_result(ctx, &path, &content, &out) {
                 Ok(patch) => ToolOutput::text(format!(
                     "The file {} has been updated: lines {start}-{end} replaced by {} line(s). Line numbers after \
@@ -451,7 +512,7 @@ impl Tool for Edit {
                 Err(e) => return ToolOutput::error(e),
             };
         let note = near.as_ref().map(|m| format!(" {}", m.note())).unwrap_or_default();
-        let out = if crlf { updated.replace('\n', "\r\n") } else { updated.clone() };
+        let out = if crlf { with_line_endings(&content, &updated) } else { updated.clone() };
         match write_result(ctx, &path, &content, &out) {
             Ok(patch) => ToolOutput::text(format!(
                 "The file {} has been updated.{note} Here's the result of running `cat -n` on a snippet of the edited \
@@ -471,7 +532,11 @@ impl Tool for Edit {
     }
 }
 
-pub struct MultiEdit;
+#[derive(Default)]
+pub struct MultiEdit {
+    /// As Edit's: a file never read may be changed when every `old_string` is its exact text.
+    pub unread: bool,
+}
 
 #[async_trait::async_trait]
 impl Tool for MultiEdit {
@@ -516,6 +581,10 @@ impl Tool for MultiEdit {
     fn validate(&self, input: &Value, ctx: &ToolContext) -> Result<(), String> {
         crate::validate_required(&self.input_schema(), input)?;
         let path = expand_path(str_arg(input, "file_path"), &ctx.project_dir);
+        let edits = input.get("edits").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        if self.unread && known_edits(edits, &path, ctx) {
+            return Ok(());
+        }
         ctx.files.check_writable(&path)
     }
 
@@ -561,7 +630,7 @@ impl Tool for MultiEdit {
                 }
             }
         }
-        let content = if crlf { content.replace('\n', "\r\n") } else { content };
+        let content = if crlf { with_line_endings(&original, &content) } else { content };
         match write_result(ctx, &path, &original, &content) {
             Ok(patch) => {
                 ToolOutput::text(format!("Applied {} edits to {}.{}", edits.len(), path.display(), notes.concat()))

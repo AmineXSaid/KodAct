@@ -19,6 +19,13 @@
 //! lists one, with time left, is answered with them ([`unmet_note`], task `finish-unmet`): an
 //! unattended run has nobody to ask for another try.
 //!
+//! Each requirement also says what it covers (`scope`): every size, input, file or output it
+//! names, and whether a limit counts them one by one or together. In the deep-thinking runs of
+//! 2026-11-20, the two claims of `verified` that failed their tests had checked part of that:
+//! timings at sizes 2, 4, 6, 8 and 10 for "every size up to 10x10" (7x7 was slower), and "at
+//! most 8 shapes" for each of two plans when the limit was on both together (14). A check of
+//! some of the cases shows those cases (task `finish-scope`).
+//!
 //! The idea comes from Cline's `submit_and_exit` (Apache-2.0), described in
 //! docs/research/harness-study/05-cline.md; this is KodAct's own form of it. A call alone
 //! ends the reply as text would, through the same end-of-turn checks: KodAct's reminders can
@@ -36,6 +43,21 @@ pub(crate) const RECEIVED: &str = "Received.";
 /// A Finish call made with other tools: their results are not read yet.
 const NOT_ALONE: &str = "Finish was not accepted: it was called together with other tools, whose results you have \
                          not read yet. Read them, then call Finish on its own.";
+
+/// The answer to an unattended reply that ends in plain text after doing work.
+pub(crate) const FINISH_MISSING: &str = "<system-reminder>\nThis run ends with the Finish tool, and your reply \
+     didn't call it. If the work is done, call Finish on its own: your summary, each requirement the request states \
+     with the check that shows it met, and `verified`. If it isn't done, carry on with the next step.\n</system-reminder>";
+
+/// The answer to a Finish the separate check found not met: its reason, and what to do.
+pub(crate) fn check_note(reason: &str) -> String {
+    format!(
+        "<system-reminder>\nA separate check of this run's tool output found the request not met yet: {}\n\
+         Fix what it names and check it in the form the request describes, then call Finish again. If it can't be \
+         met here, call Finish with that requirement marked not met and the reason in the summary.\n</system-reminder>",
+        clip(reason)
+    )
+}
 
 /// Requirements the note names; the rest are counted.
 const NOTE_ITEMS: usize = 8;
@@ -59,7 +81,10 @@ impl Tool for Finish {
          check that passes whatever you chose (a sample every option handles alike, a test of a part you didn't \
          change) shows nothing, and neither does a value near its limit measured on other data or another \
          machine than the one it will be judged on: mark such a requirement not met, and name in the summary \
-         what you guessed. Meet what you still can before you call Finish. Set `verified` to true only if every \
+         what you guessed. In `scope`, say what the requirement covers: every value, size, input, file or \
+         output it names, and whether a limit applies to each alone or to all of them together. A check of \
+         some of those cases (a sample of the sizes, each output alone for a limit on all together) shows \
+         only the cases it ran: check the rest, or mark it not met. Meet what you still can before you call Finish. Set `verified` to true only if every \
          requirement is met. Call it on its own, not with other tools."
             .into()
     }
@@ -76,10 +101,11 @@ impl Tool for Finish {
                         "type": "object",
                         "properties": {
                             "requirement": {"type": "string", "description": "The requirement, in the request's words"},
+                            "scope": {"type": "string", "description": "What it covers: every value, size, input, file or output it names, and whether a limit counts them one by one or together"},
                             "evidence": {"type": "string", "description": "The check run after the last change that shows it met: the command and what it showed. Or why there is none"},
-                            "met": {"type": "boolean", "description": "True only if the evidence shows it met"}
+                            "met": {"type": "boolean", "description": "True only if the evidence shows it met over its whole scope"}
                         },
-                        "required": ["requirement", "evidence", "met"],
+                        "required": ["requirement", "scope", "evidence", "met"],
                         "additionalProperties": false
                     }
                 },
@@ -115,19 +141,25 @@ pub(crate) fn claim(input: &Value) -> Value {
         .flatten()
         .filter_map(|r| {
             // A bare string is a requirement named with no evidence.
-            let (text, evidence, met) = match r {
-                Value::String(s) => (s.as_str(), "", false),
+            let (text, scope, evidence, met) = match r {
+                Value::String(s) => (s.as_str(), "", "", false),
                 _ => (
                     r.get("requirement").and_then(Value::as_str)?,
+                    r.get("scope").and_then(Value::as_str).unwrap_or_default(),
                     r.get("evidence").and_then(Value::as_str).unwrap_or_default(),
                     r.get("met").and_then(Value::as_bool).unwrap_or(false),
                 ),
             };
+            // Met with no evidence is a claim, not a requirement shown met.
+            let met = met && !evidence.trim().is_empty();
             let text = text.trim();
-            (!text.is_empty()).then(|| json!({"requirement": text, "evidence": evidence.trim(), "met": met}))
+            (!text.is_empty())
+                .then(|| json!({"requirement": text, "scope": scope.trim(), "evidence": evidence.trim(), "met": met}))
         })
         .collect();
-    let all_met = requirements.iter().all(|r| r["met"] == true);
+    // An empty list shows nothing met: `verified` with no requirements listed is a claim with no
+    // parts (2026-11-16 audit: `all` over an empty list is true, so it passed for verified).
+    let all_met = !requirements.is_empty() && requirements.iter().all(|r| r["met"] == true);
     json!({
         "summary": input.get("summary").and_then(Value::as_str).unwrap_or_default(),
         "requirements": requirements,
@@ -135,8 +167,8 @@ pub(crate) fn claim(input: &Value) -> Value {
     })
 }
 
-/// The requirements a claim lists and doesn't show met: `(requirement, evidence)`.
-pub(crate) fn unmet(claim: &Value) -> Vec<(String, String)> {
+/// The requirements a claim lists and doesn't show met: `(requirement, scope, evidence)`.
+pub(crate) fn unmet(claim: &Value) -> Vec<(String, String, String)> {
     claim["requirements"]
         .as_array()
         .into_iter()
@@ -144,7 +176,7 @@ pub(crate) fn unmet(claim: &Value) -> Vec<(String, String)> {
         .filter(|r| r["met"] != true)
         .map(|r| {
             let field = |k: &str| r[k].as_str().unwrap_or_default().to_string();
-            (field("requirement"), field("evidence"))
+            (field("requirement"), field("scope"), field("evidence"))
         })
         .collect()
 }
@@ -152,11 +184,12 @@ pub(crate) fn unmet(claim: &Value) -> Vec<(String, String)> {
 /// The answer to the first Finish of a turn that lists requirements it doesn't show met. `clock`
 /// is the run's time, used and left, when it has a limit: a fact the model has no other way to
 /// know.
-pub(crate) fn unmet_note(unmet: &[(String, String)], clock: Option<&str>) -> String {
+pub(crate) fn unmet_note(unmet: &[(String, String, String)], clock: Option<&str>) -> String {
     let mut lines = vec!["<system-reminder>".to_string(), "Your Finish lists requirements not shown met:".to_string()];
-    for (requirement, evidence) in unmet.iter().take(NOTE_ITEMS) {
+    for (requirement, scope, evidence) in unmet.iter().take(NOTE_ITEMS) {
         let evidence = if evidence.trim().is_empty() { "none given".to_string() } else { clip(evidence) };
-        lines.push(format!("- {} (evidence: {evidence})", clip(requirement)));
+        let scope = if scope.trim().is_empty() { String::new() } else { format!("; covers: {}", clip(scope)) };
+        lines.push(format!("- {} (evidence: {evidence}{scope})", clip(requirement)));
     }
     if unmet.len() > NOTE_ITEMS {
         lines.push(format!("- and {} more", unmet.len() - NOTE_ITEMS));
@@ -165,8 +198,27 @@ pub(crate) fn unmet_note(unmet: &[(String, String)], clock: Option<&str>) -> Str
         lines.push(clock.to_string());
     }
     lines.push(
-        "Meet them, check each in the form the request describes, then call Finish again. If one can't be met \
+        "Meet them, check each in the form the request describes and over everything it covers, then call Finish again. If one can't be met \
          here, call Finish again with it marked not met and the reason in the summary."
+            .into(),
+    );
+    lines.push("</system-reminder>".into());
+    lines.join("\n")
+}
+
+/// The answer to the first Finish of a turn that lists no requirements: nothing in it shows what
+/// was asked for, so `verified` can't be true.
+pub(crate) fn unlisted_note(clock: Option<&str>) -> String {
+    let mut lines = vec![
+        "<system-reminder>".to_string(),
+        "Your Finish lists no requirements, so nothing in it shows the request met.".to_string(),
+    ];
+    if let Some(clock) = clock {
+        lines.push(clock.to_string());
+    }
+    lines.push(
+        "List what the request asks for, in its words (each file, interface, format, value or limit), each with the \
+         check that shows it met, then call Finish again."
             .into(),
     );
     lines.push("</system-reminder>".into());
@@ -199,12 +251,16 @@ mod tests {
         let verified = schema["properties"]["verified"]["description"].as_str().unwrap();
         assert!(verified.contains("would have failed had the work been wrong"), "{verified}");
         let item = &schema["properties"]["requirements"]["items"];
-        assert_eq!(item["required"], json!(["requirement", "evidence", "met"]));
+        assert_eq!(item["required"], json!(["requirement", "scope", "evidence", "met"]));
+        // What it covers, and that a part of it shows only that part.
+        assert!(d.contains("In `scope`, say what the requirement covers"), "{d}");
+        assert!(d.contains("each alone or to all of them together"), "{d}");
+        assert!(d.contains("shows only the cases it ran"), "{d}");
         assert_eq!(schema["required"], json!(["summary", "requirements", "verified"]));
     }
 
     /// `verified` holds only while every requirement listed is met; one not met, without `met`,
-    /// or named with no evidence makes it false. A claim without the list is read as before.
+    /// or met with no evidence makes it false, and so does an empty or missing list.
     #[test]
     fn verified_claims_no_more_than_its_requirements() {
         let all_met = json!({"summary": "s", "verified": true, "requirements": [
@@ -218,6 +274,7 @@ mod tests {
             json!({"requirement": "a list of x", "evidence": "printed a tuple", "met": false}),
             json!({"requirement": "a list of x", "evidence": "printed a tuple"}),
             json!("a list of x"),
+            json!({"requirement": "a list of x", "evidence": "  ", "met": true}),
         ] {
             let c = claim(&json!({"summary": "s", "verified": true, "requirements": [
                 {"requirement": "out.json exists", "evidence": "ls", "met": true}, not_shown,
@@ -227,19 +284,25 @@ mod tests {
             assert_eq!(unmet(&c)[0].0, "a list of x");
         }
 
-        // An empty or missing list: the model's word, as before the list existed.
-        for old in
+        // An empty or missing list shows nothing met: `verified` is recorded false.
+        for unlisted in
             [json!({"summary": "s", "verified": true}), json!({"summary": "s", "verified": true, "requirements": []})]
         {
-            let c = claim(&old);
-            assert_eq!(c["verified"], true);
+            let c = claim(&unlisted);
+            assert_eq!(c["verified"], false, "{c}");
             assert_eq!(c["requirements"], json!([]));
         }
         // Items with no text are dropped, and the rest kept trimmed.
         let c = claim(
             &json!({"verified": false, "requirements": [{"requirement": "  ", "met": false}, {"requirement": " a ", "evidence": " b ", "met": true}]}),
         );
-        assert_eq!(c["requirements"], json!([{"requirement": "a", "evidence": "b", "met": true}]));
+        assert_eq!(c["requirements"], json!([{"requirement": "a", "scope": "", "evidence": "b", "met": true}]));
+        // The scope is kept, trimmed, and is quoted back when the requirement isn't met.
+        let c = claim(&json!({"verified": true, "requirements": [
+            {"requirement": "at most 8 shapes", "scope": " both plans together ", "evidence": "8 and 7", "met": false},
+        ]}));
+        assert_eq!(c["verified"], false);
+        assert_eq!(unmet(&c), [("at most 8 shapes".into(), "both plans together".into(), "8 and 7".into())]);
     }
 
     /// The note quotes what the claim lists as not met, clipped, with the clock when the run has
@@ -247,20 +310,31 @@ mod tests {
     #[test]
     fn the_note_quotes_what_is_not_met_and_the_time_left() {
         let unmet = vec![
-            ("coords_x: a list of x coordinates".to_string(), "printed (1, 2)".to_string()),
-            ("at least 0.62 accuracy".to_string(), String::new()),
+            ("coords_x: a list of x coordinates".to_string(), String::new(), "printed (1, 2)".to_string()),
+            ("at least 0.62 accuracy".to_string(), String::new(), String::new()),
+            (
+                "faster than the reference".to_string(),
+                "every size from 2x2 to 10x10".to_string(),
+                "eval.py timed 2, 4, 6, 8 and 10".to_string(),
+            ),
         ];
         let note = unmet_note(&unmet, Some("Time: 12m00s of 60m00s used, 48m00s left."));
         assert!(note.contains("- coords_x: a list of x coordinates (evidence: printed (1, 2))"), "{note}");
         assert!(note.contains("- at least 0.62 accuracy (evidence: none given)"), "{note}");
         assert!(note.contains("48m00s left"), "{note}");
-        assert!(note.contains("in the form the request describes"), "{note}");
+        assert!(note.contains("in the form the request describes and over everything it covers"), "{note}");
+        assert!(
+            note.contains(
+                "- faster than the reference (evidence: eval.py timed 2, 4, 6, 8 and 10; covers: every size from 2x2 to 10x10)"
+            ),
+            "the scope is quoted beside the evidence, so the gap shows: {note}"
+        );
         assert!(!unmet_note(&unmet, None).contains("Time:"));
 
         let long = "word ".repeat(200);
-        let many: Vec<_> = (0..11).map(|i| (format!("{i} {long}"), long.clone())).collect();
+        let many: Vec<_> = (0..12).map(|i| (format!("{i} {long}"), long.clone(), long.clone())).collect();
         let note = unmet_note(&many, None);
-        assert!(note.contains("- and 3 more"), "{note}");
-        assert!(note.lines().all(|l| l.chars().count() < 2 * NOTE_CHARS + 40), "{note}");
+        assert!(note.contains("- and 4 more"), "{note}");
+        assert!(note.lines().all(|l| l.chars().count() < 3 * NOTE_CHARS + 60), "{note}");
     }
 }

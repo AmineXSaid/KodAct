@@ -117,6 +117,20 @@ impl Refused {
     }
 }
 
+/// What makes two calls the same call: the tool and its input, without the free-text
+/// `description` a Bash call carries. A model that rewords the description of the same command
+/// is running the same command.
+fn call_key(tool: &str, input: &Value) -> u64 {
+    match input.as_object().filter(|o| tool == "Bash" && o.contains_key("description")) {
+        Some(o) => {
+            let mut o = o.clone();
+            o.remove("description");
+            hash(&(tool, Value::Object(o).to_string()))
+        }
+        None => hash(&(tool, input.to_string())),
+    }
+}
+
 fn hash<T: Hash>(t: &T) -> u64 {
     let mut h = DefaultHasher::new();
     t.hash(&mut h);
@@ -171,7 +185,7 @@ impl LoopGuard {
         is_error: bool,
         may_change: bool,
     ) -> Option<Stuck> {
-        let key = hash(&(tool, input.to_string()));
+        let key = call_key(tool, input);
         let out = hash(&comparable(output));
         let changes_after = self.changes + u64::from(may_change);
         let mut found = None;
@@ -234,7 +248,7 @@ impl LoopGuard {
         if !depends_on_files_only {
             return None;
         }
-        let key = hash(&(tool, input.to_string()));
+        let key = call_key(tool, input);
         let changes = self.changes;
         let fired = &self.fired;
         let seen = self.failures.iter().find_map(|((k, out), seen)| {
@@ -392,6 +406,28 @@ mod tests {
         assert_eq!(s, Stuck::RepeatedFailure { tool: "Bash".into(), count: 3, after_changes: false });
         assert!(s.text().contains("failed 3 times with the same error") && s.text().contains("Repeating it"));
         assert_eq!(g.observe("Bash", &call, "err", true, true), None, "once per call and error");
+    }
+
+    /// The same command with its description reworded is the same call.
+    #[test]
+    fn a_reworded_description_is_the_same_call() {
+        let mut g = LoopGuard::default();
+        let call = |d: &str| json!({"command": "make", "description": d});
+        assert_eq!(g.observe("Bash", &call("Build"), "err", true, true), None);
+        assert_eq!(g.observe("Bash", &call("Build again"), "err", true, true), None);
+        let s = g.observe("Bash", &call("Try the build once more"), "err", true, true).unwrap();
+        assert!(matches!(s, Stuck::RepeatedFailure { count: 3, .. }), "{s:?}");
+        // Another tool's description is part of what it does (a sub-agent's task, an MCP field).
+        let task = |d: &str| json!({"description": d, "prompt": "p"});
+        let mut g2 = LoopGuard::default();
+        g2.observe("Task", &task("a"), "err", true, true);
+        g2.observe("Task", &task("b"), "err", true, true);
+        assert_eq!(g2.observe("Task", &task("c"), "err", true, true), None);
+        // A different command is a different call.
+        assert_eq!(
+            g.observe("Bash", &json!({"command": "make test", "description": "Build"}), "err", true, true),
+            None
+        );
     }
 
     /// After the reminder, the same failing call is not run again while nothing has changed; a

@@ -12,6 +12,69 @@ can replace it. It is not the ceiling. A better harness can beat a weaker one
 running the same model, so the harness gets designed, measured and improved as
 the product.
 
+## Target: a top-3 harness on Terminal-Bench, for the best everyday CLI
+
+KodAct aims to be among the three best-scoring harnesses on Terminal-Bench,
+and to be a reference for a strong, efficient CLI agent. The score is the
+proof, not the purpose: the purpose is the best everyday CLI, one that solves
+a person's daily and complex problems at the terminal. Terminal-Bench is the
+external measure because its tasks are that work (build, debug, configure,
+recover, analyse) in real containers, graded by hidden tests a harness can't
+see. A gain that would not also help a person at their own terminal is not
+taken (see "Fix, don't fit" below and rule 7 in `docs/goal.md`).
+
+**How the target is measured.**
+- Terminal-Bench 2.1 (the 89 tasks of 2.0, 28 of them repaired) through
+  Harbor (`evals/harbor/`, its default since 2026-11-23), with the model as
+  published by the comparison it is held against: a harness is compared with
+  others on the same model, never across models. 2.0's board stopped taking
+  submissions in May 2026, and 2.1's adds only runs by its maintainers, so the
+  comparison is with published results and with harnesses run here on the
+  same model.
+- At least 3 attempts per task. Two runs on the same endpoint (2026-11-16 and
+  17) changed result on 8 of the 53 tasks both judged: about 1 in 7, more than
+  most changes move the score. Their code differed by 948 lines in the
+  crates, mostly provider fixes, among them how requests reach the endpoint
+  measured, so part of that spread may be the code.
+- The score is passes over all 89 tasks. Trials the infrastructure lost
+  (endpoint, Docker, verifier) are run again, never counted as passes.
+- Cost and wall time per passed task are reported with the score: a top
+  score bought with time a person wouldn't wait is not the target.
+
+**Where KodAct stands (runs of 2026-11-16 and 17, one attempt, internal
+endpoints).** deep-thinking 64/89 (72%), quick-thinking 44/89 (49%). The
+failures: false successes (the model claims done, the hidden tests disagree:
+13 and 16) and timeouts (7 and 24). 17 tasks had no passing run across the
+three full runs (one of them stopped after 54 tasks).
+These runs are on endpoints no public comparison uses, so they place KodAct
+against itself, not yet against other harnesses.
+
+**What closes the gap, by failure class.**
+1. *Truthful finishes* (verification pillar): a claim of done is checked
+   against the request by a separate check, and the model can't call work
+   verified without listing what it checked.
+2. *Time* (long-horizon and context pillars): compaction that works on
+   reasoning models and small windows, a wind-down that leaves the best
+   working version on disk, no time lost to stalled commands or silent
+   endpoints.
+3. *Tools that do what they say* (tool design pillar): no silent cuts,
+   no prompts that wait for a person, no repeated failures unnoticed.
+4. *Environment tasks* (long-horizon pillar): interactive programs
+   (consoles, VMs, REPLs) driven through a running command's input.
+5. *A lean harness*: every reminder, tool and prompt rule earns its place in
+   an ablation on the probe set, or goes.
+
+**How progress is run.**
+- A probe set: the tasks whose outcome depends on the run, 3 attempts each,
+  for every harness change; the full 89 at milestones.
+- Every Harbor job keeps its report in `jobs/`; a change is credited only
+  when its A/B on the probe set beats the noise.
+- Other harnesses (`evals/harbor/*_agent.py`) run on the same model and
+  probe set, so a task KodAct fails and another passes points at the harness,
+  and one all fail points at the model.
+- Each step is a commit with its pillar and metric (`Goals:` line), its eval
+  task, and the measurement, or the statement that it is still owed.
+
 ## Rule: measure, don't assume
 
 A change that claims to improve the harness must show it on the evaluation
@@ -82,7 +145,9 @@ Each pillar lists what KodAct does about it and what shows that it works.
     model (task `layer-order`);
   - no repeated reads: reading the same range of unchanged content returns a
     short note. That stops once the earlier result was cleared by compaction;
-  - memory files and the task list re-attached after compaction;
+  - memory files, the task list and the files read or written re-attached
+    after compaction; a model whose replies carry reasoning is asked for its
+    summary without the written analysis pass;
   - the person's requests carried word for word through every compaction and
     a resume, within a tenth of the model's window, whatever the summary kept
     (task `deliverable-after-compaction`);
@@ -136,7 +201,8 @@ Each pillar lists what KodAct does about it and what shows that it works.
     - Read's line-number prefixes copied into `old_string`;
     - otherwise the closest window, scored.
     Ambiguous matches name their lines.
-  - Stuck-loop detection: the same failing call three times, the same result
+  - Stuck-loop detection (a call is its tool and input, a Bash call's
+    free-text `description` left out): the same failing call three times, the same result
     three times, edits that undo each other, or five failures in a row each
     trigger a reminder to change approach, told again at 5 and at 8 when the
     repeat goes on. After the first reminder, the same

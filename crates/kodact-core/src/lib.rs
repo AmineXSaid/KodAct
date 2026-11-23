@@ -299,6 +299,16 @@ pub(crate) fn background_summary(settings: &LoadedSettings) -> bool {
     }
 }
 
+/// Whether an automatic compaction keeps the most recent steps word for word after its summary:
+/// `compaction.keepRecent`, or `KODACT_KEEP_RECENT` (for A/B runs). Off until measured (task
+/// `chat-after-compaction`).
+pub(crate) fn keep_recent(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_KEEP_RECENT") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/compaction/keepRecent").unwrap_or(false),
+    }
+}
+
 /// Which nudges are on: `KODACT_NUDGES` (a list such as `shellEdit,constraints`, or `all`, for
 /// A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
 /// measured it; `reminders: false` still turns them all off.
@@ -439,6 +449,15 @@ pub(crate) fn verify_config(
             // Unattended runs get a second reminder: nobody else will catch an unchecked change.
             .unwrap_or(if autonomous { 2 } else { 1 }),
     })
+}
+
+/// Whether an unattended run's Finish is checked by a separate request
+/// (`verification.finishCheck`, or `KODACT_FINISH_CHECK` for A/B runs). On by default.
+pub(crate) fn finish_check(settings: &LoadedSettings) -> bool {
+    match env_nonempty("KODACT_FINISH_CHECK") {
+        Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
+        None => settings.bool("/verification/finishCheck").unwrap_or(true),
+    }
 }
 
 fn env_nonempty(k: &str) -> Option<String> {
@@ -1007,6 +1026,9 @@ pub fn build_session(
     if autonomous {
         // Nobody answers questions or approves plans in an unattended run.
         removed.extend(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"].map(String::from));
+        // Nor does anyone come back later: a task scheduled for after the run never runs, and a
+        // wake-up waits out the clock (rstan-to-pystan, 2026-11-17: one ScheduleWakeup, then the time limit).
+        removed.extend(["CronCreate", "CronList", "CronDelete", "ScheduleWakeup"].map(String::from));
     }
     tools.retain(|n| !removed.iter().any(|r| Rule::parse(r).map(|rule| rule.covers_tool(n)).unwrap_or(false)));
 
@@ -1186,6 +1208,7 @@ pub fn build_session(
             autocompact_window,
             auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
             background_summary: background_summary(&settings),
+            keep_recent: keep_recent(&settings),
             // As in the session: a sub-agent on the same endpoint gets its reasoning back too.
             carry_reasoning: carry_reasoning(&settings),
             ..Default::default()
@@ -1224,11 +1247,14 @@ pub fn build_session(
         autocompact_window,
         auto_compact: settings.bool("/autoCompactEnabled").unwrap_or(true),
         background_summary: background_summary(&settings),
+        keep_recent: keep_recent(&settings),
         is_subagent: false,
         edit_diagnostics: edit_diagnostics(&settings, verify.is_some()),
         language_servers: language_servers(&settings, verify.is_some()),
         formatters: formatters(&settings, verify.is_some()),
         one_shot: opts.one_shot,
+        finish_check: autonomous && finish_check(&settings),
+        check_model: settings.str("/goalCheckModel").map(kodact_api::resolve_model),
         verify,
         escalate_output: env_nonempty("KODACT_MAX_OUTPUT_TOKENS").is_none(),
         fast: settings.bool("/fastMode").unwrap_or(false),

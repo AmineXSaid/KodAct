@@ -448,11 +448,33 @@ async fn read_numbers_lines_and_pages() {
     std::fs::write(d.path().join("a.txt"), body).unwrap();
     let c = ctx(d.path());
     let out = Read.call(json!({"file_path": p(d.path(), "a.txt"), "offset": 3, "limit": 2}), &c).await;
-    assert_eq!(out.text_content(), "     3\tline 3\n     4\tline 4\n");
+    // A range that leaves lines out says so, `limit` or not.
+    assert_eq!(
+        out.text_content(),
+        "     3\tline 3\n     4\tline 4\n\n<system-reminder>Showing lines 3-4 of 10. Use offset/limit to read \
+         more.</system-reminder>"
+    );
+    let out = Read.call(json!({"file_path": p(d.path(), "a.txt"), "offset": 9, "limit": 5}), &c).await;
+    assert!(!out.text_content().contains("Showing lines"), "the end of the file: nothing left out");
     let out = Read.call(json!({"file_path": p(d.path(), "missing.txt")}), &c).await;
     assert!(out.is_error);
     let out = Read.call(json!({"file_path": c.project_dir.display().to_string()}), &c).await;
     assert!(out.is_error && out.text_content().contains("directory"));
+}
+
+/// A range of long lines stops at the size a whole-file read may have (256 KB), on a line
+/// boundary, and says where it stopped.
+#[tokio::test]
+async fn a_range_read_is_capped_at_the_whole_file_size() {
+    let d = tempfile::tempdir().unwrap();
+    let line = "x".repeat(1_900);
+    let body: String = (0..400).map(|_| format!("{line}\n")).collect();
+    std::fs::write(d.path().join("wide.txt"), body).unwrap();
+    let c = ctx(d.path());
+    let out = Read.call(json!({"file_path": p(d.path(), "wide.txt"), "offset": 1, "limit": 400}), &c).await;
+    let text = out.text_content();
+    assert!(text.len() < 280 * 1024, "{}", text.len());
+    assert!(text.contains("Showing lines 1-137 of 400"), "{}", &text[text.len() - 200..]);
 }
 
 /// stop-at-target (2026-11-16): `cat pack.py` at the first step, an Edit at the fourth, refused as
@@ -530,14 +552,14 @@ async fn edit_preserves_crlf_and_multiedit_is_atomic() {
     filetime_bump(&f);
     Read.call(json!({"file_path": f}), &c).await;
     let edits = json!([{"old_string": "a\nb", "new_string": "A\nB\nB2"}, {"old_string": "d", "new_string": "D"}]);
-    let out = MultiEdit.call(json!({"file_path": f, "edits": edits}), &c).await;
+    let out = MultiEdit::default().call(json!({"file_path": f, "edits": edits}), &c).await;
     assert!(!out.is_error, "{out:?}");
     assert_eq!(std::fs::read_to_string(&f).unwrap(), "A\r\nB\r\nB2\r\nc\r\nD\r\n");
 
     std::fs::write(&f, "x y z").unwrap();
     filetime_bump(&f);
     Read.call(json!({"file_path": f}), &c).await;
-    let out = MultiEdit
+    let out = MultiEdit::default()
         .call(json!({"file_path": f, "edits": [{"old_string": "x", "new_string": "X"}, {"old_string": "nope", "new_string": "?"}]}), &c)
         .await;
     assert!(out.is_error && out.text_content().contains("Edit 2 of 2"));
@@ -869,6 +891,16 @@ async fn web_fetch_converts_summarizes_and_reports_redirects() {
     let summarized = WebFetch::new(Some(Arc::new(FakeWeb)));
     let out = summarized.call(json!({"url": format!("{base}/page"), "prompt": "how to install"}), &c).await;
     assert_eq!(out.text_content(), format!("summary of {base}/page for \"how to install\": # Docs"));
+    // Without a prompt: the page itself, no second model, for exact text.
+    assert!(summarized.validate(&json!({"url": format!("{base}/page")}), &c).is_ok());
+    let out = summarized.call(json!({"url": format!("{base}/page")}), &c).await;
+    assert_eq!(out.text_content(), "# Docs\n\n# Install\n\nRun `kodact init`.");
+    // An error keeps the start of the body it came with.
+    let out = plain.call(json!({"url": format!("{base}/nope")}), &c).await;
+    assert!(
+        out.is_error && out.text_content().contains("404") && out.text_content().ends_with("began:\nno"),
+        "{out:?}"
+    );
     let search = WebSearch { backend: Arc::new(FakeWeb) };
     assert!(search.call(json!({"query": "kodact cli"}), &c).await.text_content().contains("results for kodact cli"));
     assert!(search.call(json!({"query": "x"}), &c).await.is_error);
@@ -1392,4 +1424,135 @@ fn a_miss_says_when_the_new_text_is_already_in_the_file() {
     // A short new_string proves nothing: no claim is made.
     let e = apply_edit("a = 1\n", "a = 2", "a", false).unwrap_err();
     assert!(!e.contains("already in the file"), "{e}");
+}
+
+/// A timeout under a second is seconds written as milliseconds: refused with the value to pass,
+/// before anything runs. A real one passes.
+#[tokio::test]
+async fn a_timeout_in_seconds_is_refused_with_the_milliseconds_to_pass() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let err = Bash::default().validate(&json!({"command": "make", "timeout": 30}), &c).unwrap_err();
+    assert!(err.contains("milliseconds") && err.contains("30000"), "{err}");
+    let err = Bash::default().validate(&json!({"command": "make", "timeout": 0.5}), &c).unwrap_err();
+    assert!(err.contains("at least 1000"), "{err}");
+    assert!(Bash::default().validate(&json!({"command": "make", "timeout": 30000}), &c).is_ok());
+    assert!(Bash::default().validate(&json!({"command": "make"}), &c).is_ok());
+}
+
+/// Commands run with no pager and no git credential prompt: nobody can answer either.
+#[tokio::test]
+async fn commands_run_without_a_pager_or_a_credential_prompt() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let out = Bash::default().call(json!({"command": "echo $PAGER $GIT_PAGER $GIT_TERMINAL_PROMPT"}), &c).await;
+    assert_eq!(out.text_content(), "cat cat 0");
+}
+
+/// BashOutput saves long output in full, as Bash does, and says where.
+#[tokio::test]
+async fn background_output_too_long_to_show_is_saved_in_full() {
+    let d = tempfile::tempdir().unwrap();
+    let mut c = ctx(d.path());
+    c.spill_dir = Some(d.path().join("spill"));
+    c.max_output_chars = 1_000;
+    Bash::default().call(json!({"command": "seq 1 5000", "run_in_background": true}), &c).await;
+    let sh = c.shells.get("bash_1").unwrap();
+    tokio::time::timeout(Duration::from_secs(10), sh.wait()).await.unwrap();
+    let c = c.for_call("toolu_out", CancellationToken::new());
+    let o = BashOutput.call(json!({"bash_id": "bash_1"}), &c).await;
+    let text = o.text_content();
+    assert!(text.contains("is saved at"), "{text}");
+    let saved = std::fs::read_dir(d.path().join("spill")).unwrap().count();
+    assert!(saved >= 1);
+}
+
+/// MultiEdit follows Edit's `edit.withoutRead`: a file never read may be changed when every
+/// `old_string` is its exact text; one that isn't, or an option left off, still needs a Read.
+#[tokio::test]
+async fn multi_edit_without_a_read_takes_text_the_file_holds() {
+    let d = tempfile::tempdir().unwrap();
+    let f = p(d.path(), "cfg.py");
+    std::fs::write(&f, "DEBUG = True\nPORT = 80\n").unwrap();
+    let c = ctx(d.path());
+    let (strict, multi) = (MultiEdit::default(), MultiEdit { unread: true });
+    let both = json!({"file_path": f, "edits": [
+        {"old_string": "DEBUG = True", "new_string": "DEBUG = False"},
+        {"old_string": "PORT = 80", "new_string": "PORT = 8080"},
+    ]});
+    assert!(strict.validate(&both, &c).is_err(), "off by default");
+    assert!(multi.validate(&both, &c).is_ok());
+    let out = multi.call(both, &c).await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "DEBUG = False\nPORT = 8080\n");
+    let d2 = tempfile::tempdir().unwrap();
+    let g = p(d2.path(), "cfg.py");
+    std::fs::write(&g, "DEBUG = True\n").unwrap();
+    let c2 = ctx(d2.path());
+    let guessed = json!({"file_path": g, "edits": [
+        {"old_string": "DEBUG = True", "new_string": "DEBUG = False"},
+        {"old_string": "PORT = 80", "new_string": "PORT = 8080"},
+    ]});
+    assert!(multi.validate(&guessed, &c2).is_err(), "one old_string the file doesn't hold: read it first");
+}
+
+/// Line endings: a file all CRLF stays CRLF and one all LF stays LF; a file with both keeps each
+/// unchanged line's ending, and the edited lines take the one most of the file uses.
+#[tokio::test]
+async fn edits_keep_each_line_ending_in_a_mixed_file() {
+    let d = tempfile::tempdir().unwrap();
+    let c = ctx(d.path());
+    let run = |name: &str, body: &str| {
+        let f = p(d.path(), name);
+        std::fs::write(&f, body).unwrap();
+        c.files.record_read(std::path::Path::new(&f));
+        f
+    };
+    let edit = |f: &str| json!({"file_path": f, "old_string": "b = 2", "new_string": "b = 3\nc = 4"});
+    let all_crlf = run("crlf.txt", "a = 1\r\nb = 2\r\nz = 9\r\n");
+    Edit::default().call(edit(&all_crlf), &c).await;
+    assert_eq!(std::fs::read_to_string(&all_crlf).unwrap(), "a = 1\r\nb = 3\r\nc = 4\r\nz = 9\r\n");
+    let all_lf = run("lf.txt", "a = 1\nb = 2\nz = 9\n");
+    Edit::default().call(edit(&all_lf), &c).await;
+    assert_eq!(std::fs::read_to_string(&all_lf).unwrap(), "a = 1\nb = 3\nc = 4\nz = 9\n");
+    // Mostly LF, one CRLF line kept as it is: the edited lines take LF.
+    let mixed = run("mixed.txt", "a = 1\nh = 0\r\nb = 2\nz = 9\n");
+    let out = Edit::default().call(edit(&mixed), &c).await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(&mixed).unwrap(), "a = 1\nh = 0\r\nb = 3\nc = 4\nz = 9\n");
+    // The same through MultiEdit.
+    let mixed = run("mixed2.txt", "a = 1\r\nh = 0\r\nb = 2\nz = 9\r\n");
+    let out = MultiEdit::default()
+        .call(json!({"file_path": mixed, "edits": [{"old_string": "b = 2", "new_string": "b = 3"}]}), &c)
+        .await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(&mixed).unwrap(), "a = 1\r\nh = 0\r\nb = 3\r\nz = 9\r\n");
+    // Edits far apart keep the endings of every line between them.
+    let far = run("far.txt", "a = 1\r\nm = 0\nn = 0\nb = 2\r\n");
+    let out = MultiEdit::default()
+        .call(
+            json!({"file_path": far, "edits": [
+                {"old_string": "a = 1", "new_string": "a = 2"},
+                {"old_string": "b = 2", "new_string": "b = 3"},
+            ]}),
+            &c,
+        )
+        .await;
+    assert!(!out.is_error, "{}", out.text_content());
+    assert_eq!(std::fs::read_to_string(&far).unwrap(), "a = 2\nm = 0\nn = 0\nb = 3\n", "a tie takes LF");
+    let far = run("far2.txt", "a = 1\r\nm = 0\nb = 2\r\nz = 0\r\n");
+    MultiEdit::default()
+        .call(
+            json!({"file_path": far, "edits": [
+                {"old_string": "a = 1", "new_string": "a = 2"},
+                {"old_string": "b = 2", "new_string": "b = 3"},
+            ]}),
+            &c,
+        )
+        .await;
+    assert_eq!(std::fs::read_to_string(&far).unwrap(), "a = 2\r\nm = 0\nb = 3\r\nz = 0\r\n");
+    // A stray CR before a CRLF is an unchanged line, kept as it was.
+    let stray = run("stray.txt", "x\r\r\ny = 1\nz\n");
+    Edit::default().call(json!({"file_path": stray, "old_string": "y = 1", "new_string": "y = 2"}), &c).await;
+    assert_eq!(std::fs::read_to_string(&stray).unwrap(), "x\r\r\ny = 2\nz\n");
 }

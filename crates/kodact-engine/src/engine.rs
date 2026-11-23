@@ -296,6 +296,17 @@ const API_RETRY_RESERVE: Duration = Duration::from_secs(60);
 /// Retries of a `-p` run whose endpoint never answered and can't be reached.
 const FIRST_CONTACT_RETRIES: u32 = 3;
 
+/// The least time the last-stage time warning leaves: room for one check and the end of the run.
+const FINAL_WARNING_FLOOR: Duration = Duration::from_secs(90);
+
+/// Files the message after compaction lists by name; the rest are counted.
+const FILES_LISTED: usize = 60;
+/// Characters those paths may take, whatever their depth.
+const FILES_CHARS: usize = 3_000;
+
+/// Output tokens the Finish check may use: room for a reasoning model to think before its verdict.
+const CHECK_MAX_TOKENS: u32 = 8_000;
+
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
     /// KodAct's own nudges to the model: the verification reminder, the loop guard, the
@@ -341,10 +352,21 @@ pub struct EngineConfig {
     /// Write that summary ahead, in the background, and hold it until compaction is due
     /// (`compaction.background`, off until measured): see `crate::held`.
     pub background_summary: bool,
+    /// Keep the most recent complete steps word for word after an automatic compaction, up to a
+    /// tenth of the window, instead of only the summary (`compaction.keepRecent`, off until
+    /// measured). The summary still covers them.
+    pub keep_recent: bool,
     /// Runs as a sub-agent: SubagentStop instead of Stop, no session hooks.
     pub is_subagent: bool,
     /// The verification loop; `None` turns it off. Never runs in sub-agents.
     pub verify: Option<crate::verify::VerifyConfig>,
+    /// Unattended: a Finish that claims `verified` is checked by a separate request that reads
+    /// the conversation as evidence ([`crate::judge`]), once a turn while time is left, and a
+    /// "not met" sends the model back with the reason (`verification.finishCheck`). Off by
+    /// default here; the CLI turns it on for unattended runs.
+    pub finish_check: bool,
+    /// The model that checks (`goalCheckModel`); `None` uses the session's model.
+    pub check_model: Option<String>,
     /// Tell the model, with an edit's result, when the file it wrote no longer parses
     /// (`verification.syntaxCheck`, on with the verification loop). Sub-agents keep it.
     pub edit_diagnostics: bool,
@@ -458,8 +480,11 @@ impl Default for EngineConfig {
             autocompact_window: None,
             auto_compact: true,
             background_summary: false,
+            keep_recent: false,
             is_subagent: false,
             verify: None,
+            finish_check: false,
+            check_model: None,
             edit_diagnostics: false,
             language_servers: None,
             formatters: None,
@@ -926,6 +951,15 @@ pub struct Engine {
     passing_told: bool,
     /// A Finish that listed requirements it didn't show met was answered with them this turn.
     unmet_told: bool,
+    /// An unattended reply that ended without Finish was sent back for it this turn.
+    finish_asked: bool,
+    /// A Finish was checked by the separate check this turn.
+    finish_checked: bool,
+    /// A reply of this session carried reasoning: its summaries are asked for directly, without
+    /// the written analysis pass (`kodact_compact::summary_instruction_for`).
+    reasoning_seen: bool,
+    /// This turn's request, as the person sent it: what the Finish check judges against.
+    turn_request: String,
     /// The limits this turn's request states (`nudges.limitVerdicts`, `nudges.staleDeliverables`).
     limits: crate::limits::Limits,
     /// A measurement that met every limit for its row, with the files the request asks for
@@ -1095,6 +1129,10 @@ impl Engine {
             passing: None,
             passing_told: false,
             unmet_told: false,
+            finish_asked: false,
+            finish_checked: false,
+            reasoning_seen: false,
+            turn_request: String::new(),
             limits: Default::default(),
             unsaved: None,
             stale_told: 0,
@@ -1384,6 +1422,56 @@ impl Engine {
             notes
         };
         Some(format!("Your notes (the Notes tool) at the time of compaction. Keep them up to date:\n{body}"))
+    }
+
+    /// The files this session read or wrote that still exist, for the message after compaction:
+    /// a summary may drop a path, and the model then guesses it or searches again. Paths only,
+    /// at most [`FILES_LISTED`], relative to the project where they are inside it.
+    fn files_context(&self) -> Option<String> {
+        let root = &self.shared.tool_ctx.project_dir;
+        let mut files: Vec<String> = self
+            .shared
+            .tool_ctx
+            .files
+            .touched()
+            .into_iter()
+            .filter(|p| p.is_file())
+            .map(|p| p.strip_prefix(root).map(|r| r.to_path_buf()).unwrap_or(p).display().to_string())
+            .collect();
+        if files.is_empty() {
+            return None;
+        }
+        files.sort();
+        // At most FILES_LISTED paths and FILES_CHARS characters, whichever comes first.
+        let mut kept = 0;
+        let mut chars = 0;
+        for f in &files {
+            if kept == FILES_LISTED || chars + f.len() > FILES_CHARS {
+                break;
+            }
+            chars += f.len() + 3;
+            kept += 1;
+        }
+        let more = files.len() - kept;
+        files.truncate(kept);
+        if files.is_empty() {
+            return None;
+        }
+        let mut text = format!(
+            "Files you read or wrote before compaction (they are on disk; Read one again before editing it):\n- {}",
+            files.join("\n- ")
+        );
+        if more > 0 {
+            text.push_str(&format!("\n- and {more} more"));
+        }
+        Some(text)
+    }
+
+    /// Do this session's replies carry reasoning? Seen in a reply, or in the history a resumed
+    /// session brought back.
+    fn reasons(&self) -> bool {
+        self.reasoning_seen
+            || self.state.messages.iter().any(|m| m.content.iter().any(|b| matches!(b, ContentBlock::Thinking { .. })))
     }
 
     /// The current task list, for re-attaching after compaction (GOALS pillar 5).
@@ -1977,7 +2065,7 @@ impl Engine {
     /// Start writing the summary of the conversation as it stands (see `crate::held`).
     fn start_held(&mut self, model: &str) {
         let mut req = self.build_request(model);
-        let ask = ContentBlock::text(kodact_compact::summary_instruction(None));
+        let ask = ContentBlock::text(kodact_compact::summary_instruction_for(None, self.reasons()));
         match req.messages.last_mut() {
             Some(last) if last.role == kodact_types::Role::User => last.content.push(ask),
             _ => req.messages.push(Message::user(vec![ask])),
@@ -2037,7 +2125,7 @@ impl Engine {
                     self.system_event("summary_ahead_failed", json!({"reason": "empty_summary"}));
                     return false;
                 }
-                self.install_held(summary, at, continue_work, model);
+                self.install_with_tail("auto", summary, at, continue_work, model, "summary_ahead_applied");
                 true
             }
             Err(reason) => {
@@ -2048,10 +2136,39 @@ impl Engine {
         }
     }
 
+    /// Where the most recent complete steps that fit in `budget` tokens start: the index of an
+    /// assistant message, so each kept tool call keeps its result and the summary (a user
+    /// message) is followed by the model's turn. `None` when no step fits, or when the cut would
+    /// keep everything.
+    fn recent_cut(&self, budget: u64) -> Option<usize> {
+        let msgs = &self.state.messages;
+        let mut used = 0u64;
+        let mut cut = None;
+        for i in (1..msgs.len()).rev() {
+            used += kodact_compact::estimate_tokens(std::slice::from_ref(&msgs[i]));
+            if used > budget {
+                break;
+            }
+            if msgs[i].role == kodact_types::Role::Assistant {
+                cut = Some(i);
+            }
+        }
+        cut
+    }
+
     /// Replace `state.messages[..at]` with `summary` and keep the messages after it word for
     /// word. Their reasoning is left out: it was written about the part now replaced, and a
-    /// provider that checks reasoning against what came before it would refuse it.
-    fn install_held(&mut self, summary: String, at: usize, continue_work: bool, model: &str) -> CompactInfo {
+    /// provider that checks reasoning against what came before it would refuse it. `event` names
+    /// the system event that records it.
+    fn install_with_tail(
+        &mut self,
+        trigger: &str,
+        summary: String,
+        at: usize,
+        continue_work: bool,
+        model: &str,
+        event: &str,
+    ) -> CompactInfo {
         let pre_tokens = self.projected_context_tokens();
         let tail = self.state.messages.split_off(at);
         let tail_uuids = self.state.uuids.split_off(at);
@@ -2065,7 +2182,7 @@ impl Engine {
             .collect();
         let cleared: Vec<String> =
             self.state.microcompacted.iter().filter(|id| tail_ids.contains(*id)).cloned().collect();
-        let info = self.install_summary_from(pre_tokens, "auto", summary, continue_work, model);
+        let info = self.install_summary_from(pre_tokens, trigger, summary, continue_work, model);
         for (uuid, mut msg) in tail_uuids.into_iter().zip(tail) {
             msg.content.retain(|b| !matches!(b, ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }));
             if msg.content.is_empty() {
@@ -2078,7 +2195,7 @@ impl Engine {
         self.state.microcompacted.extend(cleared);
         self.state.context_tokens = self.estimate_sent(&self.state.messages);
         self.state.counted = self.state.messages.len();
-        self.system_event("summary_ahead_applied", json!({"keptMessages": self.state.messages.len() - 1}));
+        self.system_event(event, json!({"keptMessages": self.state.messages.len() - 1}));
         info
     }
 
@@ -2166,8 +2283,9 @@ impl Engine {
         if let Some(n) = notes {
             req.messages = vec![Message::user(vec![ContentBlock::text(n)])];
         }
-        let ask = ContentBlock::text(kodact_compact::summary_instruction(
+        let ask = ContentBlock::text(kodact_compact::summary_instruction_for(
             Some(extra.as_str()).filter(|e| !e.trim().is_empty()),
+            self.reasons(),
         ));
         match req.messages.last_mut() {
             Some(last) if last.role == kodact_types::Role::User => last.content.push(ask),
@@ -2226,6 +2344,12 @@ impl Engine {
                 }
             }
             return Err(EMPTY_SUMMARY.into());
+        }
+        // `compaction.keepRecent`: the latest steps stay as they were, after the summary.
+        if self.cfg.keep_recent && trigger == "auto" {
+            if let Some(at) = self.recent_cut(self.compact_window(model) / 10) {
+                return Ok(self.install_with_tail(trigger, summary, at, continue_work, model, "recent_kept"));
+            }
         }
         Ok(self.install_summary(trigger, summary, continue_work, model))
     }
@@ -2292,6 +2416,7 @@ impl Engine {
             .iter()
             .cloned()
             .chain(self.plan_context())
+            .chain(self.files_context())
             .chain(self.notes_context(self.compact_window(model)))
             .chain(self.handle.skills_context())
             .collect();
@@ -2660,8 +2785,10 @@ impl Engine {
         let cancel = self.new_turn_token();
         let mut req = self.build_request(&model);
         let mut slice = normalize(&self.state.messages[from..to], &self.state.microcompacted);
-        let ask =
-            ContentBlock::text(kodact_compact::summary_instruction(instructions.filter(|i| !i.trim().is_empty())));
+        let ask = ContentBlock::text(kodact_compact::summary_instruction_for(
+            instructions.filter(|i| !i.trim().is_empty()),
+            self.reasons(),
+        ));
         match slice.last_mut() {
             Some(last) if last.role == kodact_types::Role::User => last.content.push(ask),
             _ => slice.push(Message::user(vec![ask])),
@@ -3037,6 +3164,9 @@ impl Engine {
         self.constraints_told = false;
         self.passing_told = false;
         self.unmet_told = false;
+        self.finish_asked = false;
+        self.finish_checked = false;
+        self.turn_request = prompt_text.clone();
         let n = &self.cfg.nudges;
         self.limits = if n.limit_verdicts || n.stale_deliverables {
             crate::limits::Limits::from_request(&prompt_text)
@@ -3080,6 +3210,7 @@ impl Engine {
         let mut reasoning_cutoffs = 0;
         let mut continuing = false;
         let mut budget_warned = false;
+        let mut final_warned = false;
         let mut attempt_reminded = false;
         let mut next_step_reminders = 0u32;
         let mut todo_reminders = 0u32;
@@ -3424,6 +3555,7 @@ impl Engine {
                     _ => 0,
                 })
                 .sum();
+            self.reasoning_seen |= self.last_thought > 0;
             if tool_uses.is_empty() && !reply_has_text {
                 self.effort_step(crate::effort_loop::Step::AllThinking);
             } else {
@@ -3661,8 +3793,16 @@ impl Engine {
                         self.push_user(Message::user_text(text), true, None, true);
                     }
                 }
+                if self.cfg.reminders && !final_warned && !interrupted {
+                    if let Some(text) = self.final_time_warning() {
+                        // The last stage says all the first stage's time warning would, more firmly.
+                        final_warned = true;
+                        self.system_event("time_warning", json!({"stage": "final"}));
+                        self.push_user(Message::user_text(text), true, None, true);
+                    }
+                }
                 if self.cfg.reminders && !budget_warned && !interrupted {
-                    if let Some(text) = self.budget_warning(turn.api_calls) {
+                    if let Some(text) = self.budget_warning(turn.api_calls, final_warned) {
                         budget_warned = true;
                         self.push_user(Message::user_text(text), true, None, true);
                     }
@@ -3832,6 +3972,15 @@ impl Engine {
                 notes.push(text);
             }
 
+            // A Finish that claims the work verified, with nothing else to say: a separate check
+            // reads the conversation as evidence (the 13 deep-thinking false successes of
+            // 2026-11-16 all claimed verified; the model grades its own work kindly).
+            if notes.is_empty() && !refused {
+                if let Some(text) = self.finish_check_note(&model, &cancel, &mut turn).await {
+                    notes.push(text);
+                }
+            }
+
             if !notes.is_empty() {
                 self.push_user(Message::user_text(notes.join("\n\n")), true, None, true);
                 continue;
@@ -3864,6 +4013,16 @@ impl Engine {
             {
                 if let Some(text) = self.background_reminder() {
                     background_reminded = true;
+                    self.push_user(Message::user_text(text), true, None, true);
+                    continue;
+                }
+            }
+
+            // Unattended, a reply that did work and ends in plain text skips the claim a script
+            // reads: asked once for Finish, after every other check (9 of 16 quick-thinking false
+            // successes, 2026-11-17, ended this way).
+            if reply_has_text && stop_reason != Some(StopReason::Refusal) {
+                if let Some(text) = self.finish_missing_note(refused, turn.tool_calls) {
                     self.push_user(Message::user_text(text), true, None, true);
                     continue;
                 }
@@ -4018,9 +4177,34 @@ impl Engine {
         self.todo_reminder_due()
     }
 
+    /// The last stage of the time warning: a twelfth of `--max-time` left, and at least 90
+    /// seconds. Past the first warning's "wrap up", a run still mid-change when the clock stops it
+    /// keeps whatever is on disk then: 24 of the 41 failures of the quick-thinking Harbor run of
+    /// 2026-11-17 were timeouts. Said once a turn.
+    fn final_time_warning(&self) -> Option<String> {
+        let t = self.cfg.time_limit.as_ref()?;
+        let left = t.remaining();
+        if left > (t.total / 12).max(FINAL_WARNING_FLOOR) || left.is_zero() {
+            return None;
+        }
+        let end = if self.cfg.autonomous && self.shared.tools.get(crate::finish::NAME).is_some() {
+            "call Finish, marking what isn't met"
+        } else {
+            "end with what is done, what was verified and what remains"
+        };
+        Some(format!(
+            "<system-reminder>\nAbout {} of the run's time left (--max-time): the run stops at the limit, wherever \
+             you are. Start nothing new. Make sure every file the request asks for is on disk now, in the best \
+             working version you have (put back a better one you tested, if the current one is worse or broken), \
+             run one quick check of it, then {end}.\n</system-reminder>",
+            about(left)
+        ))
+    }
+
     /// A heads-up when this run's turn, spending or time limit is close (GOALS pillar 5), so the model
     /// wraps up with a report instead of being cut off mid-change.
-    fn budget_warning(&self, calls: u32) -> Option<String> {
+    /// Past the last stage of the time warning (`time_told`), only the turn and spending limits.
+    fn budget_warning(&self, calls: u32, time_told: bool) -> Option<String> {
         let turns_left = self.cfg.max_turns.filter(|m| *m >= 6).map(|m| m.saturating_sub(calls)).filter(|l| *l <= 3);
         let money_left = self
             .cfg
@@ -4032,7 +4216,7 @@ impl Engine {
             .cfg
             .time_limit
             .map(|t| (t.remaining(), t.total))
-            .filter(|(left, total)| *left <= (*total / 5).max(Duration::from_secs(60)))
+            .filter(|(left, total)| !time_told && *left <= (*total / 5).max(Duration::from_secs(60)))
             .map(|(left, _)| left);
         let what = match (turns_left, money_left, time_left) {
             (Some(t), _, _) => {
@@ -4917,8 +5101,10 @@ impl Engine {
         if !self.cfg.reminders || !self.cfg.autonomous || self.cfg.is_subagent || refused || self.unmet_told {
             return None;
         }
-        let unmet = crate::finish::unmet(self.pending_finish.as_ref()?);
-        if unmet.is_empty() {
+        let claim = self.pending_finish.as_ref()?;
+        let unlisted = claim["requirements"].as_array().is_none_or(|r| r.is_empty());
+        let unmet = crate::finish::unmet(claim);
+        if unmet.is_empty() && !unlisted {
             return None;
         }
         let clock = match self.cfg.time_limit.as_ref() {
@@ -4935,10 +5121,124 @@ impl Engine {
             None => None,
         };
         self.unmet_told = true;
-        let listed: Vec<&str> = unmet.iter().map(|(r, _)| r.as_str()).collect();
+        if unlisted {
+            self.system_event("verification", json!({"kind": "no_requirements"}));
+            self.notice(NoticeLevel::Info, "The finish lists no requirements: asking the model to list them.");
+            return Some(crate::finish::unlisted_note(clock.as_deref()));
+        }
+        let listed: Vec<&str> = unmet.iter().map(|(r, _, _)| r.as_str()).collect();
         self.system_event("verification", json!({"kind": "unmet_requirements", "unmet": listed}));
         self.notice(NoticeLevel::Info, "The finish lists requirements not shown met: asking the model to meet them.");
         Some(crate::finish::unmet_note(&unmet, clock.as_deref()))
+    }
+
+    /// The separate check of a Finish that claims `verified`: once a turn, unattended, while more
+    /// than the last fifth of the time is left. Only an explicit "not met" sends the model back;
+    /// a check that fails or can't be read lets the claim stand (the check must never cost a run
+    /// that would have passed).
+    async fn finish_check_note(
+        &mut self,
+        model: &str,
+        cancel: &CancellationToken,
+        turn: &mut TurnAcc,
+    ) -> Option<String> {
+        if !self.cfg.finish_check
+            || !self.cfg.reminders
+            || !self.cfg.autonomous
+            || self.cfg.is_subagent
+            || self.finish_checked
+            || self.turn_request.trim().is_empty()
+        {
+            return None;
+        }
+        if self.pending_finish.as_ref()?["verified"] != true {
+            return None;
+        }
+        if let Some(t) = self.cfg.time_limit.as_ref() {
+            if t.remaining() <= (t.total / 5).max(Duration::from_secs(60)) {
+                return None;
+            }
+        }
+        self.finish_checked = true;
+        let transcript = crate::judge::evaluator_transcript(&self.state.messages);
+        let state = self.verification_state().await;
+        let harness = crate::judge::harness_note(state.as_ref(), &self.watched.still_missing());
+        let user = format!(
+            "Goal: the request below is done as stated, every requirement it names met.\n\nRequest:\n{}\n\n\
+             Transcript:\n{transcript}{harness}",
+            self.turn_request.trim()
+        );
+        let check_model = self.cfg.check_model.clone().unwrap_or_else(|| model.to_string());
+        let req = MessagesRequest {
+            model: check_model.clone(),
+            max_tokens: CHECK_MAX_TOKENS,
+            messages: vec![Message::user(vec![ContentBlock::text(user)])],
+            system: vec![kodact_types::SystemBlock::text(crate::judge::EVALUATOR_PROMPT)],
+            tools: vec![],
+            tool_choice: None,
+            thinking: None,
+            temperature: None,
+            metadata: None,
+            output_config: None,
+            speed: None,
+            stream: true,
+            betas: vec![],
+            carry_reasoning: false,
+        };
+        let t0 = Instant::now();
+        let answer = kodact_api::complete(self.shared.provider.as_ref(), req, cancel).await;
+        turn.api_ms += t0.elapsed().as_millis() as u64;
+        let msg = match answer {
+            Ok(m) => m,
+            Err(e) => {
+                self.system_event(
+                    "verification",
+                    json!({"kind": "finish_check", "verdict": "error", "reason": e.to_string()}),
+                );
+                return None;
+            }
+        };
+        self.record_usage(&check_model, &msg.usage, turn);
+        let text: String = msg.content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join("");
+        // Only the checker's explicit "not met" sends the model back. A parse fallback (an answer
+        // cut off by the cap, a met without evidence) is recorded and lets the claim stand.
+        let Some(reason) = crate::judge::explicit_not_met(&text) else {
+            let (verdict, reason) = crate::judge::parse_verdict(&text);
+            let label = match verdict {
+                crate::judge::Verdict::Met => "met",
+                crate::judge::Verdict::Impossible => "impossible",
+                crate::judge::Verdict::NotMet => "unclear",
+            };
+            self.system_event("verification", json!({"kind": "finish_check", "verdict": label, "reason": reason}));
+            return None;
+        };
+        self.system_event("verification", json!({"kind": "finish_check", "verdict": "not_met", "reason": reason}));
+        self.notice(NoticeLevel::Info, format!("The finish check found the request not met yet: {reason}"));
+        Some(crate::finish::check_note(&reason))
+    }
+
+    /// The note for an unattended reply that ends in plain text after the turn did work: once a
+    /// turn, while more than the last fifth of the time is left, and only where Finish is offered.
+    fn finish_missing_note(&mut self, refused: bool, tool_calls: u32) -> Option<String> {
+        if !self.cfg.reminders
+            || !self.cfg.autonomous
+            || self.cfg.is_subagent
+            || refused
+            || self.finish_asked
+            || self.pending_finish.is_some()
+            || tool_calls == 0
+            || self.shared.tools.get(crate::finish::NAME).is_none()
+        {
+            return None;
+        }
+        if let Some(t) = self.cfg.time_limit.as_ref() {
+            if t.remaining() <= (t.total / 5).max(Duration::from_secs(60)) {
+                return None;
+            }
+        }
+        self.finish_asked = true;
+        self.system_event("verification", json!({"kind": "no_finish"}));
+        Some(crate::finish::FINISH_MISSING.to_string())
     }
 
     /// The reminder to send before the turn may end, if one is due.

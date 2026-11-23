@@ -306,6 +306,21 @@ what follows it.
   this session, the task list, the last thing the model wrote, and the
   cut-off analysis when there is one), with `system/compact_fallback`. The
   person's requests come with it, as with every summary.
+- A session whose replies carry reasoning is asked for its summary directly,
+  without the written `<analysis>` pass the prompt asks of other models: it
+  reasons before writing anyway, and asked to think the whole conversation
+  through first it spent its reply doing so (the 34 cut-off summaries above).
+  A model without reasoning keeps the pass.
+- With `compaction.keepRecent` (off until measured), an automatic compaction
+  keeps the most recent complete steps, up to a tenth of the window, word for
+  word after the summary, as a held summary does (`install_with_tail`): the cut
+  is at an assistant message, so each kept tool call keeps its result, and the
+  kept messages lose their reasoning. The summary still covers them. Event
+  `system/recent_kept` `{keptMessages}`.
+- After any compaction, the first message lists the files the session read or
+  wrote that still exist (at most 60 by name and 3,000 characters, the rest
+  counted), so a path the
+  summary dropped isn't guessed or searched for again.
 - A summary asks for the lowest reasoning level (`low`) wherever a level is sent, and always
   to an OpenAI-compatible endpoint: summarizing doesn't need depth, and at full depth a
   reasoning model could spend the whole budget thinking and return no summary.
@@ -465,6 +480,17 @@ fix it or say plainly that it fails. Each reminder:
   unattended);
 - comes once per set of changes: after one, another comes only when a file
   was written, or the worktree changed through the shell, since.
+
+**The Finish check (unattended):** a Finish that claims `verified`, with no
+other reminder due, is checked by a separate request: `kodact_engine::judge`,
+the evaluator `/goal` uses (C18), with the turn's request as the goal, the
+conversation as evidence and the harness's own record of unchecked changes.
+Once a turn, while more than the last fifth of `--max-time` is left, never in
+sub-agents. Only an explicit `not_met` sends the model back (with the reason,
+as `system/verification` `{kind: "finish_check", verdict, reason}`); `met`,
+`impossible`, an answer that can't be read and a failed request let the claim
+stand. `verification.finishCheck` (default on; off too with `reminders`
+off), `goalCheckModel` for its model.
 
 **No reminder when:**
 - the stop reason is `refusal`;
@@ -652,7 +678,12 @@ one reminder per turn when 3 calls (or 15% of the budget) are left. With
 `--max-time`, the first prompt states the time left, and the same reminder
 comes when a fifth of the time (at least a minute) is left. The reminder asks
 first to put back a better earlier version if the one in place tested worse,
-then to finish and report. The limit is counted from the start of the
+then to finish and report. In the last twelfth of the time (at least 90
+seconds), a last stage replaces it, once a turn (`system/time_warning`
+`{stage: "final"}`): start nothing new, make sure every file the request asks
+for is on disk in the best working version, run one quick check, then end
+(unattended: call Finish, marking what isn't met). When both are due at once,
+only the last stage is said. The limit is counted from the start of the
 session; the engine never stops on it.
 
 Tests:
@@ -1059,12 +1090,16 @@ and the reloads keep them. Session end gives them 3 s, then aborts them.
 For runs nobody watches: benchmarks, CI, scripts. Turned on by `--autonomous`,
 `KODACT_AUTONOMOUS=1` or the `autonomous` setting.
 - **Tools:** AskUserQuestion, EnterPlanMode and ExitPlanMode are removed, since
-  nobody answers questions or approves plans.
+  nobody answers questions or approves plans, and so are CronCreate, CronList,
+  CronDelete and ScheduleWakeup: nobody comes back after the run, and a
+  wake-up waits out the clock.
 - **Prompt:** the system prompt gains a "Running unattended" section
-  (`prompts/05-autonomous.md`):
+  (`prompts/05-autonomous.md`), and loses the attended rule of
+  `03-tools.md` to stop and tell the user what the environment lacks (the
+  unattended section says to install it):
   - pick a reasonable reading and go on, instead of asking;
   - make a real attempt before concluding something can't be done;
-  - plan with TodoWrite and finish every step;
+  - finish every step;
   - when improving something by trial, keep the best tested version in place
     (try new ones on a copy) and put it back if a change made things worse;
     note each attempt's result, and after three attempts in a row at one idea
@@ -1128,6 +1163,13 @@ wait. They are not killed for it.
   (`bash_N`), as if started with `run_in_background`. The call returns its ID
   and the output so far (structured: `backgroundTaskId`, `stdout`, `stderr`,
   `interrupted: false`), not an error. Its working directory is not carried over.
+- **Seconds caught:** a `timeout` under 1,000 is refused before the command
+  runs, with the milliseconds to pass. It is seconds written as milliseconds
+  (`30`), and would move the command to the background at once.
+- **No waiting on a person:** every command runs with `PAGER=cat`,
+  `GIT_PAGER=cat` and `GIT_TERMINAL_PROMPT=0` (the session's own variables
+  win). Output goes to a pipe and stdin is closed, so a pager or a credential
+  prompt could only wait for the timeout.
 - **Interrupts** still kill the command's process group (C3), and so does a
   call that goes away mid-command (the session ends) unless the command moved
   to the background. `!command`, hooks and other commands KodAct runs itself
@@ -1213,7 +1255,11 @@ asks for a draft in progress to be written to its file. Tests:
 ## Read limits
 
 - **Text:** reads 2,000 lines by default and cuts lines at 2,000 characters.
-  `offset` and `limit` select a range.
+  `offset` and `limit` select a range. A file over 256 KB needs a range, and a
+  range stops, on a whole line, before its lines pass 256 KB (line numbers not
+  counted). Whenever lines are
+  left out after the range, with or without `limit`, the result ends with
+  "Showing lines X-Y of Z".
 - **Images** (png, jpg, gif, webp): sent as image blocks, up to 5 MB. Larger
   images are rejected with a message.
 - **PDFs:** sent as `document` blocks, up to 32 MB. A PDF over 10 pages needs a
