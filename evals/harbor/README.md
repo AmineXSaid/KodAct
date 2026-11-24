@@ -203,10 +203,23 @@ When a job ends, `run.sh`, `run-forgecode.sh`, `run-ante.sh` and `run-pi.sh` wri
   set apart like an api error, not counted as the agent failing), didn't run
   (Harbor never started the agent: its container didn't start, or its setup
   failed or ran out of time), not judged (the job was stopped after the agent
-  but before the tests ran: no reward, set apart too, never a false success),
-  timeout, crashed.
+  but before its tests finished, or left no result at all: no reward, set apart
+  too, never a false success, and listed even when Harbor wrote no
+  `result.json`), answer key seen and benchmark files seen (the agent got the
+  benchmark's own files, see below: set apart whatever the reward, since the
+  trial measured them, not the harness), timeout, crashed.
+- **The benchmark's own files:** a URL the agent reached (WebFetch, or one
+  named in a command that ran) with the benchmark's name in it, or the task's
+  tests or solution under the task's folder. "answer key seen" when that was
+  tests, a solution or task.toml; "benchmark files seen" for anything else.
+  Lookups kodact refused (`url_blocked`) are counted apart and leave the trial
+  judged on its work. The word alone in a command is no URL (mteb-retrieve's
+  query is "terminal-bench"). Over the 55 jobs recorded up to 2026-11-24 this
+  set apart 2 passes: torch-pipeline-parallelism in df0446d (hidden tests and
+  solution, from a public copy of Terminal-Bench 2.1) and mteb-retrieve in
+  bb73f00 (its data file, from the benchmark's repository).
 - **Run again:** the trials outside the score (api error, verifier error,
-  didn't run, not judged), with the command that runs them again with the same settings,
+  didn't run, not judged, answer key seen, benchmark files seen), with the command that runs them again with the same settings,
   one attempt each (`run.sh subset -i <task> …`, and `-l <n>` past 10 tasks).
   Harbor's `-i` must take several tasks for it; check `harbor run --help` the
   first time. The JSON data lists them as `run_again`.

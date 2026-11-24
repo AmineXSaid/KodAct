@@ -2,6 +2,21 @@
 
 ## 0.1.0 (unreleased)
 
+### Measuring: a trial that read the answer key passes nothing, and a cancelled job shows its trials
+- **The Harbor report sets apart a trial whose agent got the benchmark's own
+  files** ("answer key seen" for tests, a solution or task.toml, "benchmark
+  files seen" for the rest), whatever its reward: outside the score, listed
+  to run again, with the URLs in its details. Passes are now counted by
+  verdict, not reward. Lookups kodact refused are counted apart. Over the 55
+  recorded jobs, 2 passes are set apart (df0446d torch-pipeline-parallelism,
+  bb73f00 mteb-retrieve) and no other verdict changes.
+- **A trial Harbor wrote no `result.json` for is listed** (its job was
+  cancelled, or still runs): "not judged", with the stream's turns and agent
+  time. A one-trial deep-thinking job cancelled during its tests
+  (2026-11-24) read 0/0 with no trial; over the recorded jobs 17 such trials
+  come back, 445 listed instead of 428. "passed among them" no longer shows
+  0/1 when no trial is valid.
+
 ### Blocked URLs: keep the agent off a site, or off a benchmark's answer key
 - **`blockedUrls`** (and `KODACT_BLOCKED_URLS`) lists URLs no tool fetches,
   in every permission mode, `--dangerously-skip-permissions` included, and

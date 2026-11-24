@@ -517,3 +517,101 @@ def test_a_terminal_bench_2_1_job_names_its_dataset_and_its_tasks_by_their_own_n
     config["datasets"] = [{"name": "terminal-bench", "version": "2.0"}]
     (job.path / "config.json").write_text(json.dumps(config))
     assert "- dataset: `terminal-bench@2.0`" in report.Job(job.path).report()
+
+
+def tool_call(call_id: str, name: str, args: dict) -> dict:
+    return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": call_id, "name": name, "input": args}]}}
+
+
+def tool_answer(call_id: str, text: str, error: bool = False) -> dict:
+    return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": call_id, "content": text, "is_error": error}]}}
+
+
+COPY = "https://raw.githubusercontent.com/AI-Harness-Evals/terminal-bench-2-1-native/main/torch-pipeline-parallelism"
+
+
+def test_a_trial_that_read_the_answer_key_is_left_out_of_the_score(tmp_path):
+    # df0446d (2026-11-16): the agent found a public copy of Terminal-Bench 2.1, fetched this
+    # task's hidden tests and solution, and passed. The pass measured the answer key.
+    job = make_job(tmp_path, [("torch-pipeline-parallelism", 1.0, 600, []), ("fix-git", 1.0, 300, [])])
+    d = job.path / "torch-pipeline-parallelism__T"
+    end = {"type": "result", "subtype": "success", "stop_reason": "end_turn", "num_turns": 9}
+    (d / "agent" / "kodact.jsonl").write_text("".join(json.dumps(e) + "\n" for e in [
+        tool_call("t1", "WebFetch", {"url": f"{COPY}/tests/test_outputs.py", "prompt": "verbatim"}),
+        tool_answer("t1", "def test_pipeline_parallel(): ..."),
+        tool_call("t2", "Bash", {"command": f"curl -s {COPY}/solution/solve.sh | head"}),
+        tool_answer("t2", "#!/bin/bash"),
+        end,
+    ]))
+    job = report.Job(job.path)
+    t = next(t for t in job.trials if t.task == "torch-pipeline-parallelism")
+    assert t.verdict == "answer key seen", t.verdict
+    assert t.verdict.startswith(report.INVALID)
+    assert job.score() == (1, 2), "the reward was 1, the pass doesn't count"
+    text = job.report()
+    assert "passed among them: 1/1" in text, text[:900]
+    assert "- torch-pipeline-parallelism: answer key seen" in text
+    assert f"- reached the benchmark's own files: {COPY}/tests/test_outputs.py; {COPY}/solution/solve.sh" in text
+    assert "reached in 1 (torch-pipeline-parallelism)" in text
+    assert "| answer key seen |" in report.comparison([job])
+    assert "✔ answer key seen" not in report.comparison([job])
+
+
+def test_a_lookup_kodact_refused_leaves_the_pass_standing(tmp_path):
+    # With the kit's blockedUrls, kodact refuses the same lookup: the trial is judged on its work.
+    refusal = f"Blocked: {COPY}/tests/test_outputs.py matches \"terminal-bench\" in this session's blocked URLs"
+    events = [
+        tool_call("t1", "WebFetch", {"url": f"{COPY}/tests/test_outputs.py"}),
+        {"type": "system", "subtype": "url_blocked", "tool": "WebFetch", "url": f"{COPY}/tests/test_outputs.py", "entry": "terminal-bench"},
+        tool_answer("t1", refusal, error=True),
+        # The word alone is no URL: mteb-retrieve's query is "terminal-bench".
+        tool_call("t2", "Bash", {"command": "python3 retrieve.py --query terminal-bench"}),
+        tool_answer("t2", "ok"),
+        {"type": "result", "subtype": "success", "stop_reason": "end_turn", "num_turns": 5},
+    ]
+    job = make_job(tmp_path, [("torch-pipeline-parallelism", 1.0, 600, [])])
+    d = job.path / "torch-pipeline-parallelism__T"
+    (d / "agent" / "kodact.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    job = report.Job(job.path)
+    t = job.trials[0]
+    assert t.verdict == "passed" and t.benchmark_reads == [] and t.blocked_lookups == 1, (t.verdict, t.benchmark_reads)
+    text = job.report()
+    assert "- the benchmark's own files: 1 lookups refused in 1 of 1 trials; reached in 0" in text, text
+    assert "- lookups of blocked URLs refused (blockedUrls): 1" in text
+
+
+def test_other_files_of_the_benchmark_are_flagged_too(tmp_path):
+    # bb73f00 (2026-11-17): mteb-retrieve's data file fetched from the Terminal-Bench repository.
+    t = make_trial(tmp_path, "mteb-retrieve", "1", "", ran_tests=None)
+    url = "https://raw.githubusercontent.com/harbor-framework/terminal-bench/main/legacy/mteb-retrieve/environment/task-deps/data.txt"
+    t = set_stream(t, tool_call("t1", "Bash", {"command": f"python - <<'PY'\nimport requests\nprint(requests.get('{url}').text)\nPY"}),
+                   tool_answer("t1", "query: terminal-bench"),
+                   {"type": "result", "subtype": "success", "stop_reason": "end_turn", "num_turns": 3})
+    assert t.verdict == "benchmark files seen", t.verdict
+    assert t.verdict.startswith(report.INVALID)
+
+
+def test_a_cancelled_trial_without_a_result_is_listed_not_judged(tmp_path):
+    # 2026-11-24, deep-thinking: the only trial of a job ran to its time limit, then the job was
+    # cancelled while its tests installed. Harbor wrote no result.json: the report read 0/0 and
+    # left the trial out. It is listed now, cancelled, with the stream's time and turns.
+    job = make_job(tmp_path, [("torch-pipeline-parallelism", 0.0, 0, [])])
+    d = job.path / "torch-pipeline-parallelism__T"
+    (d / "result.json").unlink()
+    (d / "exception.txt").write_text("Traceback ...\nharbor.agents.installed.base.NonZeroAgentExitCodeError: Command failed (exit 1)\n")
+    (d / "trial.log").write_text("Traceback (most recent call last):\n  ...\nasyncio.exceptions.CancelledError\n")
+    end = {"type": "result", "subtype": "error_during_execution", "stop_reason": "max_time", "num_turns": 32, "duration_ms": 869584}
+    (d / "agent" / "kodact.jsonl").write_text(json.dumps(end) + "\n")
+    (job.path / "pending__X").mkdir()  # a trial folder Harbor made but never started: not a trial
+    job = report.Job(job.path)
+    assert [t.task for t in job.trials] == ["torch-pipeline-parallelism"]
+    t = job.trials[0]
+    assert t.verdict == "not judged (cancelled before the tests finished)", t.verdict
+    assert t.turns == 32 and round(t.agent_s) == 870
+    text = job.report()
+    assert "**0/1 passed**" in text and "valid trials (model reached, verifier ran): 0/1; passed among them: 0/0" in text, text[:700]
+    # Without trial.log's cancellation, exception.txt says what it ended with; without either, no result.
+    (d / "trial.log").unlink()
+    assert report.Trial(d).exception == "NonZeroAgentExitCodeError"
+    (d / "exception.txt").unlink()
+    assert report.Trial(d).verdict == "not judged (no result: the job stopped or still runs)"

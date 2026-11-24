@@ -213,8 +213,55 @@ def short_exception(message: str) -> str:
 # "api error before any work"), the tests couldn't judge the work ("verifier error"), or the agent
 # never ran ("didn't run": its container didn't start, or its setup failed or ran out of time, as
 # when endpoint_gate.py holds a trial while the model endpoint doesn't answer). None says anything
-# about the agent; each is listed in the report to run again.
-INVALID = ("api error", "verifier error", "didn't run", "not judged")
+# about the agent; each is listed in the report to run again. So are the trials whose agent read
+# the benchmark's own files ("answer key seen", "benchmark files seen"): they say nothing about
+# the harness either.
+INVALID = ("api error", "verifier error", "didn't run", "not judged", "answer key seen", "benchmark files seen")
+
+# The benchmark's own files, as kodact_agent.py blocks them (BENCHMARK_NAMES): its name in a URL,
+# or a task's tests or solution under the task's own folder wherever it is copied. A trial that read
+# them measured the answer key, not the harness (df0446d, torch-pipeline-parallelism: its hidden
+# tests and solution fetched from a public copy of Terminal-Bench 2.1, and a pass).
+BENCHMARK = re.compile(r"terminal[-_]?bench|tbench\.ai|harbor-framework|laude-institute", re.I)
+ANSWER_KEY = re.compile(r"/tests?(?:/|$|\?)|/solution|solve\.sh|test_outputs\.py|task\.toml", re.I)
+# A URL as a command names it: scheme://…, or host.tld/path as curl and wget take it.
+URL = re.compile(
+    r"""[a-z][a-z0-9+.\-]*://[^\s'"<>|;&()`\\\]\[{}]+"""
+    r"""|(?:^|(?<=[\s'"=(`]))(?:[a-z0-9][\w\-]*@)?(?:[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?[/:][^\s'"<>|;&()`\\\]\[{}]*""",
+    re.I,
+)
+FETCH_TOOLS = ("webfetch", "web_fetch", "fetch")
+SHELL_TOOLS = ("bash", "powershell", "shell", "exec", "run_command")
+
+
+def benchmark_urls(tool: str, args: dict, task: str) -> list[str]:
+    """The URLs a call reached for that are the benchmark's own files: a fetch tool's URL, or the
+    URLs written in a command. The word alone in a command is no URL (mteb-retrieve's query is
+    "terminal-bench"), nor is a file's content."""
+    name = (tool or "").lower()
+    if name in FETCH_TOOLS:
+        text = args.get("url") or ""
+    elif name in SHELL_TOOLS:
+        text = args.get("command") or args.get("cmd") or ""
+    else:
+        return []
+    found = []
+    for u in URL.findall(text if isinstance(text, str) else ""):
+        if BENCHMARK.search(u) or (task and f"/{task}/" in u and ANSWER_KEY.search(u)):
+            found.append(u)
+    return found
+
+
+def exception_from_text(text: str) -> tuple[str, str]:
+    """The last exception in Harbor's exception.txt, as (type, message): what a trial without a
+    result.json (its job was cancelled) ended with. `asyncio.exceptions.CancelledError` is
+    `CancelledError`."""
+    found = ("", "")
+    for line in text.splitlines():
+        m = re.match(r"^([A-Za-z_][\w.]*(?:Error|Exception|Cancelled\w*|Interrupt\w*|Exit))(?::\s*(.*))?$", line.strip())
+        if m:
+            found = (m.group(1).rsplit(".", 1)[-1], m.group(2) or "")
+    return found
 
 # Docker had no address range left for the trial's network (2026-11-19: 11 of 12 trials of one
 # job, run beside another job, while networks of earlier, killed trials were still there). The
@@ -287,6 +334,16 @@ class Trial:
         exc = self.result.get("exception_info") or {}
         self.exception = exc.get("exception_type") or ""
         self.exception_message = exc.get("exception_message") or ""
+        # A trial whose job was cancelled can have no result.json: what it ended with is in
+        # exception.txt (2026-11-24, torch-pipeline-parallelism cancelled during its tests).
+        # Its cancellation is in trial.log; exception.txt holds what went wrong before it, if
+        # anything (there: kodact's exit at its own time limit).
+        self.has_result = (path / "result.json").is_file()
+        if not self.has_result and not self.exception:
+            if "CancelledError" in "\n".join(read(path / "trial.log").splitlines()[-40:]):
+                self.exception, self.exception_message = "CancelledError", "the job was cancelled"
+            elif (path / "exception.txt").is_file():
+                self.exception, self.exception_message = exception_from_text(read(path / "exception.txt"))
         self.agent_s = seconds(self.result.get("agent_execution"))
         self.setup_s = seconds(self.result.get("agent_setup"))
         self.verifier_s = seconds(self.result.get("verifier"))
@@ -328,12 +385,17 @@ class Trial:
         # The separate check of a Finish claim (`verification` of kind `finish_check`): a verdict
         # on the work, not a reminder to the model, so it is kept apart from the reminders.
         self.finish_checks = []
+        # URLs of the benchmark's own files the agent got (a call that wasn't refused), and the
+        # lookups kodact refused (`url_blocked`, blockedUrls).
+        self.benchmark_reads: list[str] = []
+        self.blocked_lookups = 0
         self.retries = []
         self.result_event = None
         self.tokens_in = self.tokens_out = 0
         self.final_text = ""
         steps = 0
         names = {}
+        calls = {}
         for ev in self.events:
             kind = ev.get("type")
             if kind == "assistant":
@@ -345,12 +407,16 @@ class Trial:
                 for b in msg.get("content") or []:
                     if b.get("type") == "tool_use":
                         names[b.get("id")] = b.get("name")
+                        calls[b.get("id")] = b.get("input") if isinstance(b.get("input"), dict) else {}
                         self.tools[b.get("name")] += 1
                     elif b.get("type") == "text" and b.get("text", "").strip():
                         self.final_text = b["text"]
             elif kind == "user":
                 content = (ev.get("message") or {}).get("content")
                 for b in content if isinstance(content, list) else []:
+                    if b.get("type") == "tool_result" and not b.get("is_error"):
+                        tid = b.get("tool_use_id")
+                        self.benchmark_reads += benchmark_urls(names.get(tid, ""), calls.get(tid, {}), self.task)
                     if b.get("type") == "tool_result" and b.get("is_error"):
                         text = tool_text(b)
                         name = names.get(b.get("tool_use_id"), "?")
@@ -368,6 +434,8 @@ class Trial:
                     self.reminders[reminder_label(ev)] += 1
                 if ev["subtype"] == "api_retry":
                     self.retries.append(ev.get("error", ""))
+                if ev["subtype"] == "url_blocked":
+                    self.blocked_lookups += 1
             elif kind == "result":
                 self.result_event = ev
         r = self.result_event or {}
@@ -377,6 +445,9 @@ class Trial:
             self.tokens_out = usage.get("output_tokens") or self.tokens_out
         if r.get("result"):
             self.final_text = r["result"]
+        # Without a result.json (a cancelled job), the agent's time is the stream's own.
+        if self.agent_s is None and r.get("duration_ms"):
+            self.agent_s = r["duration_ms"] / 1000
         # A run that was killed has no result: count its steps instead.
         self.turns = r.get("num_turns", steps if self.kodact else None)
         self.subtype = r.get("subtype") or ("" if not self.kodact else "no result (killed or crashed)")
@@ -420,6 +491,11 @@ class Trial:
     def decide(self) -> str:
         text = self.final_text or ""
         api_error = self.stop_reason == "api_error" or any("API Error" in e for e in self.errors)
+        # The agent read the benchmark's own files: whatever the reward, the trial measured them.
+        if any(ANSWER_KEY.search(u) for u in self.benchmark_reads):
+            return "answer key seen"
+        if self.benchmark_reads:
+            return "benchmark files seen"
         if self.reward is not None and self.reward >= 1:
             return "passed"
         # The agent never ran: Harbor records no `agent_execution` when the container didn't start
@@ -433,7 +509,11 @@ class Trial:
         # ended cleanly (torch-pipeline-parallelism, 2026-11-23), the very count an A/B of the
         # Finish check reads.
         if self.reward is None and self.exception == "CancelledError":
-            return "not judged (cancelled before the tests ran)"
+            return "not judged (cancelled before the tests finished)"
+        # No result.json and no reward: the job stopped (killed, the machine slept) or still runs.
+        # A verifier that ran out of time did judge: that is its own verdict, below.
+        if self.reward is None and not self.has_result and self.exception != "VerifierTimeoutError":
+            return "not judged (no result: the job stopped or still runs)"
         # Out of time: killed by Harbor at the limit, or stopped by KodAct itself (`--max-time`).
         if self.exception == "AgentTimeoutError" or self.stop_reason == "max_time":
             return "timeout"
@@ -514,6 +594,10 @@ class Trial:
             out.append(f"- finish: {self.subtype} / {self.stop_reason or '-'}")
         if getattr(self, "flagged", None):
             out.append("- KodAct's result flagged: " + "; ".join(self.flagged))
+        if self.benchmark_reads:
+            out.append("- reached the benchmark's own files: " + "; ".join(dict.fromkeys(self.benchmark_reads)))
+        if self.blocked_lookups:
+            out.append(f"- lookups of blocked URLs refused (blockedUrls): {self.blocked_lookups}")
         for e in self.errors:
             out.append(f"- error: {clip(e, 400)}")
         if self.system:
@@ -627,6 +711,8 @@ class Trial:
             "system_events": dict(self.system),
             "reminders": dict(self.reminders),
             "finish_checks": [c.get("verdict") for c in getattr(self, "finish_checks", [])],
+            "benchmark_reads": list(dict.fromkeys(self.benchmark_reads)),
+            "blocked_lookups": self.blocked_lookups,
             "api_retries": len(self.retries),
             "http_429": self.http_429,
             "tests": self.verifier["summary"],
@@ -643,7 +729,13 @@ class Job:
         self.name = path.name
         self.config = load_json(path / "config.json") or {}
         self.result = load_json(path / "result.json") or {}
-        self.trials = [Trial(p) for p in sorted(path.iterdir()) if p.is_dir() and (p / "result.json").is_file()]
+        # A trial with no result.json still counts when it started: its job was cancelled or
+        # still runs (it used to vanish, and a one-trial job read 0/0).
+        self.trials = [
+            Trial(p)
+            for p in sorted(path.iterdir())
+            if p.is_dir() and any((p / f).exists() for f in ("result.json", "agent", "exception.txt"))
+        ]
         # Which Terminal-Bench: terminal-bench@2.0, or terminal-bench/terminal-bench-2-1@latest.
         ds = (self.config.get("datasets") or [{}])[0]
         at = ds.get("version") or ds.get("ref")
@@ -666,7 +758,8 @@ class Job:
         self.served_window = meta.get("served_window")
 
     def score(self) -> tuple[int, int]:
-        return sum(1 for t in self.trials if (t.reward or 0) >= 1), len(self.trials)
+        # A pass is the verdict, not the reward: a trial that saw the answer key passed nothing.
+        return sum(1 for t in self.trials if t.verdict == "passed"), len(self.trials)
 
     def run_again(self) -> list["Trial"]:
         """The trials outside the score (INVALID): to run again, as they say nothing yet."""
@@ -701,7 +794,7 @@ class Job:
             "",
             f"- **{passed}/{n} passed** (mean {passed / n if n else 0:.2f})",
             f"- valid trials (model reached, verifier ran): {len(valid)}/{n}; "
-            f"passed among them: {sum(1 for t in valid if (t.reward or 0) >= 1)}/{len(valid) or 1}",
+            f"passed among them: {sum(1 for t in valid if t.verdict == 'passed')}/{len(valid)}",
             "- verdicts: " + ", ".join(f"{k} {v}" for k, v in verdicts.most_common()),
             "",
         ]
@@ -711,7 +804,8 @@ class Job:
                 "## Run again",
                 "",
                 f"{len(again)} trial{'' if len(again) == 1 else 's'} outside the score: the model endpoint didn't "
-                "answer, the tests couldn't judge the work, or the agent never ran. Run them again with the "
+                "answer, the tests couldn't judge the work, the agent never ran, or it read the benchmark's own "
+                "files. Run them again with the "
                 "same settings, one attempt each:",
                 "",
                 "```bash",
@@ -754,6 +848,14 @@ class Job:
         api = Counter(clip(e, 160) for t in self.trials for e in t.errors)
         out += ["", "## Signals", ""]
         out.append(f"- HTTP 429 seen: {sum(t.http_429 for t in self.trials)}; API retries: {sum(len(t.retries) for t in self.trials)}")
+        refused = [t for t in self.trials if t.blocked_lookups]
+        reached = [t for t in self.trials if t.benchmark_reads]
+        if refused or reached:
+            out.append(
+                f"- the benchmark's own files: {sum(t.blocked_lookups for t in refused)} lookups refused in "
+                f"{len(refused)} of {len(self.trials)} trials; reached in {len(reached)}"
+                + (" (" + ", ".join(t.task for t in reached) + ")" if reached else "")
+            )
         if api:
             out.append("- run-ending errors: " + "; ".join(f"{k} ×{v}" for k, v in api.most_common(6)))
         if kinds:
@@ -850,7 +952,7 @@ def comparison(jobs: list[Job]) -> str:
         cells = []
         for j in jobs:
             t = next((t for t in j.trials if t.task == task), None)
-            cells.append("" if t is None else ("✔ " if (t.reward or 0) >= 1 else "") + t.verdict)
+            cells.append("" if t is None else ("✔ " if t.verdict == "passed" else "") + t.verdict)
         out.append(f"| {task} | " + " | ".join(cells) + " |")
     out += ["", "Columns: " + "; ".join(f"({i + 1}) {j.name}" for i, j in enumerate(jobs)), ""]
     return redact("\n".join(out))
