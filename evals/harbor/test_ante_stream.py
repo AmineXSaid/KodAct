@@ -11,7 +11,7 @@ still shows what it was writing.
 import json
 
 import report
-from ante_stream import AnteStream
+from ante_stream import AnteStream, result_text
 
 
 def ev(name, data=None):
@@ -85,3 +85,11 @@ def test_the_report_reads_an_ante_trial(tmp_path):
     assert t.tokens_out == 330
     assert t.final_text == "Done: data.comp is 2,301 bytes."
     assert any("→ bash" in line for line in t.conversation())
+
+
+def test_a_command_result_reads_as_its_output():
+    # As the 2026-11-24 job's watch showed it: the outcome wrapped around the command's result.
+    wrapped = {"Completed": {"exit_code": 127, "stderr": "bash: python3: command not found\n", "stdout": "In information theory\n"}}
+    assert result_text(wrapped) == "In information theory\nbash: python3: command not found\n(exit 127)"
+    assert result_text({"Completed": {"exit_code": 0, "stdout": "4868 /app/data.txt\n"}}) == "4868 /app/data.txt"
+    assert result_text("plain") == "plain"

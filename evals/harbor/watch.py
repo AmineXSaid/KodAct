@@ -787,8 +787,10 @@ def changed_at(log: Path) -> float | None:
         return None
 
 
-def trial_error(trial: Path) -> str:
-    """How a trial ended in a Harbor error, from its exception.txt: the error's last line."""
+def trial_error(trial: Path, seen: bool = False) -> str:
+    """How a trial ended in a Harbor error, from its exception.txt: the error's last line.
+    `seen`: the watch read the agent's logs (perhaps from its container, the files here being
+    unreadable), so the agent ran."""
     try:
         lines = [ln.strip() for ln in (trial / "exception.txt").read_text(errors="replace").splitlines() if ln.strip()]
     except OSError:
@@ -800,7 +802,7 @@ def trial_error(trial: Path) -> str:
         return ""
     last = errors[-1]
     name = last.split(":", 1)[0].rsplit(".", 1)[-1]
-    ran = any((trial / "agent").glob("*.jsonl"))
+    ran = seen or any((trial / "agent").glob("*.jsonl"))
     where = {
         "EnvironmentStartTimeoutError": "the container didn't start; the agent never ran",
         "VerifierTimeoutError": "the tests ran out of time; nothing was scored",
@@ -1003,7 +1005,8 @@ def main() -> None:
                 else:
                     guessed.discard(log)
                 news[trial] = max(news.get(trial, 0), seen_at[log])
-            if trial not in failed and (text := trial_error(trial)):
+            seen = any(lg.parent.parent == trial and c.steps for lg, c in chats.items())
+            if trial not in failed and (text := trial_error(trial, seen)):
                 failed.add(trial)
                 screen.show(trial.name, [text])
             reward = trial / "verifier" / "reward.txt"

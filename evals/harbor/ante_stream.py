@@ -35,6 +35,22 @@ def _text(value) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def result_text(value) -> str:
+    """A tool's result as text. Ante wraps it in its outcome (`{"Completed": {...}}`); a command's
+    is `exit_code`, `stdout` and `stderr`, shown as KodAct shows a command's output."""
+    if isinstance(value, dict) and len(value) == 1:
+        inner = next(iter(value.values()))
+        if isinstance(inner, (dict, str)):
+            value = inner
+    if isinstance(value, dict) and ("stdout" in value or "stderr" in value):
+        parts = [_text(value.get("stdout")).rstrip("\n"), _text(value.get("stderr")).rstrip("\n")]
+        code = value.get("exit_code")
+        if isinstance(code, int) and code != 0:
+            parts.append(f"(exit {code})")
+        return "\n".join(p for p in parts if p)
+    return _text(value)
+
+
 class AnteStream:
     """Feed Ante's events in order; each call returns the stream-json events they amount to."""
 
@@ -86,7 +102,7 @@ class AnteStream:
             block = {
                 "type": "tool_result",
                 "tool_use_id": data.get("tool_use_id"),
-                "content": _text(data.get("result_json")),
+                "content": result_text(data.get("result_json")),
                 "is_error": status != OK,
             }
             out.append({"type": "user", "message": {"role": "user", "content": [block]}})
