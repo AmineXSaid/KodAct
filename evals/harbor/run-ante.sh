@@ -5,7 +5,7 @@
 #           ANTE_BIN (the static Linux binary uploaded to each container, default ~/.ante/bin/ante),
 #           ANTE_PROVIDER (openai-compatible), ANTE_INSTALL_ARGS (empty = stable),
 #           ANTE_HARBOR_ARGS (default "--yolo --no-session-save --no-skills", as Ante's own
-#           Harbor agent runs it, minus JSON output),
+#           Harbor agent runs it; --output-format json is always added, for the report),
 #           KODACT_HARBOR_JOBS (tasks in parallel, default 2), KODACT_HARBOR_DATASET,
 #           KODACT_HARBOR_CA_BUNDLE (label only for now)
 set -euo pipefail
@@ -48,11 +48,37 @@ ca=""; [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && ca="-hostca"
 [ -n "${KODACT_HARBOR_PIP_CACHE:-}" ] && ca="${ca}-pipcache"
 [ -n "${KODACT_HARBOR_APT_CACHE:-}" ] && ca="${ca}-aptcache"
 [ -n "${KODACT_HARBOR_HF_ENDPOINT:-}" ] && ca="${ca}-hfmirror"
+# As run.sh does: which model the endpoint serves behind this name, and its window, recorded in
+# each trial's run.json, so an Ante job and a KodAct job can be checked to be on the same model.
+if [ "${KODACT_HARBOR_PROBE:-1}" != 0 ]; then
+  probe="$(python3 "$repo/evals/harbor/probe_model.py" "$model" 2>/dev/null || true)"
+  served="${probe%%$'\t'*}"
+  window="${probe#*$'\t'}"
+  [ "$window" = "$probe" ] && window=""
+  if [ -n "$served" ]; then
+    echo "endpoint: $model is served by $served${window:+ (window $window tokens)}"
+    export KODACT_HARBOR_SERVED_MODEL="$served"
+  fi
+  [ -n "$window" ] && export KODACT_HARBOR_SERVED_WINDOW="$window"
+fi
 job="ante-${mode}-${dataset_tag}-${model_tag}-${install:-stable}${ca}-$(date +%Y%m%d-%H%M%S)"
 echo "job: $job"
 
 # ante_agent.py reads these on this machine too (endpoint host, container URL), not only in the container.
 export OPENAI_COMPATIBLE_BASE_URL="$KODACT_OPENAI_BASE_URL" OPENAI_COMPATIBLE_API_KEY="$KODACT_OPENAI_API_KEY"
+
+# As run.sh does: Docker networks a killed run left behind, over 10 minutes old and unused.
+if command -v docker >/dev/null 2>&1; then
+  now=$(date +%s)
+  for net in $(docker network ls --filter name=__env_default --format '{{.Name}}' 2>/dev/null); do
+    info=$(docker network inspect -f '{{len .Containers}} {{.Created.Unix}}' "$net" 2>/dev/null) || continue
+    attached=${info%% *}
+    created=${info##* }
+    if [ "$attached" = 0 ] && [ $((now - created)) -gt 600 ]; then
+      docker network rm "$net" >/dev/null 2>&1 && echo "removed leftover Docker network $net"
+    fi
+  done
+fi
 
 # The report is written even when harbor fails part way.
 status=0

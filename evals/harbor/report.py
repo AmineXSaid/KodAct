@@ -14,7 +14,8 @@ end holds the same numbers for scripts. With several jobs, a comparison
 (`jobs/comparison-<time>.md`) puts the tasks side by side.
 
 Works for KodAct (`agent/kodact.jsonl`), for Pi (`agent/pi.jsonl`, read through
-pi_stream.py) and for other agents (Forge Code, Ante, ...), whose `agent/*.stdout.txt`
+pi_stream.py), for Ante (`agent/ante.jsonl`, read through ante_stream.py) and for other
+agents (Forge Code, older Ante jobs, ...), whose `agent/*.stdout.txt`
 and `*.stderr.txt` are included as text. API keys are removed before anything is
 written. run.sh, run-forgecode.sh, run-ante.sh and run-pi.sh call this script when
 their job ends.
@@ -31,6 +32,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+from ante_stream import AnteStream
 from pi_stream import PiStream
 
 TEXT = 2000  # characters kept from a message of the model
@@ -297,12 +299,12 @@ class Trial:
             self.limit_s = self.run_meta["time_limit_s"]
         self.instruction = read(path / "agent" / "instruction.txt")
         self.events: list[dict] = []
-        # A structured stream: KodAct's stream-json, or Pi's events in the same shape.
-        pi = (path / "agent" / "pi.jsonl").is_file()
-        stream = path / "agent" / ("pi.jsonl" if pi else "kodact.jsonl")
-        self.stderr_name = "pi.stderr.txt" if pi else "kodact.stderr.txt"
+        # A structured stream: KodAct's stream-json, or Pi's or Ante's events in the same shape.
+        own = next((n for n in ("pi", "ante") if (path / "agent" / f"{n}.jsonl").is_file()), "kodact")
+        stream = path / "agent" / f"{own}.jsonl"
+        self.stderr_name = f"{own}.stderr.txt"
         self.kodact = stream.is_file()
-        translate = PiStream() if pi else None
+        translate = {"pi": PiStream, "ante": AnteStream}.get(own, lambda: None)()
         if self.kodact:
             for line in read(stream).splitlines():
                 try:
@@ -311,6 +313,9 @@ class Trial:
                     continue
                 if isinstance(ev, dict):
                     self.events.extend(translate.feed(ev) if translate else [ev])
+            # A stopped run's reply still being written (Ante): where its last minutes went.
+            if hasattr(translate, "flush"):
+                self.events.extend(translate.flush())
         self.other_logs = {
             p.name: read(p)
             for p in sorted((path / "agent").glob("*"))

@@ -23,9 +23,10 @@ the work or an API error when the model endpoint didn't answer, both left out of
 the score. While the model thinks or a command runs, a
 line every minute says so and for how long.
 
-KodAct's stream-json (kodact.jsonl) and Pi's event stream (pi.jsonl, read
-through pi_stream.py) are shown this way. Any other *.jsonl / *.stdout.txt /
-*.stderr.txt in a task's agent/ folder (Ante, Forge Code, ...) is shown line by
+KodAct's stream-json (kodact.jsonl), Pi's event stream (pi.jsonl, read through
+pi_stream.py) and Ante's (ante.jsonl, read through ante_stream.py) are shown this
+way. Any other *.jsonl / *.stdout.txt / *.stderr.txt in a task's agent/ folder
+(Forge Code, ...) is shown line by
 line as plain text. A trial that ends in a Harbor error (a container that
 doesn't start, tests that time out) is shown too, with whether the agent ran.
 
@@ -45,6 +46,7 @@ import textwrap
 import time
 from pathlib import Path
 
+from ante_stream import AnteStream
 from pi_stream import PiStream
 from report import VERIFIER_ENV, VERIFIER_INFRA, VERIFIER_TOOLS, tests_unjudged
 
@@ -618,7 +620,7 @@ def render_compact(event: dict, who: str = "KodAct") -> list[str]:
 # ---- reading the logs ------------------------------------------------------------------------
 
 
-def handle(line: str, is_err: bool, chat: "Chat | None" = None, pi: PiStream | None = None, shown=()) -> list[str]:
+def handle(line: str, is_err: bool, chat: "Chat | None" = None, pi: PiStream | AnteStream | None = None, shown=()) -> list[str]:
     """One log line -> display lines: stream-json events are rendered, anything else shown as text.
 
     `pi` translates the lines of a Pi event stream first; a stderr line in `shown` (the run's
@@ -908,7 +910,7 @@ def main() -> None:
     offsets: dict[Path, int] = {}
     pending: dict[Path, str] = {}
     chats: dict[Path, Chat] = {}
-    pi_streams: dict[Path, PiStream] = {}
+    pi_streams: dict[Path, PiStream | AnteStream] = {}
     seen_at: dict[Path, float] = {}  # when each log last had news
     guessed: set[Path] = set()  # logs whose last news came before the watch, when unknown
     news: dict[Path, float] = {}  # when each trial last had news
@@ -975,8 +977,9 @@ def main() -> None:
                         pending[log] = lines[-1]  # partial JSON line: finish it on the next read
                     lines = lines[:-1]
                 is_err = log.name.endswith(".stderr.txt")
-                pi = pi_streams.setdefault(log, PiStream()) if log.name == "pi.jsonl" else None
-                chat = chats.setdefault(log, Chat("Pi" if pi is not None else "KodAct"))
+                own = {"pi.jsonl": ("Pi", PiStream), "ante.jsonl": ("Ante", AnteStream)}.get(log.name)
+                pi = pi_streams.setdefault(log, own[1]()) if own else None
+                chat = chats.setdefault(log, Chat(own[0] if own else "KodAct"))
                 # How long the step that just arrived took: since the log's news before it. A
                 # log's first read has nothing earlier to count from.
                 first = log not in seen_at
