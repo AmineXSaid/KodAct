@@ -169,3 +169,56 @@ async fn a_mode_change_mid_turn_applies_at_once_and_reaches_the_model() {
     h.close_stdin();
     h.wait().await;
 }
+
+/// The desktop's "Bypass permissions while it still asks" (2026-11-24): a chat
+/// launched in Auto without `--allow-dangerously-skip-permissions` is switched to
+/// Bypass. The switch is refused, and the host is told the mode the engine is
+/// really in, so its menu can't say Bypass while `rm` still asks. Launched with
+/// the flag, the same switch is granted, reported, and nothing asks.
+#[tokio::test]
+async fn a_mode_switch_reports_the_mode_the_engine_is_in() {
+    for (extra, granted) in [(&[][..], false), (&["--allow-dangerously-skip-permissions"][..], true)] {
+        let e = env();
+        let api =
+            MockApi::start(vec![MockTurn::tool("Bash", json!({"command": "rm junk.txt"})), MockTurn::text("done")])
+                .await;
+        let mut args = vec![
+            "-p",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--permission-prompt-tool",
+            "stdio",
+            "--permission-mode",
+            "auto",
+        ];
+        args.extend_from_slice(extra);
+        let mut h = Host::spawn(command(&kodact_bin(), &e.cwd, &e.home, &api.url, &args));
+        h.send(json!({"type": "control_request", "request_id": "b1",
+            "request": {"subtype": "set_permission_mode", "mode": "bypassPermissions"}}))
+            .await;
+        let reply: Value = h.until(|v| v["type"] == "control_response" && v["response"]["request_id"] == "b1").await;
+        assert_eq!(reply["response"]["subtype"] == "success", granted, "{reply}");
+        let status: Value = h.until(|v| v["type"] == "system" && v["subtype"] == "status").await;
+        let expected = if granted { "bypassPermissions" } else { "auto" };
+        assert_eq!(status["permissionMode"], expected, "{status}");
+
+        h.send_user("tidy up").await;
+        let next: Value = h.until(|v| v["type"] == "result" || v["type"] == "control_request").await;
+        if granted {
+            assert_eq!(next["type"], "result", "Bypass asked: {next}");
+            assert!(!e.cwd.join("junk.txt").exists(), "rm ran unasked in Bypass");
+        } else {
+            assert_eq!(next["type"], "control_request", "Auto still asks before a removal: {next}");
+            let id = next["request_id"].as_str().unwrap().to_string();
+            h.send(json!({"type": "control_response", "response": {"subtype": "success", "request_id": id,
+                "response": {"behavior": "deny", "message": "no"}}}))
+                .await;
+            h.until_type("result").await;
+        }
+        h.close_stdin();
+        h.wait().await;
+    }
+}

@@ -16,6 +16,20 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::output::Out;
 
+/// `{"type":"system","subtype":"status","status":null,"permissionMode":...}`: the mode a
+/// host shows, sent after every `set_permission_mode` whether it was granted or refused.
+pub(crate) fn status_mode_message(mode: PermissionMode, session_id: &str) -> SdkMessage {
+    SdkMessage::System(kodact_types::sdk::SystemMessage::new(
+        "status",
+        json!({
+            "status": null,
+            "permissionMode": mode.as_str(),
+            "session_id": session_id,
+            "uuid": kodact_types::new_uuid(),
+        }),
+    ))
+}
+
 type Pending = Arc<Mutex<Waiters>>;
 
 /// Permission requests waiting for the host's answer.
@@ -145,6 +159,12 @@ impl ControlContext {
         self.out.line(&msg);
     }
 
+    /// `system/status` with the engine's permission mode as it is now.
+    fn status_mode(&self) {
+        let mode = self.live.handle().permissions.read().unwrap().mode;
+        self.out.line(&status_mode_message(mode, &self.live.session_id()));
+    }
+
     /// Answer an immediate command (`/status`, `/usage`, ...) at once, from the session view,
     /// with a `result` line marked `"immediate": true`. It never reaches the turn loop, so a
     /// turn in progress goes on; its own result comes later, without the mark.
@@ -194,19 +214,24 @@ impl ControlContext {
                     None => self.answer(id, Err("task_id or all: true is required".into())),
                 }
             }
-            "set_permission_mode" => match b.get_str("mode").and_then(PermissionMode::parse) {
-                Some(PermissionMode::BypassPermissions) if !self.bypass_allowed => self.answer(
-                    id,
-                    Err("bypassPermissions needs --allow-dangerously-skip-permissions at launch, and managed \
-                         settings must not disable it"
-                        .into()),
-                ),
-                Some(m) => {
-                    self.live.handle().set_permission_mode(m);
-                    self.answer(id, Ok(None));
+            "set_permission_mode" => {
+                match b.get_str("mode").and_then(PermissionMode::parse) {
+                    Some(PermissionMode::BypassPermissions) if !self.bypass_allowed => self.answer(
+                        id,
+                        Err("bypassPermissions needs --allow-dangerously-skip-permissions at launch, and managed \
+                             settings must not disable it"
+                            .into()),
+                    ),
+                    Some(m) => {
+                        self.live.handle().set_permission_mode(m);
+                        self.answer(id, Ok(None));
+                    }
+                    None => self.answer(id, Err(format!("invalid permission mode {:?}", b.data.get("mode")))),
                 }
-                None => self.answer(id, Err(format!("invalid permission mode {:?}", b.data.get("mode")))),
-            },
+                // Granted or refused, the host learns the mode the engine is really in, so a
+                // UI never shows a mode (Bypass) while the engine still asks in another (Auto).
+                self.status_mode();
+            }
             // Take back a message sent for the turn's next step, if it hasn't reached the model.
             "cancel_queued" => {
                 let cancelled = b.get_str("uuid").is_some_and(|u| self.live.handle().cancel_steer(u));

@@ -1,0 +1,59 @@
+diff --git a/src/modes.rs b/src/modes.rs
+index c338a84..6c618e4 100644
+--- a/src/modes.rs
++++ b/src/modes.rs
+@@ -180,17 +180,18 @@ pub fn flag_settings(profile: Option<&std::path::Path>) -> Option<String> {
+     profile.map(|p| p.to_string_lossy().into_owned())
+ }
+ 
+-/// The flags a chat's `kodact` process starts with for `mode`. While Bypass
+-/// is allowed the switch is always passed, so the mode can change mid-session.
+-pub fn cli_args(mode: ModeId, bypass_allowed: bool) -> Vec<String> {
+-    let mut args = vec![
++/// The flags a chat's `kodact` process starts with for `mode`. The switch
++/// that lets KodAct CLI enter Bypass later is always passed: the gate is the
++/// desktop's own Bypass warning, and `bypass_allowed` is not kept between
++/// launches, so a chat started before you allowed Bypass would otherwise
++/// refuse the switch and keep asking while the menu says "Bypass permissions"
++/// (2026-11-24). The flag only permits the switch; it changes no mode.
++pub fn cli_args(mode: ModeId, _bypass_allowed: bool) -> Vec<String> {
++    vec![
+         "--permission-mode".to_string(),
+         mode.permission().cli_name().to_string(),
+-    ];
+-    if bypass_allowed {
+-        args.push("--allow-dangerously-skip-permissions".into());
+-    }
+-    args
++        "--allow-dangerously-skip-permissions".to_string(),
++    ]
+ }
+ 
+ #[cfg(test)]
+@@ -228,16 +229,23 @@ mod tests {
+         }
+         assert_eq!(ModeId::from_cli("auto"), Some(ModeId::Auto));
+         assert_eq!(ModeId::from_cli("dontAsk"), Some(ModeId::DontAsk));
+-        assert_eq!(cli_args(ModeId::Auto, false), ["--permission-mode", "auto"]);
++        assert_eq!(
++            cli_args(ModeId::Auto, false),
++            ["--permission-mode", "auto", "--allow-dangerously-skip-permissions"]
++        );
+     }
+ 
+     #[test]
+     fn what_the_cli_is_given() {
++        // A chat started before Bypass was allowed can still switch to it.
+         assert_eq!(
+             cli_args(ModeId::Manual, false),
+-            ["--permission-mode", "default"]
++            [
++                "--permission-mode",
++                "default",
++                "--allow-dangerously-skip-permissions"
++            ]
+         );
+-        assert_eq!(cli_args(ModeId::Plan, false), ["--permission-mode", "plan"]);
+         assert_eq!(
+             cli_args(ModeId::AcceptEdits, true),
+             [
