@@ -222,3 +222,43 @@ async fn a_mode_switch_reports_the_mode_the_engine_is_in() {
         h.wait().await;
     }
 }
+
+/// A skill's own scripts sit in its plugin folder, outside the project. Reading them
+/// (`ls`, `cat`, Read) asked in every mode but Bypass, though the skill tells the model
+/// to; in Auto even running them didn't ask. Now a loaded plugin's folder reads freely.
+#[tokio::test]
+async fn a_plugins_own_files_read_without_asking() {
+    let e = env();
+    let plugin = e.home.join("plugin").join("kodact");
+    std::fs::create_dir_all(plugin.join("skills/office/scripts")).unwrap();
+    std::fs::write(plugin.join("skills/office/SKILL.md"), "---\nname: office\ndescription: d\n---\nbody").unwrap();
+    std::fs::write(plugin.join("skills/office/scripts/tool.py"), "print(1)").unwrap();
+    let scripts = plugin.join("skills/office/scripts");
+    let api = MockApi::start(vec![
+        MockTurn::tool("Bash", json!({"command": format!("ls {}", scripts.display())})),
+        MockTurn::tool("Read", json!({"file_path": scripts.join("tool.py")})),
+        MockTurn::text("done"),
+    ])
+    .await;
+    let plugin_s = plugin.to_string_lossy().into_owned();
+    let args = [
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--permission-prompt-tool",
+        "stdio",
+        "--permission-mode",
+        "auto",
+        "--plugin-dir",
+        &plugin_s,
+    ];
+    let mut h = Host::spawn(command(&kodact_bin(), &e.cwd, &e.home, &api.url, &args));
+    h.send_user("look at the skill").await;
+    let next: Value = h.until(|v| v["type"] == "result" || v["type"] == "control_request").await;
+    assert_eq!(next["type"], "result", "reading the plugin's files asked: {next}");
+    h.close_stdin();
+    h.wait().await;
+}

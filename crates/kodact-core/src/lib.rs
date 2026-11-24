@@ -995,6 +995,13 @@ pub fn build_session(
     // Output too long for a tool result is saved here, and may be read back without a prompt.
     let spill_dir = kodact_config::cache_dir().join("tool-output").join(&session_id);
     permissions.add_read_dir(&spill_dir);
+    // A plugin's or skill's own files (its scripts, templates, references) are read
+    // without a prompt: the skill tells the model to look at them. Writing there still asks.
+    for dir in plugins.iter().map(|p| &p.dir).chain(skills.iter().map(|s| &s.dir)) {
+        if !dir.as_os_str().is_empty() {
+            permissions.add_read_dir(dir);
+        }
+    }
 
     // Tools.
     let mut tools = ToolRegistry::new();

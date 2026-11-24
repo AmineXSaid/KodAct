@@ -125,18 +125,104 @@ const RISKY: &[&str] = &[
 /// privilege escalation, force-pushes, raw device writes).
 pub(crate) fn auto_mode_allows(command: &str) -> bool {
     let parts = split_compound(command);
-    !parts.is_empty()
-        && parts.iter().all(|p| {
-            let p = p.trim();
-            let first = p.split_whitespace().next().unwrap_or("");
-            !matches!(first, "rm" | "rmdir" | "unlink" | "shred" | "sudo" | "su" | "mkfs" | "dd")
-                && !RISKY.iter().any(|r| p.contains(r))
-        })
+    !parts.is_empty() && parts.iter().all(|p| part_allowed(p.trim(), 0))
+}
+
+/// Programs that remove files or what is in them, on Unix and on Windows (cmd and
+/// PowerShell, whose names are case-insensitive): Auto asks before each.
+const REMOVERS: &[&str] = &[
+    "rm",
+    "rmdir",
+    "unlink",
+    "shred",
+    "sudo",
+    "su",
+    "mkfs",
+    "dd",
+    "del",
+    "erase",
+    "rd",
+    "remove-item",
+    "ri",
+    "clear-content",
+    "clc",
+    "format",
+    "takeown",
+    "icacls",
+];
+
+/// Shells that run a command given as an argument: what they run is checked too.
+const WRAPPERS: &[&str] = &["powershell", "pwsh", "cmd", "bash", "sh"];
+
+fn program(word: &str) -> String {
+    let w = word.trim_matches(['"', '\'', '&', '(']).to_ascii_lowercase();
+    let base = w.rsplit(['/', '\\']).next().unwrap_or(&w).to_string();
+    base.strip_suffix(".exe").map(str::to_string).unwrap_or(base)
+}
+
+fn part_allowed(p: &str, depth: u8) -> bool {
+    if RISKY.iter().any(|r| p.contains(r)) {
+        return false;
+    }
+    let words: Vec<&str> = p.split_whitespace().collect();
+    let Some(first) = words.first() else { return true };
+    let first = program(first);
+    if REMOVERS.contains(&first.as_str()) {
+        return false;
+    }
+    // `powershell -Command "Remove-Item x"`, `cmd /c del x`, `bash -c "rm x"`.
+    if WRAPPERS.contains(&first.as_str()) && depth < 3 {
+        let at = words.iter().position(|w| {
+            let w = w.to_ascii_lowercase();
+            matches!(w.as_str(), "-c" | "/c" | "/k" | "-command" | "-encodedcommand" | "-ec")
+        });
+        if let Some(i) = at {
+            if matches!(words[i].to_ascii_lowercase().as_str(), "-encodedcommand" | "-ec") {
+                return false; // what it runs can't be read: ask.
+            }
+            let inner = words[i + 1..].join(" ");
+            let inner = inner.trim().trim_matches(['"', '\'']);
+            return split_compound(inner).iter().all(|q| part_allowed(q.trim(), depth + 1));
+        }
+    }
+    true
 }
 
 #[cfg(test)]
 mod tests {
-    use super::PermissionMode;
+    use super::{auto_mode_allows, PermissionMode};
+
+    #[test]
+    fn auto_asks_before_windows_removals_too() {
+        for c in [
+            "del /q build\\out.txt",
+            "rd /s /q pages",
+            "rmdir /s pages",
+            "Remove-Item -Recurse pages",
+            "remove-item pages",
+            "ri pages",
+            "Clear-Content notes.txt",
+            "C:\\Windows\\System32\\cmd.exe /c del x",
+            "cmd /c \"del x\"",
+            "powershell -NoProfile -Command \"Remove-Item -Recurse pages\"",
+            "pwsh.exe -c 'ri pages'",
+            "powershell -EncodedCommand SQBFAFgA",
+            "bash -c \"rm -r pages\"",
+            "cd pages && rm -rf x",
+        ] {
+            assert!(!auto_mode_allows(c), "{c} should ask in Auto");
+        }
+        for c in [
+            "python build_deck.py",
+            "powershell -NoProfile -ExecutionPolicy Bypass -File render.ps1",
+            "powershell -Command \"Get-ChildItem pages\"",
+            "cmd /c dir",
+            "cargo build",
+            "echo rd",
+        ] {
+            assert!(auto_mode_allows(c), "{c} should run in Auto");
+        }
+    }
 
     #[test]
     fn short_rules_distinguish_all_modes() {
