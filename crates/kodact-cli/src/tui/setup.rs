@@ -1,6 +1,6 @@
 //! Interactive local BYOK onboarding wizard (`kodact setup` and automatic first-run).
 //!
-//! Writes provider settings (`env.<KEY>`, `model`, and optional `env.OPENAI_BASE_URL`)
+//! Writes provider settings (`env.<KEY>`, `model`, and optional `env.KODACT_OPENAI_BASE_URL`)
 //! directly to `~/.kodact/settings.json` with `0o600` permissions on Unix—zero servers,
 //! zero accounts.
 //!
@@ -97,9 +97,9 @@ impl Provider {
 
     pub fn env_key(self) -> Option<&'static str> {
         match self {
-            Provider::Anthropic => Some("ANTHROPIC_API_KEY"),
-            Provider::OpenAi | Provider::Custom => Some("OPENAI_API_KEY"),
-            Provider::Gemini => Some("GEMINI_API_KEY"),
+            Provider::Anthropic => Some("KODACT_API_KEY"),
+            Provider::OpenAi | Provider::Custom => Some("KODACT_OPENAI_API_KEY"),
+            Provider::Gemini => Some("KODACT_GEMINI_API_KEY"),
             Provider::Ollama => None,
         }
     }
@@ -552,7 +552,7 @@ pub fn write_settings(path: &Path, state: &SetupState) -> io::Result<()> {
     if p.needs_url() {
         let url = state.base_url.trim();
         if !url.is_empty() {
-            env.insert("OPENAI_BASE_URL".to_string(), json!(url));
+            env.insert("KODACT_OPENAI_BASE_URL".to_string(), json!(url));
         }
     }
     root.insert("env".to_string(), Value::Object(env));
@@ -1390,7 +1390,7 @@ mod tests {
         let path = dir.path().join("settings.json");
         write_settings(&path, &s).unwrap();
         let raw: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(raw["env"]["OPENAI_BASE_URL"], "http://localhost:11434/v1");
+        assert_eq!(raw["env"]["KODACT_OPENAI_BASE_URL"], "http://localhost:11434/v1");
         assert_eq!(raw["model"], "qwen2.5-coder:14b");
         #[cfg(unix)]
         {

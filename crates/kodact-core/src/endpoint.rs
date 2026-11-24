@@ -17,6 +17,7 @@
 //!   keyless requests); the OpenAI path starts, silently for a local server,
 //!   with a warning for a remote one.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use kodact_api::auth::{is_local_url, parse_base_url, Backend};
@@ -115,8 +116,42 @@ fn trusted_str(settings: &LoadedSettings, pointer: &str) -> Option<(String, Opti
         .map(|(_, s, p)| (s.to_string(), p.clone()))
 }
 
-/// Resolve the endpoint and key. Pure: reads `env` and `settings` only.
+/// The `env` block of your own settings (user, local, flag, managed; never a
+/// project's shared file, which could send your key elsewhere), as the
+/// endpoint reads it: what `kodact`'s setup saves there is the endpoint the
+/// next run uses. A setup before this fix saved `OPENAI_BASE_URL`,
+/// `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`; each still
+/// stands for its `KODACT_*` name when that one isn't there.
+fn settings_env(settings: &LoadedSettings) -> HashMap<String, String> {
+    let mut layers: Vec<_> = settings.layers.iter().filter(|l| TRUSTED.contains(&l.source)).collect();
+    layers.sort_by_key(|l| l.source.rank());
+    let mut out = HashMap::new();
+    for l in layers {
+        for (k, v) in l.value.pointer("/env").and_then(|v| v.as_object()).into_iter().flatten() {
+            if let Some(v) = v.as_str() {
+                out.insert(k.clone(), v.to_string());
+            }
+        }
+    }
+    for (old, new) in [
+        ("OPENAI_BASE_URL", "KODACT_OPENAI_BASE_URL"),
+        ("OPENAI_API_KEY", "KODACT_OPENAI_API_KEY"),
+        ("ANTHROPIC_API_KEY", "KODACT_API_KEY"),
+        ("GEMINI_API_KEY", "KODACT_GEMINI_API_KEY"),
+    ] {
+        if let (false, Some(v)) = (out.contains_key(new), out.get(old).cloned()) {
+            out.insert(new.to_string(), v);
+        }
+    }
+    out
+}
+
+/// Resolve the endpoint and key. Pure: reads `env` and `settings` only. A
+/// variable set in the environment wins over the same one in your settings'
+/// `env` block.
 pub fn resolve(settings: &LoadedSettings, env: &dyn Fn(&str) -> Option<String>) -> Resolution {
+    let saved = settings_env(settings);
+    let env = |k: &str| env(k).or_else(|| saved.get(k).cloned());
     let mut r = Resolution::default();
     let var = |name: &'static str, r: &mut Resolution| -> Option<String> {
         let raw = env(name)?;
@@ -361,8 +396,9 @@ pub fn resolve(settings: &LoadedSettings, env: &dyn Fn(&str) -> Option<String>) 
         if let Some(layer) = settings.layers.iter().find(|l| l.value.pointer(&format!("/env/{name}")).is_some()) {
             let file = layer.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "settings".into());
             r.warnings.push(format!(
-                "{name} in the env block of {file} only reaches tools; KodAct reads its own endpoint and key from \
-                 its environment. Set it in your shell or system environment instead."
+                "{name} in the env block of {file} only reaches tools: a project's shared settings can't choose \
+                 KodAct's endpoint or key. Set it in your own settings ({}) or your environment instead.",
+                kodact_config::config_dir().join("settings.json").display()
             ));
         }
     }
@@ -404,6 +440,45 @@ mod tests {
 
     fn layer(source: SettingSource, value: serde_json::Value) -> SettingsLayer {
         SettingsLayer { source, path: Some(PathBuf::from(format!("/{source:?}/settings.json"))), value }
+    }
+
+    /// What `kodact`'s setup saves in your settings is the endpoint the next
+    /// run uses; a project's shared settings can't set it; the environment
+    /// wins; a file an older setup wrote still works.
+    #[test]
+    fn your_settings_env_block_sets_the_endpoint() {
+        let saved = |source, env: serde_json::Value| layer(source, json!({ "env": env }));
+        let r = run(
+            &[],
+            vec![saved(
+                SettingSource::User,
+                json!({"KODACT_OPENAI_BASE_URL": "https://gw.example.com/v1", "KODACT_OPENAI_API_KEY": "sk-saved-0123456789"}),
+            )],
+        );
+        assert_eq!(r.backend(), Backend::OpenAi);
+        assert!(r.key.is_some() && r.problems.is_empty(), "{r:?}");
+
+        let older = run(
+            &[],
+            vec![saved(
+                SettingSource::User,
+                json!({"OPENAI_BASE_URL": "https://gw.example.com/v1", "OPENAI_API_KEY": "sk-saved-0123456789"}),
+            )],
+        );
+        assert_eq!(older.backend(), Backend::OpenAi);
+        assert!(older.key.is_some(), "{older:?}");
+
+        let shared = run(
+            &[],
+            vec![saved(SettingSource::Project, json!({"KODACT_OPENAI_BASE_URL": "https://evil.example.com/v1"}))],
+        );
+        assert_ne!(shared.backend(), Backend::OpenAi, "{shared:?}");
+
+        let both = run(
+            &[("KODACT_OPENAI_BASE_URL", "https://env.example.com/v1")],
+            vec![saved(SettingSource::User, json!({"KODACT_OPENAI_BASE_URL": "https://gw.example.com/v1"}))],
+        );
+        assert!(format!("{both:?}").contains("env.example.com"), "{both:?}");
     }
 
     #[test]
@@ -493,9 +568,11 @@ mod tests {
     }
 
     #[test]
-    fn credential_vars_in_the_env_block_are_flagged() {
-        let user = layer(SettingSource::User, json!({"env": {"KODACT_OPENAI_API_KEY": "x"}}));
-        let r = run(&[("KODACT_API_KEY", "k")], vec![user]);
+    fn credential_vars_in_a_projects_env_block_are_flagged() {
+        // A project's shared settings can't choose where your key goes: its
+        // env block only reaches tools, and says so.
+        let shared = layer(SettingSource::Project, json!({"env": {"KODACT_OPENAI_API_KEY": "x"}}));
+        let r = run(&[("KODACT_API_KEY", "k")], vec![shared]);
         assert!(r.warnings.iter().any(|w| w.starts_with("KODACT_OPENAI_API_KEY in the env block")), "{r:?}");
     }
 
