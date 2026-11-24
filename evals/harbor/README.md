@@ -169,8 +169,8 @@ the work shows `verifier error` and the line that shows why, as `report.py`
 names it, and is left out of the score (`0/0 passed so far, 1 verifier error
 left out`); so is one whose run ended because the model endpoint didn't answer
 (`api error`). While the model thinks or a
-command runs, a line every minute says which and for how long. Pi's events are
-shown the same way; other agents' logs (Ante, ...) as they are.
+command runs, a line every minute says which and for how long. Pi's and Ante's
+events are shown the same way; other agents' logs (Forge Code, ...) as they are.
 
 A step shows up once the model finishes it. Running trials are read from their
 containers (Harbor's logs aren't readable from the host until a trial ends),
@@ -236,7 +236,10 @@ agent:
 - `-a opencode` or another built-in Harbor agent, against this one;
 - Ante (`run-ante.sh`, `ante_agent.py`), Forge Code (`run-forgecode.sh`,
   `forgecode_agent.py`) or Pi (`run-pi.sh`, `pi_agent.py`), against the same
-  endpoint and model;
+  endpoint and model. Ante's trials get KodAct's setup (the endpoint gate, pinned
+  hosts, caches, CAs, the Hugging Face Hub address, a uv for the tests) and write
+  their JSON events to `agent/ante.jsonl`, so their reports count turns, tokens and
+  tool calls as KodAct's do;
 - two KodAct builds;
 - `KODACT_VERIFY=0` against the default.
 

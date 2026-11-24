@@ -1,0 +1,15 @@
+{
+  "instruction": "Write report.py: it reads sales.csv and prints it as a table with the tinyfmt library's fmt_table, the columns separated by \" | \". tinyfmt isn't installed here: install it with pip. `python3 report.py` must print the table.",
+  "setup": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/make_wheels.py\" wheels",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["python", "dependencies", "versions", "unattended", "false-finish"],
+  "timeout_secs": 300,
+  "args": ["--autonomous"],
+  "env": {
+    "PIP_NO_INDEX": "1",
+    "PIP_FIND_LINKS": "wheels",
+    "PIP_BREAK_SYSTEM_PACKAGES": "1",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1"
+  }
+}

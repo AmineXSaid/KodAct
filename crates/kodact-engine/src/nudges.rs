@@ -63,6 +63,11 @@ pub struct NudgeConfig {
     /// asks for that don't exist yet or are over the size it allows. Facts the model has no other
     /// way to know, no advice: a model has no clock.
     pub clock: bool,
+    /// Before the turn ends, once for each package: a Python package the model installed with
+    /// no version, which nothing in the project pins, and the version its checks ran against
+    /// (`installs.rs`). Its evidence covers that version; where the code runs next may install
+    /// another.
+    pub unpinned_installs: bool,
 }
 
 /// Replies (every reply of the model, with tools or without) without a TodoWrite call before the
@@ -71,7 +76,7 @@ pub const TODO_STEPS: u32 = 10;
 
 impl NudgeConfig {
     /// The names used in settings and `KODACT_NUDGES`.
-    pub const NAMES: [&'static str; 10] = [
+    pub const NAMES: [&'static str; 11] = [
         "shellEdit",
         "constraints",
         "namedChecks",
@@ -82,6 +87,7 @@ impl NudgeConfig {
         "thinkingTimeBox",
         "todoTracking",
         "clock",
+        "unpinnedInstalls",
     ];
 
     /// From a list of names (`KODACT_NUDGES=shellEdit,constraints`); `all` turns every one on,
@@ -114,6 +120,7 @@ impl NudgeConfig {
             "thinkingTimeBox" => &mut self.thinking_time_box,
             "todoTracking" => &mut self.todo_tracking,
             "clock" => &mut self.clock,
+            "unpinnedInstalls" => &mut self.unpinned_installs,
             _ => return false,
         };
         *field = on;
@@ -138,6 +145,7 @@ pub(crate) enum Nudge {
     ThinkingTimeBox,
     TodoTracking,
     Clock,
+    UnpinnedInstalls,
 }
 
 impl Nudge {
@@ -153,6 +161,7 @@ impl Nudge {
             Nudge::ThinkingTimeBox => "thinking_time_box",
             Nudge::TodoTracking => "todo_tracking",
             Nudge::Clock => "clock",
+            Nudge::UnpinnedInstalls => "unpinned_installs",
         }
     }
 }

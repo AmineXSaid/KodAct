@@ -2,6 +2,24 @@
 
 ## 0.1.0 (unreleased)
 
+### A package installed with no version: the checks covered one version
+- **`nudges.unpinnedInstalls` (off until measured).** `pip install x` installs
+  the latest release, and checks run afterwards show the code works with that
+  release only. On 2026-11-24 a report written and checked against
+  transformers 5.24.0, installed that way, failed under the 4.55.0 it later
+  ran with (`create_causal_mask(inputs_embeds=...)`): a false success. Before
+  the turn ends, once for each package, the model is told which packages it
+  installed with no version that the project doesn't pin, and the version its
+  checks ran against. A version, a requirements file, a path or a package the
+  project's manifests name says nothing. Eval task: `unpinned-install`.
+
+### Harbor: an Ante run without Ante stops before any trial
+- **`run-ante.sh` checks for the Ante binary (and the CA bundle) first.**
+  `ante_agent.py` uploads a prebuilt binary (`~/.ante/bin/ante`, or
+  `ANTE_BIN`); it doesn't install one. Without it every trial ended in setup
+  with a RuntimeError (2026-11-24: 10 of 10 in 77 s). The script now says
+  what is missing and runs nothing.
+
 ### Measuring: a cancelled trial is not judged, and the terminal-UI cases see the UI again
 - **The Harbor report no longer counts a cancelled trial as a false success.**
   A trial whose job was stopped after its agent ended but before its tests
