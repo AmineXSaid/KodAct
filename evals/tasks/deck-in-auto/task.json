@@ -1,0 +1,15 @@
+{
+  "instruction": "Make a deck for kids about cells with tools/deck.py (read its docstring): `init` deck.json titled \"Cells for Kids\", then `add` three slides, one call each, titled Cells, Feelings and Helpers, each with two short items. Then `render` it to pages/ to check every slide is there.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "compatibility",
+  "tags": [
+    "permissions",
+    "auto-mode",
+    "office"
+  ],
+  "timeout_secs": 600,
+  "args": [
+    "--permission-mode",
+    "auto"
+  ]
+}

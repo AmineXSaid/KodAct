@@ -10,6 +10,30 @@ dropped from the file-generation path. The KodAct CLI stays cross-platform,
 because the evals (Harbor) run it on Linux. CLI changes here must also work
 on Windows.
 
+## Status (2026-11-24)
+
+Built and pushed on `claude/funny-turing-iu00qw` in both repositories. The
+app test `scripts/e2e/office_live.sh` (KodAct-Desktop) passes on Linux with
+LibreOffice; the PowerPoint/Word/Excel COM route is written and unit-tested,
+and still needs a run on a Windows machine with Office.
+
+| Step | Status |
+|---|---|
+| A1 report the real mode | done (CLI) |
+| A2 always pass the switch flag, keep the allowance, say why a switch failed | done (desktop) |
+| A3 plugin and skill folders readable | done (CLI) |
+| A4 Auto knows Windows removals; risky words only as words (`add` ≠ `dd`) | done (CLI) |
+| B5 `init`/`add` for decks, Word and Excel, themes from the audience | done (skill) |
+| B6–7 live card "Writing…", panel opens and redraws, Markdown too | done (desktop) |
+| C8–9 Office COM renderer first, LibreOffice next; `KODACT_OFFICE_RENDER` | done; Windows run owed |
+| D10 recovered failures fold; pages stay up while the next version draws | done (desktop) |
+| D11 PowerShell colours (own grammar) | done (desktop) |
+| D12 deck layouts: charts, tables, timeline, compare, grid, kpis, cycle, pyramid… | done (skill) |
+| Markdown callouts (`> [!NOTE]`) | done (desktop) |
+| Download: toast with Open and Show in folder | done (desktop) |
+| App test | `scripts/e2e/office_live.sh`: passes |
+| Eval | `evals/tasks/deck-in-auto`; the `kodact-eval compare` needs a key: owed |
+
 ## 1. What went wrong (checked against the code)
 
 | # | What you saw | Cause | Repo |

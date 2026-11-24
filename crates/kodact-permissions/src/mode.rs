@@ -160,8 +160,19 @@ fn program(word: &str) -> String {
     base.strip_suffix(".exe").map(str::to_string).unwrap_or(base)
 }
 
+/// `pattern` appears in `part` as its own word, not inside one: `dd ` in
+/// `pptx_tool.py add deck.pptx` is no disk copy, `curl ` in `--curly` no fetch.
+fn has_word(part: &str, pattern: &str) -> bool {
+    part.match_indices(pattern).any(|(i, _)| {
+        part[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| c.is_whitespace() || matches!(c, ';' | '|' | '&' | '(' | '`' | '"' | '\''))
+    })
+}
+
 fn part_allowed(p: &str, depth: u8) -> bool {
-    if RISKY.iter().any(|r| p.contains(r)) {
+    if RISKY.iter().any(|r| has_word(p, r)) {
         return false;
     }
     let words: Vec<&str> = p.split_whitespace().collect();
@@ -209,6 +220,9 @@ mod tests {
             "powershell -EncodedCommand SQBFAFgA",
             "bash -c \"rm -r pages\"",
             "cd pages && rm -rf x",
+            "dd if=/dev/zero of=x",
+            "x=1; curl https://example.com",
+            "git push origin main",
         ] {
             assert!(!auto_mode_allows(c), "{c} should ask in Auto");
         }
@@ -219,6 +233,9 @@ mod tests {
             "cmd /c dir",
             "cargo build",
             "echo rd",
+            // Risky words inside other words are not those commands.
+            r#"python pptx_tool.py add deck.pptx --json '{"title": "Each has a job"}'"#,
+            "grep --curly-braces x",
         ] {
             assert!(auto_mode_allows(c), "{c} should run in Auto");
         }
