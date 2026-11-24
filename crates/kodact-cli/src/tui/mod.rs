@@ -235,6 +235,11 @@ impl<B: Backend> Backend for Safe<B> {
         I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
     {
         let cells = self.1.apply(content);
+        // Hidden while the frame is written, as `Tracked` does: ratatui shows it again
+        // at the input box once the frame is flushed.
+        if !cells.is_empty() {
+            self.0.hide_cursor()?;
+        }
         self.0.draw(cells.iter().map(|(x, y, c)| (*x, *y, c)))
     }
     fn append_lines(&mut self, n: u16) -> std::io::Result<()> {
@@ -293,6 +298,13 @@ impl<B: Backend> Backend for Tracked<B> {
     {
         let mut last = None;
         let cells = self.grid.apply(content.inspect(|(x, y, _)| last = Some(Position { x: *x, y: *y })));
+        // The cursor is hidden while the frame's cells are written, so it doesn't jump
+        // to each changed row and back (a Windows console shows every move: the spinner
+        // two rows above the input box made the cursor and the rows between flicker).
+        // ratatui shows it again at its place once the frame is flushed.
+        if !cells.is_empty() {
+            self.inner.hide_cursor()?;
+        }
         self.inner.draw(cells.iter().map(|(x, y, c)| (*x, *y, c)))?;
         if let Some(p) = last {
             self.pos.set(Some(Position { x: p.x.saturating_add(1), y: p.y }));
@@ -1227,13 +1239,22 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                     let view = render::live_view(&app, screen.width(), max);
                     let want = (view.lines.len() as u16).min(max);
                     let dialog_closed = had_dialog && app.dialog.is_none();
+                    // One frame, one update: a terminal that supports synchronized
+                    // output (Windows Terminal, kitty, WezTerm...) shows it whole instead
+                    // of row by row; others ignore the marks.
+                    let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::BeginSynchronizedUpdate);
                     if want > screen.height() || (want < screen.height() && (!app.busy || dialog_closed)) {
                         screen.set_height(want).map_err(io_fail)?;
                     }
-                    screen.draw(&view).map_err(io_fail)?;
+                    let drawn = screen.draw(&view);
+                    let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::EndSynchronizedUpdate);
+                    drawn.map_err(io_fail)?;
                 }
                 Display::Full(f) => {
-                    f.draw(&app).map_err(io_fail)?;
+                    let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::BeginSynchronizedUpdate);
+                    let drawn = f.draw(&app);
+                    let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::EndSynchronizedUpdate);
+                    drawn.map_err(io_fail)?;
                     app.input_width = (f.wrapped_w as usize).saturating_sub(2).max(1);
                 }
             }

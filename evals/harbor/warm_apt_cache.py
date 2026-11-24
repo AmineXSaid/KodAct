@@ -36,8 +36,20 @@ SCRIPT = r"""
 set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq --download-only $PACKAGES >/dev/null
 . /etc/os-release
+if ! apt-get install -y -qq --download-only $PACKAGES >/dev/null; then
+  # A Debian release past its support (bullseye, since August 2026): its index on deb.debian.org
+  # still names the last updates, but their files moved to archive.debian.org (404 here). The
+  # same files from there; apt tries one source after the other for each.
+  [ "$ID" = debian ] || exit 1
+  echo "$ID $VERSION_CODENAME: some files are gone from deb.debian.org; trying archive.debian.org"
+  for suite in "debian $VERSION_CODENAME" "debian $VERSION_CODENAME-updates" "debian-security $VERSION_CODENAME-security"; do
+    set -- $suite
+    echo "deb [check-valid-until=no] http://archive.debian.org/$1 $2 main"
+  done > /etc/apt/sources.list.d/kodact-archive.list
+  apt-get -o Acquire::Check-Valid-Until=false update -qq || true
+  apt-get install -y -qq --download-only $PACKAGES >/dev/null
+fi
 release="$ID-$VERSION_CODENAME-$(dpkg --print-architecture)"
 out="/out/$release"
 rm -rf "$out"
