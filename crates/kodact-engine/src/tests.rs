@@ -5192,3 +5192,51 @@ async fn keep_recent_keeps_the_latest_steps_word_for_word_after_the_summary() {
     assert!(!only.contains("echo second-step"), "without the setting, only the summary: {only}");
     assert!(!log.contains("recent_kept"));
 }
+
+/// Unpinned installs: a package the model installed with no version, then code written, gets
+/// one note before the turn ends naming the version the checks covered; a package the project
+/// names, a turn that wrote nothing, and the nudge left off get none.
+#[tokio::test]
+async fn an_unpinned_install_is_told_with_its_version() {
+    let run = |list: &str, requirements: Option<&str>, write: bool| {
+        let list = list.to_string();
+        let requirements = requirements.map(str::to_string);
+        async move {
+            let h = Harness::new(vec![]);
+            std::fs::create_dir_all(h.cwd()).unwrap();
+            // A stand-in for pip: says what it installed, as pip does.
+            let pip = h.cwd().join("pip");
+            std::fs::write(&pip, "#!/bin/sh\necho 'Successfully installed demo-pkg-2.0.0 helper-1.1'\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&pip, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            if let Some(r) = &requirements {
+                std::fs::write(h.cwd().join("requirements.txt"), r).unwrap();
+            }
+            h.provider.push(MockTurn::tool("Bash", json!({"command": "./pip install demo_pkg 2>&1 | tail -3"})));
+            if write {
+                h.provider
+                    .push(MockTurn::tool("Write", json!({"file_path": h.cwd().join("app.py"), "content": "x = 1\n"})));
+            }
+            h.provider.push(MockTurn::text("done"));
+            h.provider.push(MockTurn::text("done, checked with demo-pkg 2.0.0"));
+            let cfg = EngineConfig { verify: None, ..nudged_cfg(&list) };
+            let mut e = h.engine_with(cfg, PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+            e.submit(prompt("write app.py using demo-pkg")).await;
+            let told: Vec<String> =
+                h.provider.requests().iter().map(last_user_text).filter(|t| t.contains("without a version")).collect();
+            (told, nudges(&h.transcript_text()))
+        }
+    };
+    let (told, records) = run("unpinnedInstalls", None, true).await;
+    assert_eq!(told.len(), 1, "once: {told:?}");
+    assert!(told[0].contains("You installed demo_pkg without a version"), "{}", told[0]);
+    assert!(told[0].contains("against demo_pkg 2.0.0 only"), "{}", told[0]);
+    assert_eq!(records[0]["kind"], "unpinned_installs");
+
+    assert!(run("unpinnedInstalls", Some("demo-pkg\n"), true).await.0.is_empty(), "the project names it");
+    assert!(run("unpinnedInstalls", None, false).await.0.is_empty(), "nothing written");
+    assert!(run("", None, true).await.0.is_empty(), "off by default");
+}

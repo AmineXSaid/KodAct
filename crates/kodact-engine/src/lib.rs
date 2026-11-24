@@ -15,6 +15,7 @@ pub mod finish;
 pub mod format;
 mod handback;
 pub(crate) mod held;
+mod installs;
 pub mod judge;
 mod limits;
 pub mod lsp;

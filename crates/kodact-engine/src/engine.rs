@@ -948,6 +948,9 @@ pub struct Engine {
     ran_commands: Vec<String>,
     /// The constraint report was given this turn.
     constraints_told: bool,
+    /// Packages installed with no version this run (`nudges.unpinnedInstalls`), and whether
+    /// each was told.
+    unpinned: Vec<(crate::installs::Unpinned, bool)>,
     /// The latest version that passed a check, saved with the Checkpoint tool
     /// (`nudges.passingSnapshots`): its checkpoint label, the check, and the file writes then.
     passing: Option<(String, String, usize)>,
@@ -1130,6 +1133,7 @@ impl Engine {
             broken_reasoning: Mutex::new(None),
             ran_commands: vec![],
             constraints_told: false,
+            unpinned: vec![],
             passing: None,
             passing_told: false,
             unmet_told: false,
@@ -1635,6 +1639,33 @@ impl Engine {
             // it); requests skip empty messages.
         }
         self.state.thinking_model = Some(model);
+    }
+
+    /// Packages `command` installed with no version that the project doesn't name, with the
+    /// version its output reports (`nudges.unpinnedInstalls`).
+    fn note_installs(&mut self, command: &str, output: &str) {
+        let names = crate::installs::unpinned_in(command);
+        if names.is_empty() {
+            return;
+        }
+        let root = self.shared.tool_ctx.project_dir.clone();
+        let versions = crate::installs::installed_versions(output);
+        for name in names {
+            let key = name.replace(['_', '.'], "-");
+            let version = versions.iter().find(|(n, _)| *n == key).map(|(_, v)| v.clone());
+            match self.unpinned.iter_mut().find(|(u, _)| u.name == name) {
+                // Installed again: the version the checks now run against.
+                Some((u, _)) => {
+                    if version.is_some() {
+                        u.version = version;
+                    }
+                }
+                None if !crate::installs::project_names(&root, &name) => {
+                    self.unpinned.push((crate::installs::Unpinned { name, version }, false))
+                }
+                None => {}
+            }
+        }
     }
 
     /// Tell the host about something (`system/<subtype>`) without recording it.
@@ -3809,6 +3840,9 @@ impl Engine {
                     if name == "Bash" && r.denial.is_none() {
                         if let Some(c) = input.get("command").and_then(Value::as_str) {
                             self.ran_commands.push(c.to_string());
+                            if self.cfg.nudges.unpinned_installs {
+                                self.note_installs(c, &r.output.content.to_text());
+                            }
                         }
                     }
                 }
@@ -3992,6 +4026,26 @@ impl Engine {
                     &self.ran_commands,
                 );
                 if let Some((text, record)) = report {
+                    self.system_event("nudge", record);
+                    notes.push(text);
+                }
+            }
+
+            // Packages installed with no version, once each, when the turn wrote files
+            // (`nudges.unpinnedInstalls`): the checks covered the version installed, no other.
+            if self.cfg.reminders
+                && self.cfg.nudges.unpinned_installs
+                && !self.cfg.is_subagent
+                && !refused
+                && self.shared.history.writes_len() > 0
+            {
+                let untold: Vec<crate::installs::Unpinned> =
+                    self.unpinned.iter().filter(|(_, told)| !told).map(|(u, _)| u.clone()).collect();
+                if !untold.is_empty() {
+                    for (_, told) in self.unpinned.iter_mut() {
+                        *told = true;
+                    }
+                    let (text, record) = crate::installs::note(&untold);
                     self.system_event("nudge", record);
                     notes.push(text);
                 }
