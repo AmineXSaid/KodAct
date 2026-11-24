@@ -4375,6 +4375,126 @@ async fn a_reply_that_only_thinks_past_its_limit_is_stopped_and_its_notes_kept()
     assert!(!last_user_text(&h.provider.requests()[1]).contains("this step's time is up"));
 }
 
+/// The time-box keeps watching after two stops in a row: on quick-thinking (d3787e1, 2026-11-23)
+/// the reply after two stops ran unwatched to the 32,000-token cap, about 4 minutes, five times,
+/// and none acted. Every reply is boxed until 5 stops in a row (time-box or cut-off), then a reply
+/// runs to its end and the turn ends as it did before: the bound on a stretch that never acts is
+/// the same 6 requests.
+#[tokio::test]
+async fn the_time_box_keeps_watching_after_two_stops_within_one_budget() {
+    use kodact_types::StopReason;
+    let thinking = |t: &str| ContentBlock::Thinking { thinking: t.into(), signature: String::new() };
+    let slow_thinker = || {
+        MockTurn::blocks(vec![thinking("first decode the header, then")], StopReason::EndTurn)
+            .with_delay(Duration::from_millis(200))
+    };
+    let cfg = |list: &str| EngineConfig { time_box_floor: Duration::from_millis(700), ..nudged_cfg(list) };
+    let kinds = |h: &Harness| -> Vec<String> {
+        h.transcript_text()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|v| matches!(v["subtype"].as_str(), Some("nudge" | "act_reminder")))
+            .map(|v| v["kind"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+
+    // Four replies that only think, then one that acts: all four are boxed, none runs to its end.
+    let h = Harness::new(vec![slow_thinker(), slow_thinker(), slow_thinker(), slow_thinker(), MockTurn::text("done")]);
+    let mut e =
+        h.engine_with(cfg("thinkingTimeBox"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("solve it")).await;
+    assert_eq!(r.result.as_deref(), Some("done"));
+    assert_eq!(kinds(&h), vec!["thinking_time_box"; 4], "the third and fourth were boxed too");
+    assert_eq!(h.provider.requests().len(), 5);
+
+    // A stretch that never acts still ends: 5 stops, then the sixth reply runs to its end and the
+    // turn ends as it would have (the same 6 requests as 2 stops and 3 empty-reply reminders).
+    let h = Harness::new((0..8).map(|_| slow_thinker()).collect());
+    let mut e =
+        h.engine_with(cfg("thinkingTimeBox"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("solve it")).await;
+    assert_eq!(kinds(&h), vec!["thinking_time_box"; 5]);
+    assert_eq!(h.provider.requests().len(), 6);
+
+    // With the time-box off, only the empty-reply reminders count, three in a row, as before.
+    let h = Harness::new((0..8).map(|_| slow_thinker()).collect());
+    let mut e = h.engine_with(cfg(""), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("solve it")).await;
+    assert_eq!(kinds(&h), vec!["empty_reply"; 3]);
+    assert_eq!(h.provider.requests().len(), 4);
+}
+
+/// An automatic summary is time-boxed like a reply: still all thinking past the limit, it is
+/// stopped, its reasoning becomes the analysis the retry summarizes from, and with both stopped
+/// KodAct's own note stands in. On quick-thinking (d3787e1, regex-chess) three summaries reasoned
+/// to their cap, 22,000 to 30,000 tokens each, and wrote nothing. `/compact` waits as before.
+#[tokio::test]
+async fn an_automatic_summary_still_thinking_past_the_time_box_is_stopped_and_its_analysis_kept() {
+    use kodact_types::StopReason;
+    let thinking = |t: &str| ContentBlock::Thinking { thinking: t.into(), signature: String::new() };
+    let too_long = || MockTurn::HttpError {
+        status: 400,
+        kind: "invalid_request_error".into(),
+        message: "prompt is too long: 1000001 tokens > 1000000 maximum".into(),
+    };
+    // Reasoning arrives at ~600 ms, the summary would end (empty, at the cap) at ~1.2 s: a 700 ms
+    // limit stops it in between.
+    let slow_summary =
+        |t: &str| MockTurn::blocks(vec![thinking(t)], StopReason::MaxTokens).with_delay(Duration::from_millis(200));
+    let cfg = |list: &str| EngineConfig { time_box_floor: Duration::from_millis(700), ..nudged_cfg(list) };
+    let h = Harness::new(vec![
+        MockTurn::text("ok").with_usage(usage(100)),
+        too_long(),
+        slow_summary("the ZIP has two fragments..."),
+        slow_summary("more analysis"),
+        MockTurn::text("answered after the fallback"),
+    ]);
+    let mut e =
+        h.engine_with(cfg("thinkingTimeBox"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("recover the password from /work/vault")).await;
+    let started = Instant::now();
+    let r = e.submit(prompt("two")).await;
+    assert_eq!(r.result.as_deref(), Some("answered after the fallback"));
+    let t = h.transcript_text();
+    assert_eq!(t.matches(r#""reason":"time_boxed""#).count(), 2, "{t}");
+    assert!(t.contains(r#""subtype":"compact_fallback""#));
+    // The retry summarizes from the first attempt's reasoning, not the conversation again.
+    let retry = &h.provider.requests()[3];
+    assert_eq!(retry.messages.len(), 1);
+    assert!(last_user_text(retry).contains("<earlier_analysis>\nthe ZIP has two fragments...\n</earlier_analysis>"));
+    // KodAct's note keeps the analysis, as when the cap cuts a summary off.
+    let note = h.provider.requests().last().unwrap().messages[0].text();
+    assert!(note.contains("Your analysis of the conversation") && note.contains("the ZIP has two fragments"), "{note}");
+    assert!(started.elapsed() < Duration::from_millis(2_200), "both stopped at the limit: {:?}", started.elapsed());
+
+    // Off, a summary runs to its end (the cap), as before.
+    let h = Harness::new(vec![
+        MockTurn::text("ok").with_usage(usage(100)),
+        too_long(),
+        slow_summary("analysis"),
+        MockTurn::text("<summary>compressed</summary>"),
+        MockTurn::text("answered after compaction"),
+    ]);
+    let mut e = h.engine_with(cfg(""), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("one")).await;
+    let r = e.submit(prompt("two")).await;
+    assert_eq!(r.result.as_deref(), Some("answered after compaction"));
+    let t = h.transcript_text();
+    assert!(!t.contains("time_boxed") && t.contains(r#""reasoning_only":true"#), "{t}");
+
+    // `/compact` waits for the summary however long it thinks.
+    let h = Harness::new(vec![
+        MockTurn::text("ok").with_usage(usage(100)),
+        MockTurn::blocks(vec![thinking("long"), ContentBlock::text("<summary>by hand</summary>")], StopReason::EndTurn)
+            .with_delay(Duration::from_millis(300)),
+    ]);
+    let mut e =
+        h.engine_with(cfg("thinkingTimeBox"), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    e.submit(prompt("one")).await;
+    assert!(e.compact(None).await.is_ok());
+    assert!(!h.transcript_text().contains("time_boxed"));
+}
+
 /// A summary asks for the lowest reasoning level, whatever the turn's level; the conversation's
 /// own requests keep theirs.
 #[tokio::test]

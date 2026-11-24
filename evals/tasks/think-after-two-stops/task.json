@@ -1,0 +1,8 @@
+{
+  "instruction": "Work out the answer and write it to answer.txt.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "long-horizon",
+  "tags": ["reasoning-model", "time-box", "nudges"],
+  "env": {"KODACT_NUDGES": "thinkingTimeBox"},
+  "timeout_secs": 240
+}

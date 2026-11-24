@@ -287,3 +287,61 @@ A fetched the hidden test with WebFetch and wrote the total it expects; B
 was refused twice (WebFetch, then curl in a command) and worked the sum out
 from the file.
 
+## `openai_slow_thinker.py`: the `think-after-two-stops` task
+
+A model that does what quick-thinking did on write-compressor and
+regex-chess (d3787e1, 2026-11-23): its replies only reason, slowly, until
+something stops them, and stopped three times it acts. Each reply streams
+reasoning for 90 s, then ends at its cap (`finish_reason: "length"`, no
+text), as a 32,000-token reply did there in about 4 minutes. The task turns
+the thinking time-box on; run it with `--max-time 120`, where the box stops a
+reply at 30 s. So what is measured is how KodAct bounds thinking that leads
+nowhere, not the model.
+
+```bash
+python3 evals/scripted/openai_slow_thinker.py 8801 &
+export KODACT_OPENAI_BASE_URL=http://127.0.0.1:8801/v1 KODACT_OPENAI_API_KEY=sk-test0123456789
+kodact-eval run --only think-after-two-stops --kodact <kodact> --label <label> --repeat 3 --jobs 3 -- --model m --permission-mode bypassPermissions --max-time 120
+```
+
+Measured on 2026-11-24. A is 96cac78, before the change; B keeps the box on
+past two stops.
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate | 0/3 | 3/3 |
+| Time-box stops per run | 2 | 3 |
+| Time per run | 120 s (the limit) | 90 s |
+
+A stopped two replies and let the third run toward its cap: the run's time
+was up before the model acted.
+
+## `openai_slow_summary.py`: the `summary-thinks-long` task
+
+A model that does what quick-thinking did on regex-chess (d3787e1): asked for
+a summary, it reasons, slowly, and writes nothing, the first time and again
+when its own analysis comes back. A summary streams reasoning for 90 s, then
+ends at its cap with no text. The conversation outgrows the window once (the
+second work request is refused with the vLLM/LiteLLM wording), so KodAct
+must compact. The task turns the time-box on; run it with `--max-time 160`.
+
+```bash
+python3 evals/scripted/openai_slow_summary.py 8802 &
+export KODACT_OPENAI_BASE_URL=http://127.0.0.1:8802/v1 KODACT_OPENAI_API_KEY=sk-test0123456789
+kodact-eval run --only summary-thinks-long --kodact <kodact> --label <label> --repeat 3 --jobs 3 -- --model m --permission-mode bypassPermissions --max-time 160
+```
+
+Measured on 2026-11-24. A is 96cac78, before the change; B time-boxes
+automatic summaries.
+
+| Metric | A | B |
+| --- | --- | --- |
+| Pass rate | 0/3 | 3/3 |
+| Failed summaries per run (time-boxed) | 1 (0) | 2 (2) |
+| KodAct's own note per run | 0 | 1 |
+| Time per run | 160 s (the limit) | 70 s |
+
+A waited on the first summary to its cap and on the second until the run's
+time was up; B stopped each at its limit (about 30 to 40 s), and KodAct's
+note took over.
+

@@ -2,6 +2,29 @@
 
 ## 0.1.0 (unreleased)
 
+### The thinking time-box keeps watching, and watches summaries too
+- **Every reply is watched until 5 in a row have been stopped** (by the
+  time-box, or at the output cap while still reasoning), then a reply runs
+  to its end and the turn ends as before: the same bound, 6 requests, on a
+  stretch that never acts. The time-box used to stop 2 in a row and let the
+  next reply run unwatched: on quick-thinking (d3787e1, 2026-11-23) 5 such
+  replies reasoned to the 32,000-token cap, about 4 minutes each, 20 minutes
+  in all, and none acted, while every reply that acted after a stop did so
+  within about 2 minutes. With the time-box off nothing changes.
+- **An automatic compaction's summary is time-boxed like a reply.** Still
+  all thinking past the limit, it is stopped (`compact_failed`,
+  `time_boxed`) and its reasoning becomes the analysis the next try
+  summarizes from; after a second, KodAct's own note stands in. On the same
+  run three summaries reasoned to their cap, 22,000 to 30,000 tokens, and
+  wrote nothing: about 10 of regex-chess's 60 minutes. A summary that has
+  started writing is never cut; `/compact` waits as before.
+- New tasks with scripted models, A = 96cac78, B = this change, 3 runs each:
+  `think-after-two-stops` (a model that only reasons, 90 s a reply, until
+  stopped three times; `--max-time 120`): 0/3, the run's time up during the
+  unwatched third reply → 3/3 in 90 s. `summary-thinks-long` (summaries that
+  reason 90 s and write nothing; `--max-time 160`): 0/3, the time up during
+  the second summary → 3/3 in 70 s. The quick-thinking Harbor A/B is owed.
+
 ### Measuring: a trial that read the answer key passes nothing, and a cancelled job shows its trials
 - **The Harbor report sets apart a trial whose agent got the benchmark's own
   files** ("answer key seen" for tests, a solution or task.toml, "benchmark

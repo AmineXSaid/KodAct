@@ -99,9 +99,14 @@ const TIME_BOX_FLOOR: Duration = Duration::from_secs(120);
 /// The time-box's limit, in usual replies: a reply may think this many times as long as this
 /// run's replies usually take.
 const TIME_BOX_FACTOR: u32 = 3;
-/// Replies stopped by the time-box in a row, with no answer or action between them; past it, a
-/// reply runs to its end.
-const MAX_TIME_BOXES: u32 = 2;
+/// Replies stopped in a row with no answer or action between them, by the time-box or at the
+/// output cap while still reasoning (the cut-offs' own limit, MAX_REASONING_CUTOFFS, still holds):
+/// past it, a reply runs to its end and the turn ends as it would have. The time-box watches every
+/// reply until then. It used to stop after 2 in a row and let the next reply run unwatched: on
+/// quick-thinking (d3787e1, 2026-11-23) 5 such replies reasoned to the 32,000-token cap, about 4
+/// minutes each, and none acted, while every reply that acted after a stop did so within about 2
+/// minutes. With the time-box off, only the cut-offs count, as before.
+const MAX_STOPS_IN_A_ROW: u32 = 5;
 
 /// Compactions one turn makes because the conversation no longer fits. More than one: a long
 /// `-p` run is one turn, and it fills a small window again after each compaction. Each needs the
@@ -2351,15 +2356,33 @@ impl Engine {
         // (9ef0955) reasoned to the limit and wrote nothing seven times in a row, and five of the
         // eight summaries that did come back that run used 18k to 20k.
         let sent = req.max_tokens;
+        // An automatic summary is time-boxed like a reply (`nudges.thinkingTimeBox`): one still all
+        // thinking past the limit is stopped, and its reasoning kept as the analysis the next try
+        // summarizes from, as when the output cap cuts it off. On quick-thinking (d3787e1,
+        // regex-chess) three summaries reasoned to their cap, 22,000 to 30,000 tokens each, and
+        // wrote nothing: about 10 of the run's 60 minutes. `/compact` (manual) isn't: it has no
+        // next try, and the person waiting can stop it.
+        let think_until =
+            (trigger == "auto" && self.cfg.reminders && !self.cfg.is_subagent && self.cfg.nudges.thinking_time_box)
+                .then(|| Instant::now() + self.thinking_limit());
         let t0 = Instant::now();
-        let outcome = self.stream_inner(req, cancel, false, false, None).await;
+        let outcome = self.stream_inner(req, cancel, false, false, think_until).await;
         turn.api_ms += t0.elapsed().as_millis() as u64;
         let msg = match outcome {
             StreamOutcome::Done(m) => m,
-            // Summaries are never time-boxed (`None` above): the last case can't happen here.
-            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) | StreamOutcome::TimeBoxed(..) => {
-                return Err("interrupted".into())
+            StreamOutcome::TimeBoxed(reasoning, took) => {
+                let mut data = json!({"trigger": trigger, "reason": "time_boxed", "secs": took.as_secs(),
+                                      "reasoning_chars": reasoning.chars().count()});
+                if let Some(w) = other {
+                    data["model"] = json!(w);
+                }
+                self.system_event("compact_failed", data);
+                if !reasoning.trim().is_empty() {
+                    self.cut_summary = Some(reasoning);
+                }
+                return Err(EMPTY_SUMMARY.into());
             }
+            StreamOutcome::Interrupted(_) | StreamOutcome::Repeating(_) => return Err("interrupted".into()),
             StreamOutcome::Failed(e) => {
                 let reason = e.to_string();
                 self.record_compact_failure(trigger, &reason, None, other);
@@ -3329,7 +3352,7 @@ impl Engine {
             let think_until = (self.cfg.reminders
                 && !self.cfg.is_subagent
                 && self.cfg.nudges.thinking_time_box
-                && time_boxes < MAX_TIME_BOXES)
+                && time_boxes + reasoning_cutoffs < MAX_STOPS_IN_A_ROW)
                 .then(|| Instant::now() + self.thinking_limit());
             let outcome = self.stream_once(req, &cancel, watch, think_until).await;
             if matches!(outcome, StreamOutcome::Done(_)) {
@@ -3713,6 +3736,7 @@ impl Engine {
                     && tool_uses.is_empty()
                     && !reply_has_text
                     && reasoning_cutoffs < MAX_REASONING_CUTOFFS
+                    && time_boxes + reasoning_cutoffs < MAX_STOPS_IN_A_ROW
                 {
                     reasoning_cutoffs += 1;
                     let h = self.act_reminder(ACT_PROMPT, ACT_CUTOFF, &model, &reasoning);
@@ -4056,6 +4080,7 @@ impl Engine {
                 && !was_continuation
                 && stop_reason != Some(StopReason::Refusal)
                 && reasoning_cutoffs < MAX_REASONING_CUTOFFS
+                && time_boxes + reasoning_cutoffs < MAX_STOPS_IN_A_ROW
             {
                 reasoning_cutoffs += 1;
                 let h = self.act_reminder(EMPTY_REPLY_PROMPT, EMPTY_REPLY, &model, &reasoning);

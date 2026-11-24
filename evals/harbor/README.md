@@ -102,7 +102,9 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 `deep-thinking`'s gateway never honours the reasoning level, in any form: `--effort` in
 `KODACT_HARBOR_ARGS` changes nothing for it, though the job name still says `-args-effort-…`.
 Leave it out of those runs. Its reply length is bounded by the reply limit
-(`KODACT_HARBOR_MAX_OUTPUT`) and, once measured, KodAct's thinking time-box.
+(`KODACT_HARBOR_MAX_OUTPUT`) and KodAct's thinking time-box (`thinkingTimeBox` in
+`KODACT_NUDGES`, which also stops summaries that only reason; measured on scripted
+tasks, its Harbor A/B is owed).
 
 **The benchmark's own files are blocked.** A deep-thinking run (df0446d,
 torch-pipeline-parallelism) searched the web for the task's function name,
