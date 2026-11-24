@@ -2,6 +2,13 @@
 
 ## 0.1.0 (unreleased)
 
+### Harbor: an Ante run without Ante stops before any trial
+- **`run-ante.sh` checks for the Ante binary (and the CA bundle) first.**
+  `ante_agent.py` uploads a prebuilt binary (`~/.ante/bin/ante`, or
+  `ANTE_BIN`); it doesn't install one. Without it every trial ended in setup
+  with a RuntimeError (2026-11-24: 10 of 10 in 77 s). The script now says
+  what is missing and runs nothing.
+
 ### Measuring: a cancelled trial is not judged, and the terminal-UI cases see the UI again
 - **The Harbor report no longer counts a cancelled trial as a false success.**
   A trial whose job was stopped after its agent ended but before its tests

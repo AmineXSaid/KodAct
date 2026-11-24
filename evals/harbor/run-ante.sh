@@ -2,6 +2,7 @@
 # Terminal-Bench on Ante CLI through Harbor (counterpart of run.sh).
 #   KODACT_HARBOR_MODEL=deep-thinking evals/harbor/run-ante.sh smoke|subset|full [harbor args...]
 # Settings: KODACT_HARBOR_MODEL (default deep-thinking, as for run.sh; ANTE_MODEL also works),
+#           ANTE_BIN (the static Linux binary uploaded to each container, default ~/.ante/bin/ante),
 #           ANTE_PROVIDER (openai-compatible), ANTE_INSTALL_ARGS (empty = stable),
 #           ANTE_HARBOR_ARGS (default "--yolo --no-session-save --no-skills", as Ante's own
 #           Harbor agent runs it, minus JSON output),
@@ -14,6 +15,19 @@ mode="${1:-subset}"; shift || true
 
 : "${KODACT_OPENAI_BASE_URL:?source ~/.kodact-env-kpit first}"
 : "${KODACT_OPENAI_API_KEY:?source ~/.kodact-env-kpit first}"
+
+# ante_agent.py uploads a prebuilt Ante binary into each container; it doesn't install one. A
+# binary or CA bundle that isn't there ended every trial in setup (RuntimeError, 2026-11-24): say
+# so before any trial runs.
+ante_bin="${ANTE_BIN:-$HOME/.ante/bin/ante}"
+if [ ! -f "$ante_bin" ]; then
+  echo "error: no Ante binary at $ante_bin: install Ante on this machine, or set ANTE_BIN to its static Linux binary" >&2
+  exit 1
+fi
+if [ -n "${KODACT_HARBOR_CA_BUNDLE:-}" ] && [ ! -f "$KODACT_HARBOR_CA_BUNDLE" ]; then
+  echo "error: KODACT_HARBOR_CA_BUNDLE: $KODACT_HARBOR_CA_BUNDLE not found" >&2
+  exit 1
+fi
 
 case "$mode" in
   smoke)  scope=(-l 1 --n-attempts 1) ;;
