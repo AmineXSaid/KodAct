@@ -263,6 +263,14 @@ check that the URL and key work.
 | Gemini API | `KODACT_GEMINI_BASE_URL`, else `gemini.baseUrl`, else `KODACT_GEMINI_API_KEY` alone (Google AI Studio, when no Messages key is set) | `KODACT_GEMINI_API_KEY`, else `gemini.apiKeyHelper` | `x-goog-api-key` for Google AI Studio, `Authorization: Bearer` for Vertex AI, both for other hosts; `gemini.authHeader` (or `KODACT_GEMINI_AUTH_HEADER`) chooses: `x-goog-api-key`, `bearer`, `both` |
 | Messages API | `KODACT_BASE_URL`, else `baseUrl`, else the default host | `KODACT_API_KEY` and/or `KODACT_AUTH_TOKEN`, else `apiKeyHelper` | `x-api-key` / `Authorization: Bearer` |
 
+- Each `KODACT_*` variable above is read from the environment, else from the
+  `env` block of your own settings (`settings.json` in the config folder, or a
+  project's `.kodact/settings.local.json`), which is where `kodact`'s setup
+  saves the endpoint you choose. A project's shared `.kodact/settings.json`
+  can't set them: its `env` block only reaches tools, and KodAct says so. A
+  settings file an earlier setup wrote, with `OPENAI_BASE_URL`,
+  `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` in its `env`
+  block, still works.
 - A key is never sent to the other kind of endpoint. With an OpenAI-compatible
   endpoint and only `KODACT_API_KEY` set, KodAct warns at startup, and a 401
   names `KODACT_OPENAI_API_KEY`.

@@ -131,9 +131,9 @@ async fn setup_walks_to_a_saved_settings_file() {
     let mut tui = Pty::spawn(&kodact_bin(), &d.cwd, &d.home, "http://127.0.0.1:9", &["setup"], 100, 30);
     tui.wait_for("Choose a provider", WAIT).unwrap_or_else(|s| panic!("no wizard:\n{s}"));
     tui.keys("\r");
-    tui.wait_for("ANTHROPIC_API_KEY", WAIT).unwrap_or_else(|s| panic!("no key step:\n{s}"));
-    tui.keys("\r");
-    tui.wait_for("Paste your ANTHROPIC_API_KEY to continue", WAIT).unwrap_or_else(|s| panic!("no error:\n{s}"));
+    tui.wait_for("KODACT_API_KEY", WAIT).unwrap_or_else(|s| panic!("no key step:\n{s}"));
+    // The test's terminal has a KODACT_API_KEY, which the step would take;
+    // a typed key wins and is the one saved.
     tui.paste("sk-ant-test-0000-1234\n");
     let screen = tui.wait_for("21 chars", WAIT).unwrap_or_else(|s| panic!("key not taken:\n{s}"));
     assert!(!screen.contains("sk-ant-test"), "the key is masked:\n{screen}");
@@ -154,7 +154,7 @@ async fn setup_walks_to_a_saved_settings_file() {
     let saved: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(d.home.join(".kodact/settings.json")).unwrap()).unwrap();
     assert_eq!(saved["model"], "claude-opus-4-6");
-    assert_eq!(saved["env"]["ANTHROPIC_API_KEY"], "sk-ant-test-0000-1234");
+    assert_eq!(saved["env"]["KODACT_API_KEY"], "sk-ant-test-0000-1234");
 }
 
 /// The welcome page's cards: Tab gives the keyboard to the first, Enter sends its prompt.
