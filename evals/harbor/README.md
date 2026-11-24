@@ -89,6 +89,7 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 | `KODACT_CARRY_REASONING` | | `1` sends the model its reasoning back with each request (`carryReasoning`, see docs/CLI.md); `0`, `false`, `no` or `off` leave it off. The job name gets `-carry`. Check the endpoint first with `scripts/probe-reasoning.py` |
 | `KODACT_HARBOR_MAX_OUTPUT` | `65536` for `deep-thinking`, none for other models | The model's reply limit, given to `kodact` as `modelLimits` (`--settings`); `0` gives none. `deep-thinking` is served by vLLM, which bounds a reply only by its window and states no reply limit, so KodAct would keep its 32,000 default (`max-output.sh`; job name gets `-maxout65536`). A `--settings` in `KODACT_HARBOR_ARGS` wins |
 | `KODACT_FINISH_CHECK` | on | `0` (or `false`, `no`, `off`) turns off the separate check of a Finish that claims `verified` (`verification.finishCheck`), for its A/B; the job name gets `-nofinishcheck` |
+| `KODACT_HARBOR_BLOCK_BENCHMARK` | on | The agent can't fetch the benchmark's own files: each trial gives kodact `KODACT_BLOCKED_URLS` with the benchmark's name in any URL (`terminal-bench`, `tbench.ai`, its GitHub organisations) and the task's `tests`, `solution` and `task.toml` paths wherever they are copied. `0` (or `false`, `no`, `off`) lets them through; the job name gets `-benchopen` |
 | `KODACT_HARBOR_CA_BUNDLE` | | Extra CAs to trust inside containers (see below) |
 | `KODACT_HARBOR_HF_ENDPOINT` | hf-mirror.com only where huggingface.co is blocked | The Hugging Face Hub address for the agent and the tests, checked at the start; `off` never uses a mirror, a URL picks one (job name gets `-hfmirror`; see below) |
 | `KODACT_HARBOR_UV_BIN` | this machine's `uv` | The uv put in each container for the tests after the agent's run, when there is none, so a test script whose own download of uv fails still runs; `none` turns it off (see below) |
@@ -102,6 +103,15 @@ evals/harbor/run.sh subset -i 'hello*'   # extra args go to `harbor run`
 `KODACT_HARBOR_ARGS` changes nothing for it, though the job name still says `-args-effort-…`.
 Leave it out of those runs. Its reply length is bounded by the reply limit
 (`KODACT_HARBOR_MAX_OUTPUT`) and, once measured, KodAct's thinking time-box.
+
+**The benchmark's own files are blocked.** A deep-thinking run (df0446d,
+torch-pipeline-parallelism) searched the web for the task's function name,
+found a public copy of Terminal-Bench 2.1 on GitHub, fetched the task's hidden
+tests and its solution, and passed: that trial measured the answer key, not the
+harness. kodact now refuses such URLs in WebFetch and in commands
+(`blockedUrls`, see docs/CLI.md), whatever the permission mode, and tells the
+model it is blocked. A program that builds a URL while it runs isn't seen, so
+the report also flags any trial that reached the benchmark's files (see below).
 
 Each task has an agent time limit, and Harbor stops the agent when it's up.
 The agent passes that limit, less 30 seconds, as `--max-time`. The model then

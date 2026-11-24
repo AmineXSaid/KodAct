@@ -318,6 +318,19 @@ pub(crate) fn summary_model(settings: &LoadedSettings) -> Option<String> {
         .map(|m| kodact_api::resolve_model(&m))
 }
 
+/// URLs no tool fetches, in any permission mode: `blockedUrls` in settings and `KODACT_BLOCKED_URLS`
+/// (entries separated by commas or new lines), both kept. An entry that isn't a valid pattern is
+/// left out, with a warning.
+pub(crate) fn blocked_urls(settings: &LoadedSettings, warnings: &mut Vec<String>) -> kodact_tools::BlockedUrls {
+    let mut entries = settings.strings("/blockedUrls");
+    if let Some(list) = env_nonempty("KODACT_BLOCKED_URLS") {
+        entries.extend(kodact_tools::BlockedUrls::parse_list(&list));
+    }
+    let (blocked, invalid) = kodact_tools::BlockedUrls::new(&entries);
+    warnings.extend(invalid.into_iter().map(|i| format!("blockedUrls: not a valid pattern, left out: {i}")));
+    blocked
+}
+
 /// Which nudges are on: `KODACT_NUDGES` (a list such as `shellEdit,constraints`, or `all`, for
 /// A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
 /// measured it; `reminders: false` still turns them all off.
@@ -1070,6 +1083,7 @@ pub fn build_session(
     }
     tool_ctx.session_id = session_id.clone();
     tool_ctx.spill_dir = Some(spill_dir);
+    tool_ctx.blocked_urls = Arc::new(blocked_urls(&settings, &mut warnings));
     tool_ctx.transcript_path = transcript.path().map(Path::to_path_buf);
     {
         let mut wd = tool_ctx.working_dirs.write().unwrap();
@@ -1217,6 +1231,7 @@ pub fn build_session(
         env: tool_ctx.env.clone(),
         sandbox: tool_ctx.sandbox.clone(),
         shell: shell.clone(),
+        blocked_urls: tool_ctx.blocked_urls.clone(),
         line_edits,
         unread_edits,
         agent_slots: Arc::new(tokio::sync::Semaphore::new(

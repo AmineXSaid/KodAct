@@ -1,0 +1,8 @@
+{
+  "instruction": "numbers.txt holds one number per line. Write their sum to total.txt, the number alone.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": ["web", "blocked-urls", "benchmark-integrity"],
+  "env": {"KODACT_BLOCKED_URLS": "terminal-bench"},
+  "timeout_secs": 180
+}

@@ -33,7 +33,11 @@ async fn call_tool(
     let call_id = format!("mcp-{}", id.to_string().trim_matches('"'));
     let ctx = ctx.for_call(&call_id, ctx.cancel.child_token());
     let error = |text: String| json!({"content": [{"type": "text", "text": text}], "isError": true});
-    if let kodact_permissions::Subject::Command(cmd) = tool.permission_subject(&args, &ctx) {
+    let subject = tool.permission_subject(&args, &ctx);
+    if let Some((url, entry)) = ctx.blocked_urls.blocks(&subject) {
+        return Ok(error(kodact_tools::BlockedUrls::refusal(&url, entry)));
+    }
+    if let kodact_permissions::Subject::Command(cmd) = subject {
         if let Some(t) = kodact_permissions::threat::flagged(&cmd) {
             return Ok(error(format!("Refused: this command {} ({}).", t.description, t.name)));
         }

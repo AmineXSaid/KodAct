@@ -51,6 +51,7 @@ fn setup(responder: impl Fn(&MessagesRequest) -> MockTurn + Send + Sync + 'stati
         env: tool_ctx.env.clone(),
         sandbox: Default::default(),
         shell: kodact_platform::shell::detect().clone(),
+        blocked_urls: Default::default(),
         line_edits: false,
         unread_edits: false,
         agent_slots: Arc::new(tokio::sync::Semaphore::new(4)),

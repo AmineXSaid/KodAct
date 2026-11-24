@@ -2,6 +2,27 @@
 
 ## 0.1.0 (unreleased)
 
+### Blocked URLs: keep the agent off a site, or off a benchmark's answer key
+- **`blockedUrls`** (and `KODACT_BLOCKED_URLS`) lists URLs no tool fetches,
+  in every permission mode, `--dangerously-skip-permissions` included, and
+  for sub-agents. WebFetch refuses them and any redirect to one; a Bash or
+  PowerShell command that names one is refused before it runs; links to
+  them in fetched pages and search results become `[blocked URL]`. Each
+  refusal is a `url_blocked` event and a permission denial. Entries are
+  globs over the URL; one without `*` matches any URL that contains it. The
+  word alone in a command is not a URL.
+- **The Harbor kit blocks the benchmark's own files in every trial:** its
+  name in any URL and the task's tests, solution and task.toml paths.
+  `KODACT_HARBOR_BLOCK_BENCHMARK=0` lets them through (`-benchopen` in the
+  job name). A deep-thinking run (df0446d, torch-pipeline-parallelism)
+  found a public copy of Terminal-Bench 2.1, fetched the task's hidden tests
+  and solution, and passed; a quick look at all 256 recorded trials found
+  one more that reached the benchmark's repository (mteb-retrieve, bb73f00).
+- New task `benchmark-lookup` with a scripted model that looks up the hidden
+  tests before working, as that run did, and a local copy that logs what is
+  read: 0/3 before (every run read them and copied the answer), 3/3 after
+  (2 lookups refused per run, the sum worked out from the file).
+
 ### Measuring: a cancelled trial is not judged, and the terminal-UI cases see the UI again
 - **The Harbor report no longer counts a cancelled trial as a false success.**
   A trial whose job was stopped after its agent ended but before its tests

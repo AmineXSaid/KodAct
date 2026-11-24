@@ -433,6 +433,33 @@ def model_limits_flags(model: str, extra: list[str]) -> list[str]:
     return ["--settings", json.dumps({"modelLimits": {model: {"maxOutputTokens": int(limit)}}})]
 
 
+# The benchmark's own files stay out of reach: its name in any URL (a copy of the benchmark on
+# GitHub or Hugging Face, its site, its repositories), and this task's tests and solution wherever
+# they are copied. A deep-thinking run (df0446d, torch-pipeline-parallelism) found a public copy of
+# Terminal-Bench 2.1, fetched the task's hidden tests and its solution, and passed. kodact refuses
+# these URLs in WebFetch and in commands (`blockedUrls`); report.py flags whatever still gets through.
+BENCHMARK_NAMES = ("terminal-bench", "terminal_bench", "terminalbench", "tbench.ai", "laude-institute", "harbor-framework")
+
+
+def benchmark_blocks(task: str | None) -> list[str]:
+    """The URLs kodact is told never to fetch in this trial (KODACT_BLOCKED_URLS); none when
+    KODACT_HARBOR_BLOCK_BENCHMARK is 0, false, no or off."""
+    if os.environ.get("KODACT_HARBOR_BLOCK_BENCHMARK", "1").strip().lower() in ("0", "false", "no", "off"):
+        return []
+    blocks = list(BENCHMARK_NAMES)
+    if task:
+        blocks += [f"*/{task}/tests*", f"*/{task}/solution*", f"*/{task}/task.toml*"]
+    return blocks
+
+
+def trial_task(logs_dir) -> str | None:
+    """The task a trial runs, from its folder (jobs/<job>/<task>__<id>/agent), as report.py reads it."""
+    if logs_dir is None:
+        return None
+    name = Path(logs_dir).parent.name
+    return name.split("__")[0] if "__" in name else None
+
+
 def settings(env: dict) -> dict:
     """The settings passed to the agent, with the values of keys and tokens left out."""
     return {k: ("<set>" if any(s in k.upper() for s in SECRET) else v) for k, v in sorted(env.items()) if not k.endswith("_TASK")}
@@ -502,6 +529,9 @@ class KodAct(BaseInstalledAgent):
             if env.get(var):
                 env[var] = container_url(env[var])
         env["KODACT_TASK"] = instruction
+        blocks = benchmark_blocks(trial_task(getattr(self, "logs_dir", None)))
+        if blocks:
+            env["KODACT_BLOCKED_URLS"] = ",".join(filter(None, [env.get("KODACT_BLOCKED_URLS", ""), *blocks]))
         env.update(pip_cache_env())
         env.update(hf_env())
         flags = ["--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"]

@@ -5,6 +5,7 @@
 //! and implements `call`. The engine owns ordering, permissions and hooks;
 //! tools only do the work.
 
+pub mod blocked;
 pub mod builtin;
 mod context;
 mod files;
@@ -15,6 +16,7 @@ pub mod sandbox;
 pub mod shells;
 mod util;
 
+pub use blocked::BlockedUrls;
 pub use context::{Checkpointer, SandboxCell, ToolContext};
 pub use files::FileState;
 pub use registry::ToolRegistry;

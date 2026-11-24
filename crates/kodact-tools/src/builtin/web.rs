@@ -69,17 +69,22 @@ impl WebFetch {
     }
 
     /// The page as Markdown (or plain text), or a message explaining why not.
-    async fn fetch(&self, url: &reqwest::Url) -> Result<String, String> {
+    async fn fetch(&self, url: &reqwest::Url, blocked: &crate::BlockedUrls) -> Result<String, String> {
         if let Some((at, md)) = self.cache.lock().unwrap().get(url.as_str()) {
             if at.elapsed() < CACHE_FOR {
                 return Ok(md.clone());
             }
         }
         let origin = url.host_str().unwrap_or_default().to_string();
+        let blocked = blocked.clone();
         let policy = reqwest::redirect::Policy::custom(move |attempt| {
             let host = attempt.url().host_str().unwrap_or_default().to_string();
             if attempt.previous().len() >= 10 {
                 attempt.error("too many redirects")
+            } else if let Some(entry) = blocked.matching(attempt.url().as_str()) {
+                // A redirect within the site can lead to a blocked path: it isn't followed.
+                let refusal = crate::BlockedUrls::refusal(attempt.url().as_str(), entry);
+                attempt.error(refusal)
             } else if same_site(&host, &origin) && !forbidden_host(&host) {
                 attempt.follow()
             } else {
@@ -262,14 +267,20 @@ impl Tool for WebFetch {
             Ok(u) => u,
             Err(e) => return ToolOutput::error(e),
         };
+        // The engine refuses it before the call; a host that calls the tool directly (`kodact
+        // mcp serve`) gets the same answer.
+        if let Some(entry) = ctx.blocked_urls.matching(url.as_str()) {
+            return ToolOutput::error(crate::BlockedUrls::refusal(url.as_str(), entry));
+        }
         let prompt = str_arg(&input, "prompt").trim().to_string();
         let started = Instant::now();
         let page = tokio::select! {
-            r = self.fetch(&url) => r,
+            r = self.fetch(&url, &ctx.blocked_urls) => r,
             _ = ctx.cancel.cancelled() => return ToolOutput::error(INTERRUPTED),
         };
         let page = match page {
-            Ok(p) => p,
+            // Links to blocked URLs are masked: the page doesn't point the model at them.
+            Ok(p) => ctx.blocked_urls.mask(&p),
             Err(e) => return ToolOutput::error(e),
         };
         let bytes = page.len();
@@ -334,8 +345,11 @@ impl Tool for WebSearch {
             return ToolOutput::error("The query must have at least 2 characters.");
         }
         match self.backend.search(&query, &list("allowed_domains"), &list("blocked_domains"), &ctx.cancel).await {
-            Ok(text) => ToolOutput::text(format!("Web search results for \"{query}\":\n\n{text}"))
-                .with_structured(json!({"query": query})),
+            Ok(text) => {
+                let text = ctx.blocked_urls.mask(&text);
+                ToolOutput::text(format!("Web search results for \"{query}\":\n\n{text}"))
+                    .with_structured(json!({"query": query}))
+            }
             Err(e) => ToolOutput::error(format!("Web search failed: {e}")),
         }
     }
@@ -354,7 +368,7 @@ mod tests {
         // KODACT_TEST_FETCH_URL points it at a server whose CA only SSL_CERT_FILE knows.
         let url = std::env::var("KODACT_TEST_FETCH_URL").unwrap_or_else(|_| "https://example.com/".into());
         let url = reqwest::Url::parse(&url).unwrap();
-        let out = f.fetch(&url).await;
+        let out = f.fetch(&url, &Default::default()).await;
         assert!(out.is_ok(), "{out:?}");
     }
 

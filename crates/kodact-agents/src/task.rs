@@ -35,6 +35,8 @@ pub struct AgentRuntime {
     pub sandbox: kodact_tools::SandboxCell,
     /// The session's shell (Bash tool), the same for sub-agents.
     pub shell: kodact_tools::shells::ShellChoice,
+    /// The session's blocked URLs (`blockedUrls`): a sub-agent fetches no more than its parent.
+    pub blocked_urls: Arc<kodact_tools::BlockedUrls>,
     /// Edit may name lines instead of retyping them (`edit.lineRanges`), as in the session.
     pub line_edits: bool,
     /// Edit may change a file never read when it holds its exact text (`edit.withoutRead`).
@@ -144,6 +146,7 @@ impl AgentRuntime {
         tool_ctx.env = self.env.clone();
         tool_ctx.sandbox = self.sandbox.clone();
         tool_ctx.shell = self.shell.clone();
+        tool_ctx.blocked_urls = self.blocked_urls.clone();
         tool_ctx.session_id = self.session_id.clone();
         tool_ctx.spill_dir = self.spill_dir.clone();
         if let Some(turn) = spec.checkpoint_turn {

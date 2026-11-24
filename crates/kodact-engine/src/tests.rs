@@ -88,6 +88,8 @@ struct Harness {
     log: Arc<Mutex<Vec<String>>>,
     /// Whether the engine's tools get a spill directory (`spill_dir()`), as a session's do.
     spill: bool,
+    /// The session's blocked URLs (`blockedUrls`).
+    blocked: kodact_tools::BlockedUrls,
 }
 
 impl Harness {
@@ -98,7 +100,14 @@ impl Harness {
             sink: Arc::new(VecSink::default()),
             log: Arc::new(Mutex::new(vec![])),
             spill: false,
+            blocked: Default::default(),
         }
+    }
+
+    /// The same, with these URLs blocked.
+    fn blocking(mut self, entries: &[&str]) -> Self {
+        self.blocked = kodact_tools::BlockedUrls::new(entries).0;
+        self
     }
 
     /// The same, with a spill directory for what doesn't fit a result or a reminder.
@@ -132,6 +141,10 @@ impl Harness {
         for (name, writes, safe) in [("SafeA", false, true), ("Mut", true, false), ("AskSafe", true, true)] {
             tools.register(Arc::new(Sleepy { name, writes, safe, log: self.log.clone() }));
         }
+        if !self.blocked.is_empty() {
+            // Never reaches the network here: the URLs these tests fetch are blocked.
+            tools.register(Arc::new(kodact_tools::builtin::WebFetch::new(None)));
+        }
         let (hooks_cfg, errs) = HooksConfig::from_settings(Some(&hooks));
         assert!(errs.is_empty());
         let hooks = HookRunner::new(
@@ -144,6 +157,7 @@ impl Harness {
             tool_ctx: {
                 let mut ctx = ToolContext::new(&cwd);
                 ctx.spill_dir = self.spill.then(|| self.spill_dir());
+                ctx.blocked_urls = Arc::new(self.blocked.clone());
                 ctx
             },
             permissions: kodact_permissions::Engine::new(mode, RuleSet::default(), &cwd, &[]),
@@ -1355,6 +1369,34 @@ async fn verify_ignores_a_commit_after_a_passing_check() {
 /// process with `pgrep` (no process has that name: exit 1, or exit 127 where pgrep isn't
 /// installed, as there) and a test runner that isn't installed. Neither is a check nor a change:
 /// no reminder, no extra turn. (`pgrep -f` would match its own shell's command line and pass.)
+#[tokio::test]
+async fn blocked_urls_are_refused_in_every_mode_and_recorded() {
+    // A Terminal-Bench run fetched a task's hidden tests and solution from a public copy of the
+    // benchmark (df0446d, torch-pipeline-parallelism). With `blockedUrls`, neither WebFetch nor a
+    // command reaches such a URL, in bypassPermissions too; the word alone in a command is no URL.
+    let h = Harness::new(vec![]).blocking(&["terminal-bench", "tbench.ai"]);
+    let copy = "https://raw.githubusercontent.com/AI-Harness-Evals/terminal-bench-2-1-native/main/t/tests/test.sh";
+    let script = "python3 -c \"import urllib.request as u; print(u.urlopen('https://www.TBench.ai/x').read())\"";
+    h.provider.push(MockTurn::tool("WebFetch", json!({"url": copy})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": script})));
+    h.provider.push(MockTurn::tool("Bash", json!({"command": "echo terminal-bench"})));
+    h.provider.push(MockTurn::text("done"));
+    let mut e = h.engine();
+    let r = e.submit(prompt("solve the task")).await;
+    assert_eq!(r.num_turns, 4);
+    let results = tool_results(&e);
+    assert!(
+        results[0].2 && results[0].1.starts_with(&format!("Blocked: {copy} matches \"terminal-bench\"")),
+        "{results:?}"
+    );
+    assert!(results[1].2 && results[1].1.contains("matches \"tbench.ai\""), "{results:?}");
+    assert!(!results[2].2 && results[2].1.contains("terminal-bench"), "it ran: {results:?}");
+    let t = h.transcript_text();
+    assert_eq!(t.matches(r#""subtype":"url_blocked""#).count(), 2, "{t}");
+    assert!(t.contains(r#""entry":"tbench.ai""#), "{t}");
+    assert_eq!(r.permission_denials.len(), 2, "counted as refusals");
+}
+
 #[tokio::test]
 async fn verify_ignores_process_lookups_and_programs_that_are_not_installed() {
     let h = Harness::new(vec![]);
@@ -4499,6 +4541,7 @@ fn responding(turns: Vec<MockTurn>, summary: &'static str) -> Harness {
         sink: Arc::new(VecSink::default()),
         log: Arc::new(Mutex::new(vec![])),
         spill: false,
+        blocked: Default::default(),
     }
 }
 
@@ -4564,6 +4607,7 @@ async fn compaction_summaries_are_written_by_the_summary_model() {
             sink: Arc::new(VecSink::default()),
             log: Arc::new(Mutex::new(vec![])),
             spill: false,
+            blocked: Default::default(),
         }
     };
     let summaries = |h: &Harness| -> Vec<String> {
@@ -4987,6 +5031,7 @@ fn checked_by(
         sink: Arc::new(VecSink::default()),
         log: Arc::new(Mutex::new(vec![])),
         spill: false,
+        blocked: Default::default(),
     }
 }
 

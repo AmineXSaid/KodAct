@@ -46,6 +46,9 @@
 #                         nudges off and on is two jobs told apart by name)
 #   KODACT_FINISH_CHECK    0: no separate check of a Finish that claims verified (job name gets
 #                         -nofinishcheck, so its A/B is two jobs told apart by name)
+#   KODACT_HARBOR_BLOCK_BENCHMARK  0: let the agent fetch the benchmark's own files (its name in a
+#                         URL, the task's tests and solution); blocked by default (job name gets
+#                         -benchopen when they are not)
 #   KODACT_*               endpoint, key and limits, passed into the containers
 # Anything after the mode goes to `harbor run` (e.g. -i 'some-task*').
 set -euo pipefail
@@ -100,6 +103,7 @@ ca=""
 case "${KODACT_CARRY_REASONING:-}" in ""|0|false|no|off) ;; *) ca="${ca}-carry" ;; esac
 # As kodact reads it: 0, false, no or off turn the check off; unset or anything else leaves it on.
 case "${KODACT_FINISH_CHECK:-}" in 0|false|no|off) ca="${ca}-nofinishcheck" ;; esac
+case "${KODACT_HARBOR_BLOCK_BENCHMARK:-1}" in 0|false|no|off) ca="${ca}-benchopen" ;; esac
 [ -n "${KODACT_NUDGES:-}" ] && ca="${ca}-n-$(printf '%s' "$KODACT_NUDGES" | tr -c 'A-Za-z0-9' '.')"
 # The agent splits KODACT_HARBOR_ARGS as bash would (shell_args.py: '…', "…", $'…' from printf '%q',
 # backslashes). An unclosed quote crashed every trial at its start (2026-11-18, "No closing

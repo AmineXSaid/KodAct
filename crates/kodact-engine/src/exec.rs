@@ -96,6 +96,31 @@ fn denial(name: &str, id: &str, input: &Value) -> Option<PermissionDenial> {
     Some(PermissionDenial { tool_name: name.into(), tool_use_id: id.into(), tool_input: input.clone() })
 }
 
+/// A call that would reach a blocked URL (`blockedUrls`): the URL WebFetch would fetch, or one
+/// written in a command. Refused before rules, hooks and prompts, in every permission mode, and
+/// recorded (`url_blocked`), so a run shows what the model went looking for.
+fn blocked_call(
+    shared: &Shared,
+    tool: &dyn kodact_tools::Tool,
+    name: &str,
+    id: &str,
+    input: &Value,
+    ctx: &kodact_tools::ToolContext,
+) -> Option<CallResult> {
+    let (url, entry) = ctx.blocked_urls.blocks(&tool.permission_subject(input, ctx))?;
+    let data = json!({"tool": name, "tool_use_id": id, "url": url, "entry": entry});
+    shared.transcript.append_system("url_blocked", data.clone());
+    shared.sink.emit(EngineEvent::System { subtype: "url_blocked".into(), data });
+    Some(CallResult {
+        id: id.into(),
+        output: ToolOutput::error(kodact_tools::BlockedUrls::refusal(&url, entry)),
+        denial: denial(name, id, input),
+        interrupt_turn: false,
+        stop: None,
+        writes_after: 0,
+    })
+}
+
 fn blocked_path(subject: &Subject) -> Option<String> {
     match subject {
         Subject::Path { path, .. } => Some(path.display().to_string()),
@@ -172,6 +197,9 @@ async fn run_one(
     if let Err(e) = tool.validate(&input, &ctx) {
         return CallResult::plain(id, ToolOutput::error(format!("<tool_use_error>{e}</tool_use_error>")));
     }
+    if let Some(blocked) = blocked_call(shared, tool.as_ref(), name, id, &input, &ctx) {
+        return blocked;
+    }
 
     // 1. Rules and mode.
     let perm = shared.permissions.read().unwrap().clone();
@@ -240,6 +268,9 @@ async fn run_one(
             input = u;
             if let Err(e) = tool.validate(&input, &ctx) {
                 return CallResult::plain(id, ToolOutput::error(format!("<tool_use_error>{e}</tool_use_error>")));
+            }
+            if let Some(blocked) = blocked_call(shared, tool.as_ref(), name, id, &input, &ctx) {
+                return blocked;
             }
         }
     }

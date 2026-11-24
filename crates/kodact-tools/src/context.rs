@@ -50,6 +50,8 @@ pub struct ToolContext {
     pub transcript_path: Option<PathBuf>,
     /// The shell commands run in (Bash, `!` commands); `Err` when none was found.
     pub shell: crate::shells::ShellChoice,
+    /// URLs no tool fetches (`blockedUrls`), in any permission mode.
+    pub blocked_urls: Arc<crate::BlockedUrls>,
 }
 
 impl ToolContext {
@@ -73,6 +75,7 @@ impl ToolContext {
             spill_dir: None,
             transcript_path: None,
             shell: kodact_platform::shell::detect().clone(),
+            blocked_urls: Arc::default(),
         }
     }
 
