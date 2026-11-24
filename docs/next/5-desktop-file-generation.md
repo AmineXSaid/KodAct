@@ -1,121 +1,182 @@
-# Desktop: permissions that keep their word, and file generation that feels live
+# Plan: Windows desktop, files you watch being made, permissions that keep their word
 
-Found on 2026-11-24 from a real session ("make a PowerPoint about cancer for
-kids", KodAct desktop on Windows, deep-thinking gateway). Most of the work is
-in **KodAct-Desktop**. One part is in this repository and is already done.
+Written 2026-11-24 from a real session on Windows ("make a PowerPoint about
+cancer for kids", KodAct desktop, deep-thinking gateway, Bypass permissions).
 
-## What the person saw
+**Scope: the desktop app ships for Windows only, so every piece of this plan
+is built and tested for Windows 10/11 only.** Linux and macOS paths in the
+desktop (`/Applications/LibreOffice.app`, WSL-only branches, poppler) are
+dropped from the file-generation path. The KodAct CLI stays cross-platform,
+because the evals (Harbor) run it on Linux. CLI changes here must also work
+on Windows.
 
-| # | Symptom | Cause (checked in the code) | Where |
+## 1. What went wrong (checked against the code)
+
+| # | What you saw | Cause | Repo |
 |---|---|---|---|
-| P1 | "Bypass permissions" on, and KodAct still asked "Allow KodAct to run this command?" (`… && rm -rf pages && …`) | The desktop keeps `bypass_allowed` in memory only (`state.rs`, starts `false`), and `modes::cli_args` passes `--allow-dangerously-skip-permissions` only when it is true **at launch**. So a chat started before you allowed Bypass got a CLI that refuses the `set_permission_mode` switch. `Session::set_mode` throws the error away (`let _ =`), the menu says Bypass, and the CLI stays in Auto, where `rm` asks. | Desktop `src/modes.rs`, `src/state.rs::set_mode` |
-| P2 | Even in Auto, reading the skill's own scripts asked (`ls <plugin>/skills/office-documents/scripts`) | The plugin folder is outside the chat's folder. Read-only commands on paths outside the working directories ask in every mode except Bypass, while Auto lets the same path through when it is *run* (`python <plugin>/…/pptx_tool.py`). | CLI `kodact-permissions::Engine::decide` |
-| U1 | No file card until the reply ended, so there was nothing to click and watch while the deck was built | The card is made from the finished reply's files. Claude Desktop shows the file as soon as the first write starts and updates it in place. | Desktop `ui/file_card.rs`, `state.rs` |
-| U2 | The .pptx panel showed numbered paragraphs ("4 / Sometimes a Cell Forgets the Rules / 1 / A cell can…"), not slides | Slides are drawn only through LibreOffice (`office_render.rs`). Without it, `doc_pane.rs` falls back to the text editor. PowerPoint was installed and could have drawn them; the model found that out on its own with a PowerShell COM script. | Desktop `office_render.rs`, `ui/doc_pane.rs` |
-| U3 | `render.ps1` showed as plain text | gpui-component's `tree-sitter-languages` has no PowerShell grammar, and `text_editor::language_of` has no `ps1` entry | Desktop `ui/text_editor.rs` |
-| U4 | Large tool output in the chat: full Windows `PATH` dumps from `which`, three failed checks for missing tools, every slide PNG shown inline | The skill sends the model to look for tools (`pdftoppm`, `soffice`, `pywin32`) instead of KodAct telling it what the computer has. Each check is a visible step in the chat, and it fails. | Plugin `office-documents/SKILL.md`, `check_tool.py` |
-| U5 | The default deck was plain and black on white. The kid design was hand-built, with ~40 minutes of arc-angle maths. | `pptx_tool.py create` has one theme and no shape vocabulary (characters, icons, cards), so every designed deck is written from scratch | Plugin `pptx_tool.py` |
+| P1 | Bypass on, and "Allow KodAct to run this command?" still came up | `bypass_allowed` isn't saved, and `modes::cli_args` passes `--allow-dangerously-skip-permissions` only if Bypass was allowed **when the chat started**. Switching later is refused by the CLI, the desktop ignores the error (`let _ = live.session.set_mode`), and the chat keeps running in Auto. | Desktop (patch ready) + CLI (**done**) |
+| P2 | Auto asked just to read the skill's own scripts | The plugin folder (`%APPDATA%\…\plugin\…`) is outside the chat folder, and read-only commands on outside paths ask | CLI |
+| P3 | Auto's rules are written for Unix | Auto stops `rm`, but on Windows a removal is also `del`, `rd /s`, `Remove-Item -Recurse`. Paths come as `C:/…`, `C:\…` and `/c/…`, and case doesn't matter on Windows. | CLI |
+| U1 | No file until the reply ended; the task started with a `.md` outline | The card is made from the finished reply. The office skill's only build path is outline `.md` → `create` → done. | Desktop + plugin |
+| U2 | The .pptx panel showed paragraphs, not slides | Slides are drawn only through LibreOffice; without it you get the text editor. PowerPoint was installed and unused. | Desktop |
+| U3 | `render.ps1` had no colours | No PowerShell grammar; `language_of` has no `ps1` | Desktop |
+| U4 | Noisy chat: `which` dumped the whole `PATH`, there were three failed tool checks, and full-size PNGs | The skill makes the model look for tools; long and failed steps aren't folded | Desktop + plugin |
+| U5 | Plain default deck; the kids' design took ~40 min of hand-written shape maths | `pptx_tool.py` has one theme and no layouts | Plugin |
 
-## How Claude Desktop does it (the behaviour to match)
+## 2. The experience to match (Claude Desktop, as it behaves)
 
-This is described from how the product behaves, not from its source.
+- The **file exists from the first step**, as a card and an open preview,
+  and every new version replaces the old one while you watch.
+- **Nothing to approve**, because the sandbox draws the line. The tools are
+  always there, so the model never checks for them.
+- The **skill carries a design brief and a render/check loop** that always
+  works.
+- **Steps stay small:** one-line summaries, output folded, thumbnails not
+  full images.
+- **The result shows as it looks:** slide images with Download and "Open
+  in PowerPoint". No text editor by default.
 
-- **A sandbox draws the line, not prompts.** File creation runs in a
-  container with the tools already installed (python-pptx, LibreOffice,
-  poppler, Node). The model never checks whether a tool is there, and there
-  is nothing to approve.
-- **Skills ship the whole pipeline.** The pptx skill gives a design brief
-  (palettes, layouts, "no plain bullets"), a build path, and a thumbnail grid
-  script for checking the result. Rendering always works because the tools
-  are always there.
-- **The file appears early.** The file shows as a card or preview pane during
-  the turn and is replaced as new versions are written. You watch it change.
-- **Steps stay small.** Tool calls fold into one quiet "working" timeline
-  with one-line summaries, and output stays folded unless you open it.
-- **The result is shown as it looks.** Slides appear as slide images or
-  thumbnails, with Download and "Open in PowerPoint". A text view isn't
-  offered for a deck.
+## 3. Windows building blocks
 
-## The plan
+| Need | Windows way | Fallback |
+|---|---|---|
+| .pptx → slide images | PowerPoint COM, from a small PowerShell helper the desktop ships: `Presentations.Open(path, ReadOnly=-1, Untitled=0, WithWindow=0)`, then `Slides(i).Export(png, "PNG", 1600, 900)` | The LibreOffice copy the installer already stages (`installer/stage_libreoffice.sh`, beside `kodact.exe`) → PDF → images |
+| .docx / .xlsx → page images | Word `ExportAsFixedFormat` / Excel `ExportAsFixedFormat` to PDF, then the PDF row below | The staged LibreOffice → PDF |
+| PDF → page images | `Windows.Data.Pdf.PdfDocument` (WinRT, in Windows 10+), from Rust through the `windows` crate, MIT/Apache | `pypdfium2` in KodAct's Python |
+| Seeing file changes | `ReadDirectoryChangesW` (the `notify` crate), 150 ms debounce | Polling the modified time every 500 ms |
+| A file still being written | Retry on `ERROR_SHARING_VIOLATION`; copy to `%TEMP%\kodact-render\<hash>` before rendering; skip `~$*.pptx` lock files | — |
+| Highlighting | `tree-sitter-powershell` (MIT) added to the editor's grammars | — |
 
-### Done in this repository (commit on `claude/funny-turing-iu00qw`)
+Office COM runs one file at a time on its own thread (STA), with a 60 s time
+limit, and is killed if it hangs. Office is never left open with a window.
 
-- **P1, CLI half.** After every `set_permission_mode`, granted or refused,
-  KodAct CLI sends `system/status` with the mode the engine is really in.
-  The desktop already turns that into `ModeChanged`, so with this alone the
-  menu goes back to Auto instead of claiming Bypass. Test:
-  `crates/kodact-cli/tests/modes.rs::a_mode_switch_reports_the_mode_the_engine_is_in`.
+## 4. The plan, in order
 
-### Desktop, in order
+### Phase A: permissions (small, first)
 
-1. **P1, desktop half (patch ready: [`desktop-bypass-flag.patch`](desktop-bypass-flag.patch)).**
-   Always pass `--allow-dangerously-skip-permissions`. The flag only lets
-   the CLI switch modes; the desktop's Bypass warning stays the gate. Also
-   keep `bypass_allowed` in the settings file, and show a toast when a
-   `set_permission_mode` reply is an error.
-2. **U1, a live file card.** When a `tool_use` for Write, Bash or Edit names
-   an output file with `.pptx`, `.docx`, `.xlsx` or `.pdf` (or the
-   office-documents skill starts), put a card in the chat right away marked
-   "Writing…". Open the panel on it, and redraw it each time the file
-   changes on disk (the panel already keys renders by the file's bytes). Its
-   status goes Writing → Checking → Ready.
-3. **U2, slides everywhere.** Add a second renderer to `office_render.rs`:
-   on Windows with PowerPoint, export through COM, the same steps as the
-   model's `render.ps1` (`Presentations.Open(…, ReadOnly, Untitled,
-   WithWindow=false)`, then `Slide.Export(png, 1600, 900)`). Make the order
-   LibreOffice, then PowerPoint, then the text fallback. A .pptx is shown as
-   slide pictures with a filmstrip. Editing the text stays possible, but
-   behind an "Edit text" button, not as the default view.
-4. **U4, tell the model what the computer has.** The desktop already finds
-   `soffice` and `KODACT_PYTHON`. Also give the CLI
-   `KODACT_OFFICE_RENDER=libreoffice|powerpoint|none` and make
-   `check_tool.py render` use it, including the PowerPoint path. The skill
-   then says "render with `check_tool.py render`; it always works or says
-   why", and the model checks for nothing. Fold failed-and-retried steps
-   and long outputs (over 5 lines), and show image reads as thumbnails, not
-   full size.
-5. **U3, PowerShell colours.** Add a PowerShell grammar
-   (`tree-sitter-powershell`, MIT) to the editor's languages and map
-   `ps1`, `psm1` and `psd1` to it in `language_of`. Check the licence
-   (CLAUDE.md rule 1).
-6. **U5, a design layer for decks.** Give `pptx_tool.py create` themes
-   (`--theme kids|clean|bold`) and an outline syntax for layouts (cards,
-   steps, big statement, faces/icons row), so "make it for kids" is one
-   command and a check, not a hand-written renderer.
+1. **CLI: report the real mode.** **Done**: `system/status` with
+   `permissionMode` after every `set_permission_mode`. Test:
+   `crates/kodact-cli/tests/modes.rs::a_mode_switch_reports_the_mode_the_engine_is_in`.
+2. **Desktop: always pass the switch flag.** Patch:
+   [`desktop-bypass-flag.patch`](desktop-bypass-flag.patch). Also save
+   `bypass_allowed` in the settings file, and show a toast (and switch the
+   menu back) when a mode switch is refused.
+3. **CLI: plugin and skill folders are readable.** Call `add_read_dir` for
+   each loaded plugin root in `build_session`. Credential files stay guarded
+   by the threat scanner.
+4. **CLI: Auto knows Windows.** Treat `del`, `erase`, `rd /s`,
+   `rmdir /s`, `Remove-Item` (`-Recurse`/`-Force`), `ri` and `Clear-Content`
+   as removals. Read `C:\`, `C:/` and `/c/` as the same path, and compare
+   paths without case on Windows.
+   Unit tests in `kodact-permissions`; they pass on Linux too.
 
-### CLI, in this repository
+The goal for this phase: in Auto, building a deck in a chat's own folder asks
+**nothing** except deleting something outside the folder. In Bypass, it asks
+nothing at all.
 
-7. **P2.** Treat the folders of loaded plugins and skills as read
-   directories (`Engine::add_read_dir` in `build_session`). Reading a
-   skill's own files then never asks, in any mode. Credential files stay
-   guarded by the threat scanner.
+### Phase B: the real file first, live in front of you
 
-## The app test (one scenario covering all of the above)
+5. **Plugin: build into the real file, not a `.md`.** Add steps to
+   `pptx_tool.py`:
+   - `init deck.pptx --theme kids` writes a valid 16:9 deck with its title
+     slide.
+   - `add deck.pptx --layout cards|steps|statement|faces|title --json slide.json`
+     appends one slide.
+   - `set` / `restyle` edit a slide that is already there.
 
-A desktop end-to-end scenario, `tests/e2e_office_live.rs` in KodAct-Desktop,
-run with the mock model (`kodact-test-host::MockApi`) so it needs no key and
-gives the same result every time:
+   Each step saves the file, so the deck grows slide by slide. The skill's
+   first instruction becomes "`init` the requested file type before anything
+   else". `docx_tool.py init` and `xlsx_tool.py init` work the same way. The
+   `.md` outline stays as an input, never as the first thing the person sees.
+6. **Desktop: the card appears at the first step.** When a `tool_use`
+   (Bash, Write, Edit) names a `.pptx`, `.docx`, `.xlsx` or `.pdf` path,
+   put a card in the chat at once with status **Writing…**, and open the
+   side panel on it.
+7. **Desktop: live redraw.** Watch the file. On each settled change, render
+   it again with the section 3 pipeline and swap the images in place: same
+   scroll position, the changed slide marked for a moment. The status goes
+   Writing → Checking (while `check_tool.py validate`/`render` runs) → Ready,
+   or Error with the reason.
 
-Script: the mock model (1) loads the office-documents skill, (2) Writes
-`build_deck.py`, (3) runs `python build_deck.py` (makes `deck.pptx`),
-(4) runs `check_tool.py render deck.pptx pages/`, (5) runs
-`rm -rf pages && python build_deck.py`, (6) replies.
+### Phase C: a solid preview
 
-Checks, each tied to a symptom:
+8. **Slides as slides.** A .pptx opens as large slide images with a
+   filmstrip, page numbers, Download and "Open in PowerPoint". Editing the
+   text moves behind an **Edit text** button. Word and PDF files show as
+   pages, and Excel as its sheet grid with a "Print view" toggle.
+9. **One renderer for the model too.** The desktop sets
+   `KODACT_OFFICE_RENDER=powerpoint|libreoffice|none` and
+   `KODACT_RENDER_HELPER=<path to the .ps1 helper>`. `check_tool.py render`
+   uses the same helper, so the model never checks for tools or writes its
+   own `render.ps1`. The skill says: "render with `check_tool.py render`; it
+   works or says why."
 
-| Check | Symptom |
+### Phase D: a quieter chat and polish
+
+10. **Fold noise.** Tool output over 5 lines is folded. A failed step
+    followed by its successful retry shows as one row. Image reads show as
+    thumbnails. A step's long `PATH` or environment dump is cut to its first
+    line plus "…".
+11. **PowerShell colours** for `.ps1`, `.psm1` and `.psd1` in the editor and
+    in the chat's code blocks, and the same colours for the command line on
+    `Bash`/`PowerShell` step cards.
+12. **Deck themes.** `kids`, `clean` and `bold`, each a palette, fonts that
+    ship with Windows (Century Gothic, Trebuchet MS, Segoe UI) and the shape
+    vocabulary: cards, number badges, faces with moods, sun/star/heart/cloud.
+    Arc angles are done once inside the tool, never by the model.
+
+## 5. The app test (Windows)
+
+**Where:** `tests/e2e_office_live.rs` in KodAct-Desktop. It runs on a
+Windows runner (GitHub `windows-latest`, which has no Office) and on a dev
+machine with Office. Cases that need PowerPoint are skipped, with a message,
+when `PowerPoint.Application` can't be created.
+
+**How:** a real `kodact.exe` driven by the mock model
+(`kodact-test-host::MockApi`), so it needs no key and gives the same result
+every time. The mock model:
+
+1. loads the office-documents skill;
+2. runs `pptx_tool.py init deck.pptx --theme kids`;
+3. runs `pptx_tool.py add …` three times;
+4. runs `check_tool.py validate` and `render`;
+5. runs `Remove-Item -Recurse pages; pptx_tool.py add …`;
+6. replies.
+
+| Check | Covers |
 |---|---|
-| Launched in Auto, Bypass allowed mid-chat, then step 5: **no** `can_use_tool` reaches the UI, and the mode menu and the CLI's `system/status` agree on every switch | P1 |
-| In Auto, steps 1–4 ask nothing. Step 5 asks once (a removal), and in Bypass it asks nothing | P1, P2 |
-| A file card for `deck.pptx` exists **after step 3's `tool_use`**, before the turn ends, and its panel redraws when the file changes (two different render keys) | U1 |
-| With LibreOffice hidden (`KODACT_SOFFICE` set to a missing path), the panel for a .pptx shows slide images on Windows and says "Install LibreOffice…" only when PowerPoint is also missing | U2 |
-| `language_of("render.ps1") == "powershell"`, and the editor puts more than one highlight kind on a sample script | U3 |
-| A tool result over 5 lines is folded by default, and a failed step followed by a successful retry shows as one row | U4 |
+| Launched in Auto, Bypass allowed mid-chat, then step 5: no `can_use_tool` reaches the UI, and the menu agrees with the CLI's `system/status` after every switch | P1 |
+| In Auto, steps 1–4 ask nothing. Step 5 asks once in Auto (`Remove-Item -Recurse`) and never in Bypass. | P1–P3 |
+| The `deck.pptx` card exists right after step 2's `tool_use`, before the turn ends, and its status passes Writing → Checking → Ready | U1 |
+| The panel's render key changes after each `add` (4 different renders), and the slide count shown goes 1 → 4 | U1 |
+| With PowerPoint: slide images, not the text editor. Without PowerPoint and LibreOffice: a clear "can't draw slides" note and the Edit text view. | U2 |
+| `language_of("render.ps1") == "powershell"`, and a sample script gets more than one highlight kind | U3 |
+| A tool result over 5 lines is folded by default, and a fail + retry pair shows as one row | U4 |
+| No step in the turn ran `which`, `where`, `Get-Command` or a check for a tool | U4 |
 
-Run it on Windows (the release target) and Linux, and take light and dark
-screenshots of the panel at steps 3 and 6 for the visual check.
+Plus screenshots of the panel after steps 2, 3 and 6, in light and dark, for
+the visual check (`/visual-critique:critique-screen`).
 
-For the CLI half, add an eval task (`evals/tasks/office-deck-no-prompts/`)
-that counts permission prompts and failed tool checks in a deck-building run
-in Auto. The before/after `kodact-eval compare` needs a key and is still
+**The CLI side:** eval task `evals/tasks/office-deck-no-prompts/` counts
+permission prompts and failed tool checks in a deck-building run in Auto.
+The `kodact-eval` before/after comparison needs an API key and is still
 owed.
+
+## 6. Done means
+
+- In Bypass: no prompts, ever. In Auto: no prompts for work inside the chat's
+  folder except deletions outside it.
+- The requested file type's card appears within one step of the request and
+  updates live, and no `.md` is shown first.
+- A .pptx always shows as slides on a Windows machine with PowerPoint or the
+  bundled LibreOffice.
+- `.ps1` files are coloured.
+- The app test passes on `windows-latest`, and the PowerPoint cases pass on a
+  machine with Office.
+
+## 7. What it needs
+
+Phase A, steps 3–4 are in this repository and can start now. Everything
+marked Desktop or Plugin is in **KodAct-Desktop**, which this cloud session
+can only read: it needs write access to that repo. The PowerPoint parts can
+be written here, but can only be checked on your Windows machine.
