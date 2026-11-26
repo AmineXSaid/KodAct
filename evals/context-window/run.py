@@ -168,6 +168,15 @@ case("model-info-max-output-print-prompt", "print_prompt", {"models": {"fields":
 # learned and the request goes again (the session used to end at the first request).
 case("max-output-refused-openai-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"max_output": 8192}}, {"max_tokens_eq": [32000, 8192], "exit": 0})
 case("max-output-refused-deepseek-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"max_output": 8192, "max_output_style": "deepseek"}}, {"max_tokens_eq": [32000, 8192], "exit": 0})
+# 7b. A server with a 65,536-token window that clamps the reply asked for to what is left and refuses only
+# a prompt over the window, in vLLM's newer words ("Input length (N) exceeds model's maximum context
+# length (W)."), which KodAct did not read, so the window stayed the 1,000,000-token guess. Learned from
+# it, and kept for the next session.
+case("input-length-refusal-learned", "learn_then_context", {"models": {"fields": {}}, "chat": {"window": 65536, "prompt_tokens": 70000, "clamp": True}}, {"window": 65536, "notice": False})
+# A prompt that fills the window to the token: a reply budget of nothing, refused as "max_tokens must be
+# at least 1, got 0". It used to end the run; the conversation is compacted instead, with no smaller
+# replies tried first (the server would cut each the same way).
+case("no-room-refusal-compacts-print-prompt", "print_prompt", {"models": {"fields": {}}, "chat": {"window": 65536, "prompt_tokens": 3000, "clamp": True, "fill_first": True}}, {"exit": 0, "summaries": 1, "max_tokens_eq": [32000, 32000, 32000]})
 # 8. Compaction on a small window: at ~20k, not every turn.
 case("compact-under-threshold-tui", "tui", {"models": {"fields": {"max_model_len": W}}, "chat": {"prompt_tokens": 15000}}, {"summaries": 0}, prompts=("one", "two", "three"))
 case("compact-over-threshold-tui", "tui", {"models": {"fields": {"max_model_len": W}}, "chat": {"prompt_tokens": 22000}}, {"summaries_ge": 1}, prompts=("one", "two", "three"))

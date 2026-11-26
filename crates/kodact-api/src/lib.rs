@@ -286,11 +286,24 @@ impl ApiError {
         match self {
             ApiError::Http { status: 400 | 413 | 422, kind, message, .. } => {
                 let m = message.to_ascii_lowercase();
-                kind == "context_length_exceeded" || PHRASES.iter().any(|p| m.contains(p))
+                kind == "context_length_exceeded" || PHRASES.iter().any(|p| m.contains(p)) || leaves_no_room(&m)
             }
             ApiError::Stream { message, .. } => {
                 let m = message.to_ascii_lowercase();
-                PHRASES.iter().any(|p| m.contains(p))
+                PHRASES.iter().any(|p| m.contains(p)) || leaves_no_room(&m)
+            }
+            _ => false,
+        }
+    }
+
+    /// The prompt fills the window and leaves no room for any reply: the server cut the reply it
+    /// was asked for down to what the window had left, and that was nothing. vLLM, behind LiteLLM:
+    /// "max_tokens must be at least 1, got 0". The request asked for more than that; only a
+    /// shorter conversation helps, not a smaller reply budget.
+    pub fn leaves_no_room(&self) -> bool {
+        match self {
+            ApiError::Http { status: 400 | 422, message, .. } | ApiError::Stream { message, .. } => {
+                leaves_no_room(&message.to_ascii_lowercase())
             }
             _ => false,
         }
@@ -319,6 +332,7 @@ impl ApiError {
             (" tokens > ", "maximum"),
             ("max_model_len=", ""),
             ("maximum model length of ", ""),
+            ("maximum context length (", ")"), // vLLM: "Input length (72614) exceeds model's maximum context length (65536)."
         ])
         .filter(|w| (1_000..=1_000_000_000).contains(w));
         let prompt = pick(&[
@@ -327,6 +341,7 @@ impl ApiError {
             ("request (", "token"),
             ("prompt is too long: ", "token"),
             ("decoder prompt (length ", ")"),
+            ("input length (", ")"),
         ]);
         ReportedLimits { window, prompt }
     }
@@ -373,6 +388,13 @@ impl ApiError {
 pub struct ReportedLimits {
     pub window: Option<u64>,
     pub prompt: Option<u64>,
+}
+
+/// `m` (lower-cased) is a refusal for a reply budget of nothing: "max_tokens must be at least 1,
+/// got 0" and its variants ("max_completion_tokens", "value=0").
+fn leaves_no_room(m: &str) -> bool {
+    let named = m.contains("max_tokens") || m.contains("max_completion_tokens");
+    named && m.contains("must be at least 1") && (m.contains("got 0") || m.contains("value=0"))
 }
 
 /// The whole number right after `before` in `m`, when `after` follows it (spaces, commas and
@@ -533,6 +555,13 @@ mod outage_tests {
             http(400, prompt_too_large).reported_limits(),
             ReportedLimits { window: Some(524_288), prompt: Some(600_000) }
         );
+        // vLLM's newer words for the same refusal (seen behind LiteLLM at a 65,536-token window).
+        let input_length = r#"litellm.BadRequestError: Hosted_vllmException - {"error":{"message":"Input length (72614) exceeds model's maximum context length (65536).","type":"BadRequestError","param":null,"code":400}}"#;
+        assert!(http(400, input_length).is_prompt_too_long());
+        assert_eq!(
+            http(400, input_length).reported_limits(),
+            ReportedLimits { window: Some(65_536), prompt: Some(72_614) }
+        );
         let huge = "This model's maximum context length is 10,000,000 tokens. However, your messages resulted in 10,000,500 tokens.";
         assert_eq!(http(400, huge).reported_limits().window, Some(10_000_000));
         // A refusal that names no size, and errors of another kind, say nothing.
@@ -543,6 +572,27 @@ mod outage_tests {
             None,
             "not a real window"
         );
+    }
+
+    /// A prompt that fills the window leaves a reply budget of nothing, and the server refuses
+    /// it ("max_tokens must be at least 1, got 0"): a refusal for length, with no window or reply
+    /// limit stated, that no smaller reply budget cures.
+    #[test]
+    fn a_refusal_for_a_reply_budget_of_nothing_is_a_refusal_for_length() {
+        let vllm = r#"litellm.BadRequestError: Hosted_vllmException - {"error":{"message":"max_tokens must be at least 1, got 0. (parameter=max_tokens, value=0)","type":"BadRequestError","param":"max_tokens","code":400}}"#;
+        let e = http(400, vllm);
+        assert!(e.leaves_no_room() && e.is_prompt_too_long());
+        assert_eq!(e.reported_limits(), ReportedLimits::default());
+        assert_eq!(e.reported_max_output(), None, "it states no limit to learn");
+        // Other refusals about max_tokens are not this one.
+        for other in [
+            "max_tokens must be less than or equal to 4096",
+            "max_tokens is too large: 32000. This model supports at most 16384 completion tokens",
+            "max_tokens must be at least 1, got -5",
+        ] {
+            assert!(!http(400, other).leaves_no_room(), "{other}");
+        }
+        assert!(!http(500, vllm).leaves_no_room() && !http(500, vllm).is_prompt_too_long());
     }
 
     /// The reply limit a refusal states, in each server's words; nothing from a refusal of the

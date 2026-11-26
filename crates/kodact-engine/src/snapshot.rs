@@ -87,6 +87,10 @@ pub(crate) fn assemble(model: &str, rt: &Runtime, p: RequestParts<'_>) -> Messag
     let info = kodact_api::models::model_info_or_default(model);
     let (thinking, mut output_config, max_tokens) =
         thinking_params(&info, rt.max_thinking_tokens, rt.effort.as_deref(), p.max_output_tokens);
+    // The one place a request's reply cap is set: never nothing. Servers refuse a request for
+    // zero tokens ("max_tokens must be at least 1"), which no later step can cure. A cap above
+    // zero goes as it is, so a model with room asks for what it always did.
+    let max_tokens = if max_tokens == 0 { crate::engine::MIN_REPLY.min(info.max_output.max(1)) } else { max_tokens };
     // An OpenAI-compatible endpoint takes a reasoning level for any model (`reasoning_effort`,
     // see kodact-api's openai.rs), so the effort asked for is kept for a model KodAct has no
     // table entry for. An endpoint that refuses it gets the request again without it.
@@ -270,6 +274,30 @@ mod tests {
         assert!(last.contains("What you said when you started them: Launching two auditors."), "{last}");
         assert!(last.contains("bash_1 [running] npm test") && last.ends_with("how far are you?"), "{last}");
         assert!(!req.messages.iter().any(|m| m.tool_uses().next().is_some()), "the unanswered call itself stays out");
+    }
+
+    /// No request goes out asking for a reply of zero tokens, however the cap was reached; a cap
+    /// above zero goes unchanged, on a small model and on a large one.
+    #[test]
+    fn a_request_never_asks_for_a_reply_of_zero_tokens() {
+        let request = |max_output_tokens: u32| {
+            let rt = Runtime { model: "deep-thinking".into(), max_thinking_tokens: None, effort: None, fast: false };
+            let parts = RequestParts {
+                messages: &[Message::user_text("hi")],
+                microcompacted: &HashSet::new(),
+                system: &[],
+                tools: vec![],
+                max_output_tokens,
+                json_schema: None,
+                metadata_user_id: None,
+                provider_name: "openai",
+            };
+            assemble("deep-thinking", &rt, parts).max_tokens
+        };
+        assert_eq!(request(0), crate::engine::MIN_REPLY);
+        assert_eq!(request(1), 1, "a stated cap is the caller's word");
+        assert_eq!(request(32_000), 32_000);
+        assert_eq!(request(16_000), 16_000);
     }
 
     #[test]

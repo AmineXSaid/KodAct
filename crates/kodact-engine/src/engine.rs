@@ -87,7 +87,7 @@ impl Drop for AbortOnDrop {
 
 /// The smallest reply budget a request is sized down to; with less room than this, it goes as
 /// it is, and a refusal for length compacts the conversation and tries again.
-const MIN_REPLY: u32 = 4_096;
+pub(crate) const MIN_REPLY: u32 = 4_096;
 
 /// Times a turn's request is sent again with half the reply budget, after refusals for length
 /// whose prompt fits the window: 32,000 → 16,000 → 8,000 → 4,096, then the conversation is
@@ -116,6 +116,9 @@ const MAX_LENGTH_COMPACTIONS: u32 = 8;
 /// for 32,000 tokens on top of a 68,000-token prompt in a 100,000 window, and one run ended on it.
 /// With room to spare (a large window, or a short conversation) this is `cap`, unchanged.
 pub(crate) fn fit_reply(cap: u32, window: u64, prompt: u64) -> u32 {
+    // A cap of nothing is no cap at all (a request for zero tokens is refused outright): it takes
+    // the smallest usable reply, and then the window's room, as any other.
+    let cap = if cap == 0 { MIN_REPLY } else { cap };
     let margin = (window / 50).max(1_024);
     let room = window.saturating_sub(prompt).saturating_sub(margin);
     let fitted = room.max(u64::from(cap.min(MIN_REPLY)));
@@ -2616,7 +2619,9 @@ impl Engine {
     /// path-tracing (2026-11-10) asked 28,537 tokens on a prompt "at least 71,464" in a 100,000
     /// window, and the run ended there. True when it shrank, so the request is worth sending again.
     fn shrink_reply(&mut self, model: &str, e: &ApiError, sent: u32) -> bool {
-        if !e.is_prompt_too_long() || sent <= MIN_REPLY {
+        // A refusal because the prompt leaves no room for any reply is cured by a shorter
+        // conversation only: asking for less changes nothing, and each try costs a request.
+        if !e.is_prompt_too_long() || e.leaves_no_room() || sent <= MIN_REPLY {
             return false;
         }
         let reported = e.reported_limits();

@@ -2156,6 +2156,47 @@ fn a_reply_budget_fits_what_the_window_has_left() {
     assert_eq!(fit_reply(2_000, 100_000, 99_500), 2_000);
 }
 
+/// A reply cap of nothing is never sent on: it takes the smallest usable reply, then the
+/// window's room like any cap; every other case, small window or large, is as before.
+#[test]
+fn a_reply_budget_is_never_zero() {
+    use crate::engine::fit_reply;
+    assert_eq!(fit_reply(0, 1_000_000, 100), 4_096);
+    assert_eq!(fit_reply(0, 100_000, 99_500), 4_096);
+    assert_eq!(fit_reply(0, 5_000, 4_900), 4_096, "no room: the minimum, and a refusal compacts");
+    assert_eq!(fit_reply(32_000, 1_000_000, 900_000), 32_000, "a large window keeps the cap");
+    assert_eq!(fit_reply(32_000, 65_536, 64_235), 4_096, "a small window with room for little");
+}
+
+/// The prompt fills a window the server knows and KodAct doesn't (a 1,000,000-token guess), and
+/// the server cut the reply asked for to what was left: nothing. It is a refusal for length: the
+/// conversation is compacted and the run goes on, with no smaller replies tried first (they would
+/// be cut the same way), where it used to end on this error (a 65,536-token endpoint, after 94 turns).
+#[tokio::test]
+async fn a_reply_budget_of_nothing_compacts_instead_of_ending_the_run() {
+    let no_room = || {
+        MockTurn::HttpError {
+        status: 400,
+        kind: "BadRequestError".into(),
+        message: r#"litellm.BadRequestError: Hosted_vllmException - {"error":{"message":"max_tokens must be at least 1, got 0. (parameter=max_tokens, value=0)","type":"BadRequestError","param":"max_tokens","code":400}}"#
+            .into(),
+    }
+    };
+    let h = Harness::new(vec![
+        MockTurn::tool("Bash", json!({"command": "echo 1"})).with_usage(usage(64_000)),
+        no_room(),
+        MockTurn::text("<summary>the work so far</summary>"),
+        MockTurn::text("done"),
+    ]);
+    let mut e =
+        h.engine_with(EngineConfig::default(), PermissionMode::BypassPermissions, Arc::new(DenyPrompter), json!({}));
+    let r = e.submit(prompt("long job")).await;
+    assert_eq!(r.result.as_deref(), Some("done"), "{:?}", r.subtype);
+    let t = h.transcript_text();
+    assert!(t.contains("compact_boundary") && !t.contains("reply_shrunk"), "{t}");
+    assert!(h.provider.requests().iter().all(|r| r.max_tokens >= 1));
+}
+
 /// A model's reply limit comes from what it, or its endpoint, says. A refusal that states it is
 /// learned and the request goes again asking no more, and so does every later one (an endpoint
 /// that caps replies below the default ended every session at the first request). A limit stated

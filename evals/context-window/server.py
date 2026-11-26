@@ -7,6 +7,7 @@ import json, sys, time, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT, CONFIG, LOG = int(sys.argv[1]), sys.argv[2], sys.argv[3]
 lock = threading.Lock()
+seen = {}
 def cfg():
     try: return json.load(open(CONFIG))
     except Exception: return {}
@@ -50,6 +51,9 @@ class H(BaseHTTPRequestHandler):
         # KodAct estimates). `at_least`: like vLLM, it states only a lower bound for the prompt,
         # the window less the reply asked for, plus one.
         pt = ch.get("prompt_tokens", 3000) + ch.get("per_message", 0) * len(msgs) + ch.get("real_extra", 0)
+        # `fill_first`: the first reply's prompt fills the window to the token, later ones don't.
+        if ch.get("fill_first") and not seen.get("filled"):
+            seen["filled"] = True; pt = ch["window"]
         mt = req.get("max_tokens") or req.get("max_completion_tokens") or 0
         # A server that caps replies below what was asked, refusing in the words of the API it
         # stands for (`max_output_style`): OpenAI's (default) or DeepSeek's.
@@ -59,7 +63,18 @@ class H(BaseHTTPRequestHandler):
                 "deepseek": f"Invalid max_tokens value, the valid range of max_tokens is [1, {ch['max_output']}]",
             }[ch.get("max_output_style", "openai")]
             return self.reply(400, json.dumps({"error": {"message": words, "type": "invalid_request_error"}}))
-        if ch.get("window") and pt + mt > ch["window"]:
+        # A server that clamps the reply asked for to the window's room (a newer vLLM), and says so
+        # only when no room is left: a prompt over the window is refused as "Input length (N)
+        # exceeds model's maximum context length (W).", one that fills it to the token with a
+        # reply budget of nothing ("max_tokens must be at least 1, got 0").
+        if ch.get("clamp") and ch.get("window"):
+            if pt > ch["window"]:
+                inner = f"Input length ({pt}) exceeds model's maximum context length ({ch['window']})."
+                return self.reply(400, json.dumps({"detail": "litellm.BadRequestError: Hosted_vllmException - " + json.dumps({"error": {"message": inner, "type": "BadRequestError", "param": None, "code": 400}})}))
+            if pt == ch["window"]:
+                inner = "max_tokens must be at least 1, got 0. (parameter=max_tokens, value=0)"
+                return self.reply(400, json.dumps({"detail": "litellm.BadRequestError: Hosted_vllmException - " + json.dumps({"error": {"message": inner, "type": "BadRequestError", "param": "max_tokens", "code": 400}})}))
+        elif ch.get("window") and pt + mt > ch["window"]:
             stated = ch["window"] - mt + 1 if ch.get("at_least") else pt
             inner = (f"This model's maximum context length is {ch['window']} tokens. However, you requested {mt} output tokens "
                      f"and your prompt contains at least {stated} input tokens, for a total of at least {stated + mt} tokens.")

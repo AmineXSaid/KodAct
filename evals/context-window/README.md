@@ -24,5 +24,6 @@ that states the window, learned and sent again (and a large model never refused)
 kept for the next session in the same home (`learned-window-*`: kept, not kept with
 `KODACT_LEARNED_LIMITS=off`, nothing kept for a model never refused); a refusal
 that states only a lower bound for the prompt (vLLM's "at least"), answered with half the reply; the reply limit;
+a server that clamps the reply to the window's room and refuses a prompt over it as "Input length (N) exceeds model's maximum context length (W)" (the window is learned), or a prompt that fills it as "max_tokens must be at least 1, got 0" (the conversation is compacted, the run goes on);
 compaction under and over the threshold on a 32k window; a server that
 rejects a too-long prompt.
