@@ -1232,7 +1232,6 @@ pub fn build_session(
     // Sub-agents: the Task tool and `/subtask` share this session's provider, rules, hooks and budget.
     let memory = if opts.bare { None } else { memory_context(&cwd) };
     let agent_rt = Arc::new(kodact_agents::AgentRuntime {
-        known_models: Default::default(),
         provider: provider.clone(),
         agents: agents.clone(),
         project_dir: cwd.clone(),

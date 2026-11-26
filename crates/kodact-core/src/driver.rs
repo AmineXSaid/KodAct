@@ -298,7 +298,7 @@ impl Driver {
         // A failed listing is asked again, after a pause.
         if failure.is_none() {
             // The Task tool offers them as its `model` choices.
-            *self.agent_rt.known_models.write().unwrap() = list.clone();
+            self.engine.handle().set_known_models(list.clone());
             self.models = Some(list);
             self.models_failed = None;
         } else {
@@ -534,6 +534,12 @@ impl Driver {
             next.info.init.output_style = self.info.init.output_style.clone();
         }
         *next.advisor.write().unwrap() = self.advisor.read().unwrap().clone();
+        // The endpoints' model list too, when they are the same: the Task tool offers it, and a
+        // skill's model shorthand is checked against it.
+        if next.models.is_none() && next.info.cwd == self.info.cwd {
+            next.models = self.models.clone();
+            next.engine.handle().set_known_models(self.engine.handle().known_models());
+        }
         next.prompt.replace = self.prompt.replace.clone();
         next.prompt.append = self.prompt.append.clone();
         next.rebuild_system();

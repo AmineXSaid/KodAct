@@ -536,6 +536,10 @@ pub struct Runtime {
 /// A cloneable handle for controlling a running engine (interrupt, mode, model).
 #[derive(Clone)]
 pub struct EngineHandle {
+    /// The session's provider, to tell whether a model shorthand can be served.
+    provider: Arc<dyn Provider>,
+    /// The models the session's endpoints list, once the listing came (`set_known_models`).
+    known_models: Arc<RwLock<Vec<String>>>,
     cancel: Arc<Mutex<CancellationToken>>,
     pub permissions: Arc<RwLock<PermEngine>>,
     pub runtime: Arc<RwLock<Runtime>>,
@@ -715,20 +719,41 @@ impl EngineHandle {
         self.runtime.write().unwrap().effort = effort;
     }
 
+    /// The models the session's endpoints list (empty until the listing came).
+    pub fn known_models(&self) -> Vec<String> {
+        self.known_models.read().unwrap().clone()
+    }
+
+    pub fn set_known_models(&self, ids: Vec<String>) {
+        *self.known_models.write().unwrap() = ids;
+    }
+
+    /// The model id `name` runs as here ([`kodact_api::usable_model`]): `Err` with why for a
+    /// Claude shorthand no endpoint of the session serves.
+    pub fn usable_model(&self, name: &str) -> Result<String, String> {
+        kodact_api::usable_model(&self.provider, name, &self.known_models.read().unwrap())
+    }
+
     /// Run the rest of this turn on `model` and/or at `effort` (a skill's
-    /// frontmatter); both go back to what they were when the turn ends.
-    pub fn override_for_turn(&self, model: Option<&str>, effort: Option<&str>) {
+    /// frontmatter); both go back to what they were when the turn ends. A Claude shorthand
+    /// no endpoint serves leaves the model as it is: `Some(why)`.
+    pub fn override_for_turn(&self, model: Option<&str>, effort: Option<&str>) -> Option<String> {
         if model.is_none() && effort.is_none() {
-            return;
+            return None;
         }
+        let usable = model.map(|m| self.usable_model(m));
         let mut rt = self.runtime.write().unwrap();
         self.turn_restore.lock().unwrap().get_or_insert_with(|| (rt.model.clone(), rt.effort.clone()));
-        if let Some(m) = model {
-            rt.model = kodact_api::resolve_model(m);
+        let mut kept = None;
+        match usable {
+            Some(Ok(id)) => rt.model = id,
+            Some(Err(why)) => kept = Some(format!("{why}, so it runs on {}", rt.model)),
+            None => {}
         }
         if let Some(e) = effort {
             rt.effort = Some(e.to_string());
         }
+        kept
     }
 
     /// A skill was loaded with `text`: remembered, so compaction can put it back.
@@ -1081,6 +1106,8 @@ impl Engine {
         };
         let permissions = Arc::new(RwLock::new(parts.permissions));
         let handle = EngineHandle {
+            provider: parts.provider.clone(),
+            known_models: Default::default(),
             cancel: Arc::new(Mutex::new(CancellationToken::new())),
             permissions: permissions.clone(),
             runtime: Arc::new(RwLock::new(runtime)),

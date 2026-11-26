@@ -2050,6 +2050,8 @@ async fn a_typed_skill_holds_its_frontmatter_for_its_turn_only() {
         o.setting_sources = Some(vec![SettingSource::Project, SettingSource::Local]);
     });
     ship_skill(&t.proj);
+    // The endpoint serves the Claude model the skill names (`model: sonnet`).
+    t.d.engine.handle().set_known_models(vec![kodact_api::resolve_model("sonnet")]);
     local(&mut t.d, "/reload-skills").await;
     t.p.push(MockTurn::tool("Bash", serde_json::json!({"command": "touch shipped.txt"})));
     t.p.push(MockTurn::text("Shipped."));
@@ -2085,6 +2087,8 @@ async fn a_typed_skill_holds_its_frontmatter_for_its_turn_only() {
 async fn the_model_loads_a_skill_and_its_grants_hold_for_the_rest_of_the_turn() {
     let mut t = driver();
     ship_skill(&t.proj);
+    // The endpoint serves the Claude model the skill names (`model: sonnet`).
+    t.d.engine.handle().set_known_models(vec![kodact_api::resolve_model("sonnet")]);
     local(&mut t.d, "/reload-skills").await;
     t.p.push(MockTurn::tool("Skill", serde_json::json!({"skill": "ship", "args": "v3"})));
     t.p.push(MockTurn::tool("Bash", serde_json::json!({"command": "touch shipped.txt"})));
@@ -2196,6 +2200,8 @@ async fn mid_prompt_skills_apply_frontmatter_and_keep_prompt_text_for_hooks_and_
         std::fs::write(dir.join("proj/.kodact/settings.json"), settings.to_string()).unwrap();
     });
     ship_skill(&t.proj);
+    // The endpoint serves the Claude model the skill names (`model: sonnet`).
+    t.d.engine.handle().set_known_models(vec![kodact_api::resolve_model("sonnet")]);
     std::fs::write(t.proj.join("notes.md"), "release checklist").unwrap();
     local(&mut t.d, "/reload-skills").await;
 
@@ -2266,4 +2272,23 @@ async fn mid_prompt_fork_skill_and_chained_start_plus_mid_skill() {
     let main = &reqs[reqs.len() - 1];
     assert!(texts(sub).contains("List the endpoints in src/v2."), "{}", texts(sub));
     assert!(texts(main).contains("Handle PDF.") && texts(main).contains("Sub-agent result."), "{}", texts(main));
+}
+
+/// A skill's `model: sonnet` on endpoints that serve no Claude model leaves the turn on the
+/// session's model, and the skill says so; the rest of its frontmatter still holds.
+#[tokio::test]
+async fn a_skills_claude_shorthand_no_endpoint_serves_keeps_the_model() {
+    let mut t = driver_with(|_, o| {
+        o.setting_sources = Some(vec![SettingSource::Project, SettingSource::Local]);
+    });
+    ship_skill(&t.proj);
+    local(&mut t.d, "/reload-skills").await;
+    let before = t.d.engine.handle().model();
+    t.p.push(MockTurn::text("Shipped."));
+    let r = run(&mut t.d, "/ship v4").await;
+    assert!(!r.is_error, "{:?}", r.result);
+    let first = &t.p.requests()[0];
+    assert_eq!(first.model, before, "a gateway without Claude models would refuse the id");
+    assert!(texts(first).contains("names a Claude model none of your endpoints serves"), "{}", texts(first));
+    assert_eq!(first.output_config.as_ref().unwrap()["effort"], "low", "the effort still holds");
 }

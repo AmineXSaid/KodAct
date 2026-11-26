@@ -63,7 +63,6 @@ fn setup(responder: impl Fn(&MessagesRequest) -> MockTurn + Send + Sync + 'stati
         base: EngineConfig::default(),
         memory_context: None,
         parent: OnceLock::new(),
-        known_models: Default::default(),
     });
     let mut tools = ToolRegistry::new();
     kodact_tools::builtin::register_core(&mut tools);
@@ -380,7 +379,7 @@ async fn the_parent_chooses_each_agents_model_and_the_result_says_what_ran() {
     assert!(r[3].1 && r[3].0.contains("one word"), "{:?}", r[3]);
 
     // Once an endpoint lists the Claude model, the shorthand runs on it.
-    s.rt.known_models.write().unwrap().push("claude-sonnet-5-5".into());
+    e.handle().set_known_models(vec!["claude-sonnet-5-5".into()]);
     assert_eq!(s.rt.choose_model(Some("sonnet"), "kgpt").0, "claude-sonnet-5-5");
     assert_eq!(s.rt.choose_model(None, "kgpt"), ("kgpt".to_string(), None));
 }

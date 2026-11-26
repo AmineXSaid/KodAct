@@ -497,6 +497,19 @@ pub trait Provider: Send + Sync {
     }
 }
 
+/// The model id `name` runs as in this session. An id is itself. A shorthand for a Claude model
+/// (`sonnet`, `opus`, `haiku`, as agents and skills written for the reference CLI name them)
+/// is that Claude id where an endpoint serves it: `listed` (the endpoints' model lists) has it,
+/// or the endpoint it would go to speaks the Messages API. Elsewhere it is `Err` with why, and
+/// the caller keeps the model it had: a gateway serving other models would refuse the id.
+pub fn usable_model(p: &std::sync::Arc<dyn Provider>, name: &str, listed: &[String]) -> Result<String, String> {
+    let id = resolve_model(name);
+    if !models::is_alias(name) || listed.contains(&id) || serving(p, &id).name() == "messages" {
+        return Ok(id);
+    }
+    Err(format!("`{}` names a Claude model none of your endpoints serves", name.trim()))
+}
+
 /// The provider whose endpoint serves `model`: `p` itself, or the endpoint a routed provider
 /// sends it to. Its name, origin and URL are that endpoint's.
 pub fn serving(p: &std::sync::Arc<dyn Provider>, model: &str) -> std::sync::Arc<dyn Provider> {

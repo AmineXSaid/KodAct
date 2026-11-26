@@ -57,9 +57,6 @@ pub struct AgentRuntime {
     /// Memory files, given to sub-agents as context.
     pub memory_context: Option<String>,
     pub parent: OnceLock<ParentLink>,
-    /// The models the session's endpoints list (filled in when the listing comes), offered to
-    /// the model as the Task tool's `model` choices.
-    pub known_models: Arc<RwLock<Vec<String>>>,
 }
 
 /// What a child engine is built from, besides what it shares with the session.
@@ -110,18 +107,11 @@ impl AgentRuntime {
     /// model was wanted (the result then says what it ran on), with why it isn't that model.
     pub fn choose_model(&self, wanted: Option<&str>, parent: &str) -> (String, Option<String>) {
         let Some(w) = wanted else { return (parent.to_string(), None) };
-        let id = kodact_api::resolve_model(w);
-        if !kodact_api::models::is_alias(w) {
-            return (id, Some(String::new()));
+        let listed = self.parent.get().map(|p| p.handle.known_models()).unwrap_or_default();
+        match kodact_api::usable_model(&self.provider, w, &listed) {
+            Ok(id) => (id, Some(String::new())),
+            Err(why) => (parent.to_string(), Some(format!(" {why}, so it ran on yours."))),
         }
-        let listed = self.known_models.read().unwrap().contains(&id);
-        if listed || kodact_api::serving(&self.provider, &id).name() == "messages" {
-            return (id, Some(String::new()));
-        }
-        (
-            parent.to_string(),
-            Some(format!(" `{w}` names a Claude model none of your endpoints serves, so it ran on yours.")),
-        )
     }
 
     /// Settings for a fresh sub-agent on `model`: the session's base settings and the parent's
@@ -437,7 +427,7 @@ impl Tool for TaskTool {
             "\n`model` runs the agent on another model, on whichever endpoint serves it; leave it out to use the \
              agent's own model, or yours.",
         );
-        let known = self.rt.known_models.read().unwrap();
+        let known = self.rt.parent.get().map(|p| p.handle.known_models()).unwrap_or_default();
         if !known.is_empty() {
             let shown: Vec<&str> = known.iter().take(MODELS_LISTED).map(String::as_str).collect();
             let more = known.len().saturating_sub(shown.len());

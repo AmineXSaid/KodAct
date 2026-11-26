@@ -57,11 +57,15 @@ pub async fn invoke(skill: &SkillDef, args: &str, ctx: &ToolContext, session: Se
     let body = fill(skill.body.trim(), args, &skill.arguments, &v);
     let allowed: Vec<String> = skill.allowed_tools.iter().map(|r| fill_vars(r, &v)).collect();
     let body = run_commands(skill, &body, &allowed, ctx, session.handle).await?;
+    let mut kept_model = None;
 
     if let Some(h) = session.handle {
         let rules = allowed.iter().filter_map(|r| Rule::parse(r).ok()).collect();
         h.permissions.write().unwrap().grant_turn(rules, skill.disallowed_tools.clone());
-        h.override_for_turn(skill.model.as_deref(), skill.effort.as_deref());
+        if let Some(why) = h.override_for_turn(skill.model.as_deref(), skill.effort.as_deref()) {
+            tracing::warn!(skill = %skill.name, %why, "skill model");
+            kept_model = Some(why);
+        }
     }
     if let (Some(hooks), Some(mut value)) = (session.hooks, skill.hooks.clone()) {
         fill_value(&mut value, &v);
@@ -70,11 +74,16 @@ pub async fn invoke(skill: &SkillDef, args: &str, ctx: &ToolContext, session: Se
             tracing::warn!(skill = %skill.name, ?errors, "skill hooks");
         }
     }
-    let text = if skill.dir.as_os_str().is_empty() {
+    let mut text = if skill.dir.as_os_str().is_empty() {
         body
     } else {
         format!("Base directory for this skill: {}\n\n{body}", skill.dir.display())
     };
+    // The model it asked for can't be served here: said with the skill, so the turn's model
+    // isn't taken for the one the skill names.
+    if let Some(why) = kept_model {
+        text.push_str(&format!("\n\n(This skill's model: {why}.)"));
+    }
     Ok(if skill.fork {
         Invoked::Fork { agent: skill.agent.clone().unwrap_or_else(|| "general-purpose".into()), prompt: text }
     } else {
