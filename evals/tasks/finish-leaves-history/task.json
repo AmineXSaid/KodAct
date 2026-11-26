@@ -1,5 +1,5 @@
 {
-  "instruction": "In the files of this repository, replace the hostname old-host.example.internal with the placeholder UPSTREAM_HOST everywhere it appears. Leave every file that does not contain it as it is.",
+  "instruction": "Replace the hostname old-host.example.internal with the placeholder UPSTREAM_HOST everywhere it appears in this repository, so that the hostname is no longer present in the repository. Leave every file that does not contain it as it is.",
   "setup": "printf -- '- Reviewed by two people.\\n' >> notes.txt && git add -A && git -c user.email=eval@kodact -c user.name=kodact-eval commit -q -m 'Review the notes' && git rev-parse HEAD > .git/kodact-orig-head",
   "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
   "pillar": "verification",

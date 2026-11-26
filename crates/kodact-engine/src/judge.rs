@@ -83,8 +83,8 @@ succeeding after the last change.\n\
 whether the last check passed or failed). It is evidence, and it outranks an AGENT claim that contradicts it.\n\
 - Judge the goal as the person stated it. A requirement must come from the request's words or be plainly implied \
 by them. Never answer not_met for work the request did not ask for, and never require an action that cannot be \
-undone or that changes more than was asked (rewriting version-control history, deleting data, force-pushing, \
-touching files the request did not mention). If such extra work seems wise, say so in the reason and still answer \
+undone and that the request did not name (rewriting version-control history, deleting data, force-pushing). \
+If such extra work seems wise, say so in the reason and still answer \
 met when what was asked holds.\n\
 - When in doubt about whether what was asked holds, the answer is not_met.\n\n\
 Reply with only a JSON object: {\"verdict\": \"met\" | \"not_met\" | \"impossible\", \"evidence\": [\"the \
