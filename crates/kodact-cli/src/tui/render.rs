@@ -743,6 +743,12 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
         // A sub-agent's row says what it explores; the line below says they're agents.
         let skip = usize::from(is_agent(&r.name) && r.header.len() > 1);
         spans.extend(r.header.iter().skip(skip * 2).cloned());
+        // The model it was sent to, when it isn't the session's.
+        if is_agent(&r.name) {
+            if let Some(ran) = super::format::RanOn::asked(&r.input, &app.status.model) {
+                spans.extend(super::format::model_badge(&t, &ran));
+            }
+        }
         // A step keeps its own time, from when it started, not the turn's.
         spans.push(Span::styled(format!("  {}s", ran.as_secs()), t.subtle()));
         if is_agent(&r.name) && r.steps > 0 {

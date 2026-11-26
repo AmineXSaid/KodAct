@@ -473,6 +473,49 @@ pub fn skill_of(name: &str, input: &Value) -> Option<String> {
     Some(skill.trim_start_matches('/').to_string())
 }
 
+/// The model a sub-agent runs on, for its badge: the model, the endpoint it went to, and the
+/// model the call asked for when that one couldn't be served (`sonnet` on a gateway without it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RanOn {
+    pub model: String,
+    pub endpoint: Option<String>,
+    pub asked_for: Option<String>,
+}
+
+impl RanOn {
+    /// While it runs: the model its call asks for, when it isn't the session's own.
+    pub fn asked(input: &Value, session_model: &str) -> Option<RanOn> {
+        let asked = input.get("model").and_then(Value::as_str).map(str::trim).filter(|m| !m.is_empty())?;
+        let model = kodact_api::resolve_model(asked);
+        (model != session_model).then_some(RanOn { model, endpoint: None, asked_for: None })
+    }
+
+    /// Once done: what its result says it ran on (`model`, `endpoint`). Shown when that isn't the
+    /// session's own model, or the model asked for couldn't be served.
+    pub fn from_result(input: &Value, result: &Value, session_model: &str) -> Option<RanOn> {
+        let model = result.get("model").and_then(Value::as_str)?.to_string();
+        let endpoint = result.get("endpoint").and_then(Value::as_str).map(str::to_string);
+        let asked = input.get("model").and_then(Value::as_str).map(str::trim).filter(|m| !m.is_empty());
+        let asked_for = asked.filter(|a| kodact_api::resolve_model(a) != model).map(str::to_string);
+        (model != session_model || asked_for.is_some()).then_some(RanOn { model, endpoint, asked_for })
+    }
+}
+
+/// A sub-agent's model badge, after its description: `◆ kgpt-reasoning-text · work` in violet,
+/// or `◆ sonnet → deep-thinking` in amber when the model asked for couldn't be served. The
+/// diamond and the words carry it without colour.
+pub fn model_badge(t: &Theme, ran: &RanOn) -> Vec<Span<'static>> {
+    let (mark, words, st) = match &ran.asked_for {
+        Some(asked) => ("◆ ", format!("{asked} → {}", ran.model), t.warning()),
+        None => ("◆ ", ran.model.clone(), t.violet()),
+    };
+    let mut spans = vec![Span::raw("  "), Span::styled(mark, st), Span::styled(words, st)];
+    if let Some(e) = &ran.endpoint {
+        spans.push(Span::styled(format!(" · {e}"), t.subtle()));
+    }
+    spans
+}
+
 /// A sub-agent tool: the call that runs another agent.
 pub fn is_agent_tool(name: &str) -> bool {
     matches!(name, "Task" | "Agent")

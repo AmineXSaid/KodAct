@@ -297,6 +297,8 @@ const DOUBLE_PRESS: Duration = Duration::from_millis(800);
 pub struct App {
     /// Tool calls of this turn by id (name, input), so each result is shown the way its tool needs.
     calls: std::collections::HashMap<String, (String, Value)>,
+    /// What each finished sub-agent ran on, by its call's id, for its row's badge.
+    ran_on: std::collections::HashMap<String, RanOn>,
     /// Tool calls still running, in call order: their header waits in the live
     /// region with a turning dot, and goes to scrollback with its result.
     pub running: Vec<Running>,
@@ -449,6 +451,7 @@ impl App {
     pub fn new(theme: Theme, history: Vec<String>) -> Self {
         App {
             calls: Default::default(),
+            ran_on: Default::default(),
             running: vec![],
             theme,
             editor: Editor::with_history(history),
@@ -827,6 +830,13 @@ impl App {
             }
         };
         let mut line = line;
+        // A sub-agent on another model says which, and where: before how it ended.
+        if let Some(ran) = self.ran_on.remove(&r.id) {
+            let at = line.spans.iter().rposition(|s| s.content.starts_with(" · ")).unwrap_or(line.spans.len());
+            for (i, s) in model_badge(&t, &ran).into_iter().enumerate() {
+                line.spans.insert(at + i, s);
+            }
+        }
         // A command keeps how long it ran; its box below holds the command itself.
         let boxed = shell_box(self.look, &r.name, &r.input).is_some();
         if boxed {
@@ -1203,6 +1213,12 @@ impl App {
                         let failed = *is_error == Some(true);
                         if matches!(tool.as_str(), "Task" | "Agent") {
                             self.agents_done += 1;
+                            // The model it really ran on, from its result.
+                            if let Some(ran) =
+                                tool_use_result.as_ref().and_then(|v| RanOn::from_result(&input, v, &self.status.model))
+                            {
+                                self.ran_on.insert(tool_use_id.clone(), ran);
+                            }
                         }
                         if let Some(i) = self.running.iter().position(|r| r.id == *tool_use_id) {
                             let r = self.running.remove(i);
@@ -4244,6 +4260,78 @@ mod tests {
             parent_tool_use_id: None,
         }));
         assert!(a.has_collapsible);
+    }
+
+    /// A sub-agent sent to another model carries a badge with the model and endpoint it ran on;
+    /// one that couldn't get the model it asked for says so in amber; one on the session's model
+    /// has none.
+    #[test]
+    fn sub_agents_on_other_models_show_where_they_ran() {
+        let mut a = app();
+        a.status.model = "deep-thinking".into();
+        let call = |a: &mut App, id: &str, input: Value| {
+            a.on_event(UiEvent::Engine(EngineEvent::Assistant {
+                message: kodact_types::ApiMessage {
+                    id: format!("m-{id}"),
+                    kind: "message".into(),
+                    role: kodact_types::Role::Assistant,
+                    model: "deep-thinking".into(),
+                    content: vec![ContentBlock::ToolUse {
+                        id: id.into(),
+                        name: "Task".into(),
+                        input,
+                        cache_control: None,
+                        provider: None,
+                    }],
+                    stop_reason: None,
+                    stop_sequence: None,
+                    usage: Default::default(),
+                },
+                uuid: format!("u-{id}"),
+                parent_tool_use_id: None,
+            }));
+        };
+        let done = |a: &mut App, id: &str, result: Value| {
+            a.on_event(UiEvent::Engine(EngineEvent::User {
+                message: kodact_types::Message::user(vec![ContentBlock::ToolResult {
+                    tool_use_id: id.into(),
+                    content: kodact_types::ToolResultContent::Text("hi".into()),
+                    is_error: Some(false),
+                    cache_control: None,
+                }]),
+                uuid: format!("r-{id}"),
+                tool_use_result: Some(result),
+                is_meta: false,
+                parent_tool_use_id: None,
+            }));
+        };
+        a.submit("orchestrate".into());
+        a.take_pending();
+
+        call(&mut a, "t1", json!({"description": "Summarize the logs", "prompt": "p", "model": "kgpt-reasoning-text"}));
+        // While it runs, the model it was sent to.
+        let asked = RanOn::asked(&a.running[0].input, &a.status.model).expect("a badge while it runs");
+        assert_eq!(asked.model, "kgpt-reasoning-text");
+        done(&mut a, "t1", json!({"model": "kgpt-reasoning-text", "endpoint": "work"}));
+        let rows = texts(&a.take_pending());
+        assert!(
+            rows.iter().any(|l| l.contains("Summarize the logs") && l.contains("◆ kgpt-reasoning-text · work")),
+            "{rows:?}"
+        );
+
+        call(&mut a, "t2", json!({"description": "Review the diff", "prompt": "p", "model": "sonnet"}));
+        done(&mut a, "t2", json!({"model": "deep-thinking"}));
+        let rows = texts(&a.take_pending());
+        assert!(rows.iter().any(|l| l.contains("◆ sonnet → deep-thinking")), "{rows:?}");
+
+        call(&mut a, "t3", json!({"description": "Find the config", "prompt": "p"}));
+        assert!(RanOn::asked(&a.running[0].input, &a.status.model).is_none());
+        done(&mut a, "t3", json!({"model": "deep-thinking"}));
+        let rows = texts(&a.take_pending());
+        assert!(
+            rows.iter().any(|l| l.contains("Find the config")) && !rows.iter().any(|l| l.contains('◆')),
+            "{rows:?}"
+        );
     }
 
     #[test]
