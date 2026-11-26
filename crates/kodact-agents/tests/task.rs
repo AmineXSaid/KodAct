@@ -63,6 +63,7 @@ fn setup(responder: impl Fn(&MessagesRequest) -> MockTurn + Send + Sync + 'stati
         base: EngineConfig::default(),
         memory_context: None,
         parent: OnceLock::new(),
+        known_models: Default::default(),
     });
     let mut tools = ToolRegistry::new();
     kodact_tools::builtin::register_core(&mut tools);
@@ -339,4 +340,47 @@ async fn a_child_saves_what_does_not_fit_in_the_sessions_spill_directory() {
         .unwrap();
     assert!(s.rt.spill_dir.is_some());
     assert_eq!(child.engine.tool_ctx().spill_dir, s.rt.spill_dir);
+}
+
+/// The orchestrating model chooses each agent's model; a Claude shorthand runs where an endpoint
+/// serves it, on the parent's model elsewhere, and the result says what the agent ran on.
+#[tokio::test]
+async fn the_parent_chooses_each_agents_model_and_the_result_says_what_ran() {
+    let parent_calls = AtomicUsize::new(0);
+    let task = |model: Option<&str>| {
+        let mut input = json!({"description": "look", "prompt": "Say hi.", "subagent_type": "general-purpose"});
+        if let Some(m) = model {
+            input["model"] = json!(m);
+        }
+        MockTurn::tool("Task", input)
+    };
+    let s = setup(
+        move |req| {
+            if is_child(req) {
+                return MockTurn::text("hi");
+            }
+            match parent_calls.fetch_add(1, Ordering::SeqCst) {
+                0 => task(Some("kgpt-reasoning-text")),
+                1 => task(Some("sonnet")),
+                2 => task(None),
+                3 => task(Some("two words")),
+                _ => MockTurn::text("done"),
+            }
+        },
+        json!({}),
+    );
+    let mut e = s.engine;
+    e.submit(MessageContent::Text("delegate".into())).await;
+    let children: Vec<String> = s.provider.requests().iter().filter(|r| is_child(r)).map(|r| r.model.clone()).collect();
+    assert_eq!(children, ["kgpt-reasoning-text", "claude-opus-5-5", "claude-opus-5-5"], "asked, shorthand, none");
+    let r = results(&e);
+    assert!(r[0].0.ends_with("(The agent ran on kgpt-reasoning-text.)"), "{}", r[0].0);
+    assert!(r[1].0.contains("`sonnet` names a Claude model none of your endpoints serves"), "{}", r[1].0);
+    assert_eq!(r[2].0, "hi", "nothing asked: nothing added");
+    assert!(r[3].1 && r[3].0.contains("one word"), "{:?}", r[3]);
+
+    // Once an endpoint lists the Claude model, the shorthand runs on it.
+    s.rt.known_models.write().unwrap().push("claude-sonnet-5-5".into());
+    assert_eq!(s.rt.choose_model(Some("sonnet"), "kgpt").0, "claude-sonnet-5-5");
+    assert_eq!(s.rt.choose_model(None, "kgpt"), ("kgpt".to_string(), None));
 }

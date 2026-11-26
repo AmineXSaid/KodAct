@@ -57,6 +57,9 @@ pub struct AgentRuntime {
     /// Memory files, given to sub-agents as context.
     pub memory_context: Option<String>,
     pub parent: OnceLock<ParentLink>,
+    /// The models the session's endpoints list (filled in when the listing comes), offered to
+    /// the model as the Task tool's `model` choices.
+    pub known_models: Arc<RwLock<Vec<String>>>,
 }
 
 /// What a child engine is built from, besides what it shares with the session.
@@ -96,7 +99,31 @@ pub struct Child {
     pub engine: Engine,
 }
 
+/// Models named in the Task tool's description, at most.
+const MODELS_LISTED: usize = 40;
+
 impl AgentRuntime {
+    /// The model a sub-agent runs on: `wanted` (the call's `model`, else the agent's own), else
+    /// the parent's. A shorthand for a Claude model (`sonnet`, `opus`, `haiku`), as agents
+    /// written for the reference CLI name them, becomes a Claude id only where an endpoint of the
+    /// session serves it; elsewhere the agent runs on the parent's model. `Some(note)` when a
+    /// model was wanted (the result then says what it ran on), with why it isn't that model.
+    pub fn choose_model(&self, wanted: Option<&str>, parent: &str) -> (String, Option<String>) {
+        let Some(w) = wanted else { return (parent.to_string(), None) };
+        let id = kodact_api::resolve_model(w);
+        if !kodact_api::models::is_alias(w) {
+            return (id, Some(String::new()));
+        }
+        let listed = self.known_models.read().unwrap().contains(&id);
+        if listed || kodact_api::serving(&self.provider, &id).name() == "messages" {
+            return (id, Some(String::new()));
+        }
+        (
+            parent.to_string(),
+            Some(format!(" `{w}` names a Claude model none of your endpoints serves, so it ran on yours.")),
+        )
+    }
+
     /// Settings for a fresh sub-agent on `model`: the session's base settings and the parent's
     /// current thinking budget and effort, without the run's limits.
     pub fn child_config(&self, model: &str) -> EngineConfig {
@@ -406,6 +433,21 @@ impl Tool for TaskTool {
             };
             s.push_str(&format!("- {}: {} (Tools: {tools})\n", a.name, a.description));
         }
+        s.push_str(
+            "\n`model` runs the agent on another model, on whichever endpoint serves it; leave it out to use the \
+             agent's own model, or yours.",
+        );
+        let known = self.rt.known_models.read().unwrap();
+        if !known.is_empty() {
+            let shown: Vec<&str> = known.iter().take(MODELS_LISTED).map(String::as_str).collect();
+            let more = known.len().saturating_sub(shown.len());
+            s.push_str(&format!(" Models your endpoints serve: {}", shown.join(", ")));
+            if more > 0 {
+                s.push_str(&format!(" (and {more} more)"));
+            }
+            s.push('.');
+        }
+        s.push('\n');
         s
     }
 
@@ -417,6 +459,7 @@ impl Tool for TaskTool {
                 "description": {"type": "string", "description": "A short (3-5 word) description of the task"},
                 "prompt": {"type": "string", "description": "The complete, self-contained task for the agent"},
                 "subagent_type": {"type": "string", "enum": names, "description": "Which agent to run (default general-purpose)"},
+                "model": {"type": "string", "description": "The model to run the agent on (a model id, one word); default: the agent's own model, else yours"},
                 "isolation": {"type": "string", "enum": ["worktree"], "description": "\"worktree\": the agent works in its own git worktree, a copy of the last commit on a new branch. Use it when agents running in parallel change files, so they can't overwrite each other. Uncommitted changes are not in the copy. The result names the branch and the directory when the agent changed anything; merge it yourself"}
             },
             "required": ["description", "prompt"],
@@ -443,6 +486,11 @@ impl Tool for TaskTool {
         if self.agent(name).is_none() {
             let names: Vec<&str> = self.rt.agents.iter().map(|a| a.name.as_str()).collect();
             return Err(format!("Unknown subagent_type {name:?}. Available: {}", names.join(", ")));
+        }
+        if let Some(m) = input.get("model").and_then(Value::as_str) {
+            if m.split_whitespace().count() > 1 {
+                return Err(format!("model {m:?} isn't a model id: an id is one word, without spaces."));
+            }
         }
         if input.get("isolation").is_some() && kodact_git::repo_root(&self.rt.project_dir).is_none() {
             return Err("isolation \"worktree\" needs a git repository, and this project is not one. Run the \
@@ -478,10 +526,8 @@ impl Tool for TaskTool {
             },
         };
 
-        let model = match &agent.model {
-            Some(m) => kodact_api::resolve_model(m),
-            None => parent.handle.model(),
-        };
+        let asked = input.get("model").and_then(Value::as_str).map(str::trim).filter(|m| !m.is_empty());
+        let (model, model_note) = self.rt.choose_model(asked.or(agent.model.as_deref()), &parent.handle.model());
         let isolated = match input.get("isolation").and_then(Value::as_str) {
             Some(_) => match Isolated::create(&self.rt.project_dir) {
                 Ok(w) => Some(w),
@@ -542,12 +588,23 @@ impl Tool for TaskTool {
         let mut structured = json!({
             "agentType": agent.name,
             "agentId": child_id,
+            "model": model,
             "status": if stopped { "stopped" } else { status_of(&result) },
             "totalToolUseCount": tool_uses,
             "totalDurationMs": started.elapsed().as_millis() as u64,
             "subagentUsage": usage_of(&result),
         });
         let mut text = result.result.clone().unwrap_or_default();
+        // Which model did the work, when one was asked for or pinned: a switch that didn't happen
+        // can't pass for one.
+        let ran_on = model_note.map(|note| {
+            let endpoint =
+                self.rt.provider.endpoint_for(&model).map(|(e, _)| format!(" · endpoint {e}")).unwrap_or_default();
+            if let Some((e, _)) = self.rt.provider.endpoint_for(&model) {
+                structured["endpoint"] = json!(e);
+            }
+            format!("\n\n(The agent ran on {model}{endpoint}.{note})")
+        });
         // Whatever way it ended, the parent is told where its changes are (or that the copy is gone).
         if let Some(w) = &isolated {
             let kept = w.finish();
@@ -560,7 +617,8 @@ impl Tool for TaskTool {
             return stopped_output(&agent.name, &text, structured);
         }
         if result.is_error {
-            let detail = if text.is_empty() { result.errors.join("; ") } else { text };
+            let mut detail = if text.is_empty() { result.errors.join("; ") } else { text };
+            detail.push_str(ran_on.as_deref().unwrap_or(""));
             return ToolOutput::error(format!(
                 "FAILED: the {} agent did not finish its task. {detail}\n\
                  Nothing it was asked to do can be counted as done, and it wrote no report. Run it again (after \
@@ -573,7 +631,8 @@ impl Tool for TaskTool {
         if result.stop_reason.as_deref() == Some("interrupted") {
             return ToolOutput::error(kodact_tools::INTERRUPTED).with_structured(structured);
         }
-        let text = if text.trim().is_empty() { "(the agent finished without a report)".to_string() } else { text };
+        let mut text = if text.trim().is_empty() { "(the agent finished without a report)".to_string() } else { text };
+        text.push_str(ran_on.as_deref().unwrap_or(""));
         ToolOutput::text(text).with_structured(structured)
     }
 }

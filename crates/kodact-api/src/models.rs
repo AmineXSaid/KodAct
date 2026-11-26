@@ -235,6 +235,14 @@ pub const SMALL_FAST_MODEL: &str = "claude-haiku-4-5";
 
 /// Map an alias (`opus`, `sonnet`, `haiku`, `fable`, `default`) to a model id.
 /// Unknown names pass through unchanged so new ids work without a release.
+/// `name` is one of the shorthands [`resolve_model`] turns into a Claude model id (`sonnet`,
+/// `opus`, `haiku`, `best`, `default`...), not a model id itself.
+pub fn is_alias(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    let base = lower.strip_suffix("[1m]").unwrap_or(&lower);
+    matches!(base, "" | "default" | "opus" | "best" | "sonnet" | "haiku" | "fable" | "opusplan")
+}
+
 pub fn resolve_model(name: &str) -> String {
     let n = name.trim();
     let lower = n.to_ascii_lowercase();

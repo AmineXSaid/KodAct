@@ -297,6 +297,8 @@ impl Driver {
         };
         // A failed listing is asked again, after a pause.
         if failure.is_none() {
+            // The Task tool offers them as its `model` choices.
+            *self.agent_rt.known_models.write().unwrap() = list.clone();
             self.models = Some(list);
             self.models_failed = None;
         } else {
