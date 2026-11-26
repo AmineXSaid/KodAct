@@ -272,7 +272,6 @@ struct LineSink<'a> {
     cancel: &'a tokio_util::sync::CancellationToken,
     count: usize,
     prev: Option<u64>,
-    binary_at: Option<u64>,
 }
 
 impl LineSink<'_> {
@@ -321,11 +320,6 @@ impl Sink for LineSink<'_> {
         }
         Ok(!self.cancel.is_cancelled())
     }
-
-    fn binary_data(&mut self, _: &Searcher, offset: u64) -> Result<bool, Self::Error> {
-        self.binary_at = Some(offset);
-        Ok(false)
-    }
 }
 
 fn human_size(n: u64) -> String {
@@ -372,7 +366,7 @@ fn search(p: &SearchParams) -> Result<SearchOutcome, String> {
         .multi_line(multi_line)
         .before_context(before)
         .after_context(after)
-        .binary_detection(BinaryDetection::quit(0))
+        .binary_detection(BinaryDetection::none())
         .heap_limit(Some(p.heap_limit))
         .build();
 
@@ -443,8 +437,19 @@ fn search(p: &SearchParams) -> Result<SearchOutcome, String> {
             );
             continue;
         }
-        let Ok(file) = std::fs::File::open(path) else { continue };
-        let reader = CancellableRead { inner: file, cancel: p.cancel.clone() };
+        let Ok(mut file) = std::fs::File::open(path) else { continue };
+        // Binary from its first bytes, before anything else is read: a disk image costs 8 KB.
+        // Past them, a stray NUL (a log, a report) is an ordinary byte and the whole file is
+        // searched, as it always was; each line stays within the heap limit.
+        let mut head = Vec::with_capacity(BINARY_PROBE as usize);
+        if std::io::Read::read_to_end(&mut std::io::Read::take(&mut file, BINARY_PROBE), &mut head).is_err() {
+            continue;
+        }
+        if head.contains(&0) {
+            continue;
+        }
+        let reader =
+            CancellableRead { inner: std::io::Read::chain(std::io::Cursor::new(head), file), cancel: p.cancel.clone() };
         let (seen0, out0) = (window.seen, window.out.len());
         let mut sink = LineSink {
             path: path.display().to_string(),
@@ -456,10 +461,9 @@ fn search(p: &SearchParams) -> Result<SearchOutcome, String> {
             cancel: &p.cancel,
             count: 0,
             prev: None,
-            binary_at: None,
         };
         let res = searcher.search_reader(&matcher, reader, &mut sink);
-        let (count, binary_at) = (sink.count, sink.binary_at);
+        let count = sink.count;
         let rollback = |w: &mut Window| {
             w.seen = seen0;
             w.out.truncate(out0);
@@ -481,13 +485,6 @@ fn search(p: &SearchParams) -> Result<SearchOutcome, String> {
                 );
             }
             continue;
-        }
-        if let Some(at) = binary_at {
-            if at < BINARY_PROBE {
-                rollback(&mut window);
-                continue;
-            }
-            note(&mut notes, format!("Search of {} stopped at binary data after {}.", path.display(), human_size(at)));
         }
         if count == 0 {
             continue;
@@ -592,6 +589,24 @@ mod tests {
         assert_eq!(out.n_files, 1, "{:?}", out.lines);
         assert!(out.lines[0].ends_with("a.txt"));
         assert!(t.elapsed().as_secs() < 5, "took {:?}", t.elapsed());
+    }
+
+    /// A text file with a stray NUL past its first bytes (a log, a report) is searched to its
+    /// end, with the right line numbers: nothing after the NUL is lost.
+    #[test]
+    fn a_stray_nul_after_the_first_bytes_does_not_end_the_search() {
+        let d = tempfile::tempdir().unwrap();
+        let mut body = "ok line\n".repeat(2_000).into_bytes(); // 16,000 bytes, past the probe
+        body.extend_from_slice(b"garbled \0 byte\n");
+        body.extend_from_slice(b"the needle\n");
+        std::fs::write(d.path().join("run.log"), &body).unwrap();
+        let out = search(&params(d.path(), "needle", Mode::Content)).unwrap();
+        assert_eq!(out.lines.len(), 1, "{:?}", out.lines);
+        assert!(out.lines[0].ends_with("run.log:2002:the needle"), "{:?}", out.lines);
+        assert!(out.notes.is_empty(), "{:?}", out.notes);
+        // A NUL inside the first bytes still marks the file binary.
+        std::fs::write(d.path().join("run.log"), b"\0the needle\n").unwrap();
+        assert_eq!(search(&params(d.path(), "needle", Mode::Files)).unwrap().n_files, 0);
     }
 
     #[cfg(target_os = "linux")]
