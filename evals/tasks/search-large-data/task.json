@@ -1,0 +1,8 @@
+{
+  "instruction": "What value does this project give to `retry_limit`? Search the whole project folder, including data/, and write just the number to answer.txt.",
+  "setup": "mkdir -p data && python3 -c \"import sys; l='2024-05-01T12:00:00Z INFO worker-%d handled request id=%08d status=200 bytes=512\\n'; f=open('data/events.log','w'); [f.write(l % (i % 8, i)) for i in range(600000)]\" && truncate -s 2G data/disk.img",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": ["search", "large-files", "answer-file"],
+  "timeout_secs": 600
+}
