@@ -81,7 +81,12 @@ If the goal depends on them, it is not met.\n\
 succeeding after the last change.\n\
 - A HARNESS line is the agent harness's own record of the last turn (which changed files no check has run on, \
 whether the last check passed or failed). It is evidence, and it outranks an AGENT claim that contradicts it.\n\
-- When in doubt, the answer is not_met.\n\n\
+- Judge the goal as the person stated it. A requirement must come from the request's words or be plainly implied \
+by them. Never answer not_met for work the request did not ask for, and never require an action that cannot be \
+undone or that changes more than was asked (rewriting version-control history, deleting data, force-pushing, \
+touching files the request did not mention). If such extra work seems wise, say so in the reason and still answer \
+met when what was asked holds.\n\
+- When in doubt about whether what was asked holds, the answer is not_met.\n\n\
 Reply with only a JSON object: {\"verdict\": \"met\" | \"not_met\" | \"impossible\", \"evidence\": [\"the \
 tool results that prove it, quoted or closely paraphrased\"], \"reason\": \"one or two sentences\"}.\n\
 - met: the evidence shows the goal holds now. A met verdict with no evidence counts as not_met.\n\
@@ -208,4 +213,27 @@ pub fn harness_note(state: Option<&crate::Verified>, missing: &[String]) -> Stri
         return String::new();
     }
     format!("\n\nHARNESS: {said}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The checker judges the request as stated: no demand for work it did not ask for, and none
+    /// for an action that can't be undone. Sent with every check, for any model.
+    #[test]
+    fn the_prompt_judges_the_request_as_stated_and_never_demands_irreversible_extras() {
+        let p = EVALUATOR_PROMPT;
+        assert!(p.contains("as the person stated it"), "{p}");
+        assert!(p.contains("Never answer not_met for work the request did not ask for"), "{p}");
+        for irreversible in ["cannot be undone", "rewriting version-control history", "deleting data", "force-pushing"]
+        {
+            assert!(p.contains(irreversible), "missing {irreversible:?}");
+        }
+        assert!(p.contains("still answer met"), "extra work may be advised in the reason: {p}");
+        // The rest of the rules stand: an unproven claim is not a pass.
+        assert!(p.contains("When in doubt about whether what was asked holds, the answer is not_met."));
+        // Kept short: it goes with every check.
+        assert!(p.len() < 3_200, "{} bytes", p.len());
+    }
 }

@@ -1,0 +1,3 @@
+Release notes
+- Added pagination to the item list.
+- Fixed the empty-search crash.

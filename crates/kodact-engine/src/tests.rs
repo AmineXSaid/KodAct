@@ -5015,6 +5015,11 @@ async fn a_verified_finish_is_checked_and_not_met_sends_the_model_back() {
     assert_eq!(r.result.as_deref(), Some("Wrote out.csv with lists."));
     let checks = check_requests(&h);
     assert_eq!(checks.len(), 1, "once a turn");
+    let rules = checks[0].system.iter().map(|b| b.text.as_str()).collect::<String>();
+    assert!(
+        rules.contains("never require an action that cannot be undone"),
+        "the checker is told not to demand extras that can't be undone: {rules}"
+    );
     let asked = serde_json::to_string(&checks[0].messages).unwrap();
     assert!(asked.contains("coords_x is a list of x coordinates"), "the request is the goal: {asked}");
     assert!(asked.contains("echo ok"), "the transcript is the evidence");
