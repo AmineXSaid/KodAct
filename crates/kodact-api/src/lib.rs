@@ -18,6 +18,7 @@ pub mod models;
 pub mod openai;
 pub mod pdf_text;
 pub mod repair;
+pub mod route;
 pub mod sse;
 #[cfg(test)]
 mod wire_tests;
@@ -482,6 +483,24 @@ pub trait Provider: Send + Sync {
     async fn list_models(&self) -> Option<Result<Vec<String>, ApiError>> {
         None
     }
+
+    /// The endpoint that serves `model`, when this provider is made of several
+    /// ([`route::RoutedProvider`]); `None` when it is one endpoint itself.
+    fn serving(&self, _model: &str) -> Option<std::sync::Arc<dyn Provider>> {
+        None
+    }
+
+    /// The name of the endpoint `model` goes to, and the id it is sent there as, when this
+    /// provider is made of several endpoints (`endpoints` in the settings); `None` otherwise.
+    fn endpoint_for(&self, _model: &str) -> Option<(String, String)> {
+        None
+    }
+}
+
+/// The provider whose endpoint serves `model`: `p` itself, or the endpoint a routed provider
+/// sends it to. Its name, origin and URL are that endpoint's.
+pub fn serving(p: &std::sync::Arc<dyn Provider>, model: &str) -> std::sync::Arc<dyn Provider> {
+    p.serving(model).unwrap_or_else(|| p.clone())
 }
 
 /// The longest a retry sleeps before sending the same request again. A `retry-after` beyond it

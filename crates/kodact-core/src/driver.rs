@@ -309,7 +309,12 @@ impl Driver {
     /// the listing failed) or it lists nothing.
     pub fn endpoint_lists(&self, id: &str) -> Option<bool> {
         let list = self.models.as_ref().filter(|l| !l.is_empty())?;
-        Some(list.iter().any(|m| m == id))
+        if list.iter().any(|m| m == id) {
+            return Some(true);
+        }
+        // `work/model` with several endpoints: listed when `work` lists `model`.
+        let named = self.engine.provider().endpoint_for(id).filter(|(name, sent)| id == format!("{name}/{sent}"));
+        Some(named.is_some_and(|(_, sent)| list.contains(&sent)))
     }
 
     /// The models to choose from: the endpoint's list (after [`Driver::load_models`]),

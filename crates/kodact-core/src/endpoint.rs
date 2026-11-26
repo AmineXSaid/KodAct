@@ -24,7 +24,7 @@ use kodact_api::auth::{is_local_url, parse_base_url, Backend};
 use kodact_config::{LoadedSettings, SettingSource};
 
 /// The layers that may pick the endpoint or run a key helper.
-const TRUSTED: [SettingSource; 4] =
+pub(crate) const TRUSTED: [SettingSource; 4] =
     [SettingSource::User, SettingSource::Local, SettingSource::Flag, SettingSource::Managed];
 
 /// Settings that send the key somewhere or run a command for it.

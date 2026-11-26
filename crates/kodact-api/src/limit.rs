@@ -238,6 +238,14 @@ impl Provider for LimitedProvider {
     fn base_url(&self) -> Option<String> {
         self.inner.base_url()
     }
+
+    fn serving(&self, model: &str) -> Option<Arc<dyn Provider>> {
+        self.inner.serving(model)
+    }
+
+    fn endpoint_for(&self, model: &str) -> Option<(String, String)> {
+        self.inner.endpoint_for(model)
+    }
 }
 
 #[cfg(test)]

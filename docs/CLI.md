@@ -255,6 +255,55 @@ key helper. `--probe` adds one authenticated request that changes nothing
 (the endpoint's model list), running the key helper first if there is one, to
 check that the URL and key work.
 
+### Several endpoints
+
+`endpoints` in your own settings names every endpoint your models are on, as
+many as you have, so `/model` (and `--model`, a sub-agent's model,
+`compaction.model`) switches between models on different gateways, providers
+and local servers in one session:
+
+```json
+"endpoints": {
+  "work":   {"type": "openai", "baseUrl": "https://llm-proxy.example.com", "apiKeyEnv": "WORK_KEY", "models": ["kgpt-*"]},
+  "google": {"type": "gemini", "apiKeyEnv": "GEMINI_KEY", "models": ["gemini-*"]},
+  "local":  {"type": "openai", "baseUrl": "http://localhost:8000/v1"}
+}
+```
+
+| Field | |
+| --- | --- |
+| `type` | `openai` (OpenAI-compatible, the default), `gemini` or `messages` |
+| `baseUrl` | needed for `openai`; Gemini's and the Messages API's have defaults |
+| `apiKeyEnv` | the variable that holds the key, read from the environment or the `env` block of your own settings. The key itself is never written in `endpoints` |
+| `apiKeyHelper` | instead: a command that prints the key |
+| `authHeader` | as `openai.authHeader` / `gemini.authHeader`; for `messages`, `bearer` sends the key as `Authorization: Bearer` |
+| `models` | model ids or `*` patterns this endpoint serves |
+
+Each request goes to, in this order:
+1. the endpoint its id names: `/model work/kgpt-reasoning-text` sends
+   `kgpt-reasoning-text` to `work` (an id whose first part names no endpoint,
+   as OpenRouter's `openai/gpt-4o`, is left whole);
+2. the first endpoint whose `models` match;
+3. the first endpoint whose model list has it (asked once, the first time a
+   model is matched by nothing above);
+4. the default endpoint: the one your variables and settings choose for a
+   single endpoint (above), called `default`, or `defaultEndpoint` (a name),
+   or else the first.
+
+- The endpoint you already had stays: `endpoints` adds to it. Without one,
+  the named endpoints are enough to start.
+- `/model` lists every endpoint's models; an id an earlier endpoint already
+  lists is shown as `name/id`. `/status` names the endpoint the current model
+  goes to.
+- Each endpoint has its own concurrency limit (`maxConcurrentRequests`): a
+  gateway that answers 429 slows only the models it serves.
+- An endpoint that can't be used (no `baseUrl`, its key variable unset) is
+  left out with a warning, and its models go to the others.
+- Only your own settings (user, `.kodact/settings.local.json`, `--settings`,
+  managed) can name endpoints or `defaultEndpoint`: in a project's shared
+  `.kodact/settings.json` they are ignored with a warning, or a repository
+  could send your key to its own server.
+
 ### Which key goes where
 
 | Endpoint | Chosen by | Key | Sent as |
@@ -614,7 +663,7 @@ them all. The built-ins so far:
 | `/mcp [reconnect\|enable\|disable <server\|all>]` | Each MCP server's status. `reconnect` restarts a server from the config it started with; `disable` stops it, hides its tools and prompts, and saves that in `.kodact/settings.local.json` (`disabledMcpjsonServers`); `enable` reverses it. Tools a server didn't offer when the session started join after `/reload-plugins`. `--mcp-config` and plugin servers change for the session only |
 | `/tasks [stop <id>]` (`/bashes`) | Background shells, scheduled tasks and subtasks; `stop` ends one |
 | `/subtask <task>` | Hands the task to a background agent that starts from this conversation; you keep going. Its report reaches the model with your next prompt (and is shown when it finishes). In `-p`, KodAct waits for it, then runs one more turn with the report |
-| `/model [model]` | Shows the current model and the models your endpoint lists (`GET {baseUrl}/models` on an OpenAI-compatible endpoint; the default backend lists none), or switches to the given model id. An id is one word; one the endpoint doesn't list still switches (a gateway may serve it) and says so |
+| `/model [model]` | Shows the current model and the models your endpoints list (`GET {baseUrl}/models` on an OpenAI-compatible endpoint; the default backend lists none; with several endpoints, all of them), or switches to the given model id, on whichever endpoint serves it ("Several endpoints"). An id is one word; one no endpoint lists still switches (a gateway may serve it) and says so |
 | `/effort [low\|medium\|high\|xhigh\|max\|auto]` | Shows or sets reasoning effort; `max` lasts for the session only |
 | `/fast [on\|off]` | Fast mode, on models that offer it |
 | `/config [key=value ...] [--scope user\|project\|local]` (`/settings`) | Shows the settings KodAct can change, or changes them; `key=` restores the default; `/config --help` lists the keys |

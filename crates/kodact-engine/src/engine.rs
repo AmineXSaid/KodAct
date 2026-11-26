@@ -1313,8 +1313,11 @@ impl Engine {
     }
 
     /// The model provider's short name (`messages`, `openai`, `mock`).
-    pub fn provider_name(&self) -> &str {
-        self.shared.provider.name()
+    /// The name of the endpoint serving the session's model now (`openai`, `messages`,
+    /// `gemini`): with several endpoints, the one the model routes to.
+    pub fn provider_name(&self) -> String {
+        let model = self.handle().model();
+        kodact_api::serving(&self.shared.provider, &model).name().to_string()
     }
 
     pub fn tool_ctx(&self) -> &ToolContext {

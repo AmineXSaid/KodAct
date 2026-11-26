@@ -156,7 +156,9 @@ fn status(v: &SessionView) -> String {
         Err(m) => format!("none ({m})"),
     };
     let _ = writeln!(s, "Shell:          {shell}");
-    let api = match (d.provider.origin(), d.provider.base_url()) {
+    // The endpoint serving the model now (with several endpoints, the one it routes to).
+    let serving = kodact_api::serving(&d.provider, &rt.model);
+    let api = match (serving.origin(), serving.base_url()) {
         (Some(o), url) => {
             let kind = match o.backend {
                 kodact_api::auth::Backend::OpenAi => "OpenAI-compatible endpoint",
@@ -171,7 +173,12 @@ fn status(v: &SessionView) -> String {
                 "none" => "no key".to_string(),
                 k => format!("key from {k}"),
             };
-            format!("{kind}{at} · {key}")
+            // With several endpoints, the one the model goes to by name.
+            let named = match d.provider.endpoint_for(&rt.model) {
+                Some((name, _)) => format!("endpoint {name}: "),
+                None => String::new(),
+            };
+            format!("{named}{kind}{at} · {key}")
         }
         (None, _) => format!("{} via {}", d.init.api_key_source, d.provider.name()),
     };

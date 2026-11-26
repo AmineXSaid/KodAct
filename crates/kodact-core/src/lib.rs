@@ -6,6 +6,7 @@ pub mod debug;
 pub mod doctor;
 pub mod driver;
 pub mod endpoint;
+pub mod endpoints;
 pub mod glyphs;
 pub mod goal;
 pub mod import;
@@ -805,23 +806,37 @@ pub fn build_session(
         warnings.push(format!("shell: {m}"));
     }
 
-    let provider = match opts.provider.clone() {
-        Some(p) => p,
-        None => make_provider_with_shell(&settings, &opts.betas, &shell, &mut warnings)?,
-    };
-    // One limit on concurrent requests for everything in the session (main agent, sub-agents,
-    // compaction, goal checks): requests wait for a slot, and 429s lower the limit.
-    let provider: Arc<dyn Provider> = {
-        let max = env_nonempty("KODACT_MAX_CONCURRENT_REQUESTS")
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .or_else(|| settings.get("/maxConcurrentRequests").and_then(Value::as_u64).map(|n| n as usize))
-            .filter(|n| *n > 0)
-            .unwrap_or(DEFAULT_CONCURRENT_REQUESTS);
+    // One limit on concurrent requests per endpoint, for everything in the session that uses it
+    // (main agent, sub-agents, compaction, goal checks): requests wait for a slot, and 429s
+    // lower that endpoint's limit only.
+    let max = env_nonempty("KODACT_MAX_CONCURRENT_REQUESTS")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .or_else(|| settings.get("/maxConcurrentRequests").and_then(Value::as_u64).map(|n| n as usize))
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_CONCURRENT_REQUESTS);
+    let limit = {
         let sink = sink.clone();
-        let notify: kodact_api::limit::Notifier = Arc::new(move |text| {
-            sink.emit(kodact_engine::EngineEvent::Notice { level: kodact_engine::NoticeLevel::Warning, text })
-        });
-        Arc::new(kodact_api::limit::LimitedProvider::new(provider, kodact_api::limit::Limiter::new(max), Some(notify)))
+        move |p: Arc<dyn Provider>| -> Arc<dyn Provider> {
+            let sink = sink.clone();
+            let notify: kodact_api::limit::Notifier = Arc::new(move |text| {
+                sink.emit(kodact_engine::EngineEvent::Notice { level: kodact_engine::NoticeLevel::Warning, text })
+            });
+            Arc::new(kodact_api::limit::LimitedProvider::new(p, kodact_api::limit::Limiter::new(max), Some(notify)))
+        }
+    };
+    let named = endpoints::configured(&settings, &mut warnings);
+    let provider: Arc<dyn Provider> = match opts.provider.clone() {
+        Some(p) => limit(p),
+        None if named.is_empty() => limit(make_provider_with_shell(&settings, &opts.betas, &shell, &mut warnings)?),
+        None => {
+            // Several endpoints: each request goes to the one serving its model (endpoints.rs).
+            let mut own_warnings = vec![];
+            let own = make_provider_with_shell(&settings, &opts.betas, &shell, &mut own_warnings);
+            if own.is_ok() {
+                warnings.extend(own_warnings);
+            }
+            endpoints::routed(named, own, &settings, &shell, &limit, &mut warnings)?
+        }
     };
 
     // Plugins, commands, skills and output styles (M5).
