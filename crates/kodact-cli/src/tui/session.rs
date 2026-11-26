@@ -93,6 +93,15 @@ pub fn commands(d: &Driver) -> Vec<CommandInfo> {
         .collect()
 }
 
+/// What a built-in command's run shows: a local answer as an action's (a toast or a panel, out
+/// of the conversation), anything else as [`reply_for`] does.
+pub fn action_reply(r: &TurnResult) -> Option<UiEvent> {
+    if r.prompt_blocked.is_none() && r.num_turns == 0 && r.stop_reason.is_none() {
+        return Some(UiEvent::Action { text: r.result.clone().unwrap_or_default(), is_error: r.is_error });
+    }
+    reply_for(r)
+}
+
 /// What a finished turn shows. A model turn's text and its errors already
 /// arrived as engine events, so only local answers, blocked prompts and
 /// interrupts are shown here.
@@ -209,7 +218,7 @@ fn code_picker(blocks: &[(String, String)]) -> kodact_core::commands::picker::Pi
 /// `/keybindings`, `/terminal-setup`. `None` for everything else.
 fn ui_command(d: &Driver, text: &str) -> Option<Vec<UiEvent>> {
     let Invocation::Builtin { spec, args } = parse(text, &d.catalog) else { return None };
-    let reply = |text: String, is_error: bool| UiEvent::Reply { text, is_error };
+    let reply = |text: String, is_error: bool| UiEvent::Action { text, is_error };
     Some(match spec.id {
         Builtin::Keybindings => vec![reply(super::app::keys_text(&super::keys::Keymap::load().0), false)],
         Builtin::TerminalSetup => vec![reply(super::app::terminal_setup_text(super::keyboard_protocol()), false)],
@@ -410,7 +419,7 @@ fn answer_immediate(view: SessionView, text: String, ui: mpsc::UnboundedSender<U
         if let Some(Exec::Local { text, is_error }) =
             kodact_core::commands::execute_immediate(&view, &text, &cancel).await
         {
-            let _ = ui.send(UiEvent::Reply { text, is_error });
+            let _ = ui.send(UiEvent::Action { text, is_error });
         }
     });
 }
@@ -535,7 +544,7 @@ pub async fn run(mut driver: Driver, mut rx: mpsc::UnboundedReceiver<ToSession>,
                     let _ = ui.send(UiEvent::Picker(p));
                 }
                 None => {
-                    let _ = ui.send(UiEvent::Reply { text: "Nothing to choose from.".into(), is_error: true });
+                    let _ = ui.send(UiEvent::Action { text: "Nothing to choose from.".into(), is_error: true });
                 }
             },
             Some(ToSession::Input(text)) => {
@@ -569,6 +578,20 @@ pub async fn run(mut driver: Driver, mut rx: mpsc::UnboundedReceiver<ToSession>,
                         let _ = ui.send(e);
                     }
                     if flow == Flow::Exit {
+                        let _ = ui.send(UiEvent::Exit);
+                        break;
+                    }
+                } else if super::app::is_action_candidate(&text) {
+                    // A built-in's local answer is an action's (a toast or a panel); one that sent
+                    // a prompt ended as any turn does.
+                    let send = ui.clone();
+                    let mut action = |r: &TurnResult| {
+                        if let Some(ev) = action_reply(r) {
+                            let _ = send.send(ev);
+                        }
+                    };
+                    let input = driver.input(MessageContent::Text(text), &mut action);
+                    if while_busy(input, &view, &mut rx, &ui, &mut queue).await == Flow::Exit {
                         let _ = ui.send(UiEvent::Exit);
                         break;
                     }
@@ -892,11 +915,12 @@ mod tests {
         assert!(!evs.iter().any(|e| matches!(e, UiEvent::Reply { .. })));
         assert!(evs.iter().any(|e| matches!(e, UiEvent::Status(s) if s.cost >= 0.0)));
 
-        // A local command answers with a Reply.
+        // A built-in answers as an action (a toast or a panel), not into the conversation.
         t.to.send(ToSession::Input("/status".into())).unwrap();
         let evs = until_idle(&mut t.ui).await;
+        assert!(!evs.iter().any(|e| matches!(e, UiEvent::Reply { .. })));
         let reply = evs.iter().find_map(|e| match e {
-            UiEvent::Reply { text, is_error: false } => Some(text.clone()),
+            UiEvent::Action { text, is_error: false } => Some(text.clone()),
             _ => None,
         });
         assert!(reply.expect("a reply").contains("Model"), "status lists the model");
@@ -956,10 +980,10 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(e, UiEvent::Copy(c) if c == "done")));
         t.to.send(ToSession::Input("/copy 99".into())).unwrap();
         let evs = until_idle(&mut t.ui).await;
-        assert!(evs.iter().any(|e| matches!(e, UiEvent::Reply { is_error: true, .. })));
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Action { is_error: true, .. })));
         t.to.send(ToSession::Input("/keybindings".into())).unwrap();
         let evs = until_idle(&mut t.ui).await;
-        assert!(evs.iter().any(|e| matches!(e, UiEvent::Reply { text, .. } if text.contains("Shift+Tab"))));
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Action { text, .. } if text.contains("Shift+Tab"))));
 
         // /theme is saved and applied; a status line command shows its first line.
         t.to.send(ToSession::Input("/theme light".into())).unwrap();
@@ -998,7 +1022,7 @@ mod tests {
         t.to.send(ToSession::Input("/status".into())).unwrap();
         t.to.send(ToSession::Input("then this".into())).unwrap();
         let evs = until_idle(&mut t.ui).await;
-        let reply = evs.iter().position(|e| matches!(e, UiEvent::Reply { text, .. } if text.contains("Model:")));
+        let reply = evs.iter().position(|e| matches!(e, UiEvent::Action { text, .. } if text.contains("Model:")));
         let last_stream = evs.iter().rposition(|e| matches!(e, UiEvent::Engine(EngineEvent::Stream { .. })));
         assert!(reply.unwrap() < last_stream.unwrap(), "/status was answered while the turn streamed");
         assert_eq!(streamed_text(&evs), "a slow answer", "the plain prompt waited");
@@ -1030,7 +1054,7 @@ mod tests {
         t.to.send(ToSession::Input("/context all".into())).unwrap();
         let evs = until_idle(&mut t.ui).await;
         assert!(screen(&evs).is_none());
-        assert!(evs.iter().any(|e| matches!(e, UiEvent::Reply { text, .. } if text.contains("Tools:"))));
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Action { text, .. } if text.contains("Tools:"))));
         t.to.send(ToSession::Exit).unwrap();
         tokio::time::timeout(Duration::from_secs(10), t.task).await.unwrap().unwrap();
     }
@@ -1136,7 +1160,7 @@ mod tests {
         // No code block yet: bare `/copy code` replies with an error instead of a picker.
         t.to.send(ToSession::Input("/copy code".into())).unwrap();
         let evs = until_idle(&mut t.ui).await;
-        assert!(evs.iter().any(|e| matches!(e, UiEvent::Reply { is_error: true, .. })));
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Action { is_error: true, .. })));
 
         // Single fenced code block: bare `/copy code` copies directly without opening a picker.
         t.p.push(MockTurn::text("Here:\n```rust\nfn only() {}\n```\n"));
@@ -1186,13 +1210,13 @@ mod tests {
 
         t.to.send(ToSession::Input("/copy code 99".into())).unwrap();
         let evs = until_idle(&mut t.ui).await;
-        assert!(evs.iter().any(|e| matches!(e, UiEvent::Reply { is_error: true, .. })));
+        assert!(evs.iter().any(|e| matches!(e, UiEvent::Action { is_error: true, .. })));
 
         t.to.send(ToSession::Input("/copy code bogey".into())).unwrap();
         let evs = until_idle(&mut t.ui).await;
         assert!(evs
             .iter()
-            .any(|e| matches!(e, UiEvent::Reply { text, is_error: true } if text.contains("[n | last]"))));
+            .any(|e| matches!(e, UiEvent::Action { text, is_error: true } if text.contains("[n | last]"))));
 
         drop(t.to);
         tokio::time::timeout(Duration::from_secs(10), t.task).await.unwrap().unwrap();

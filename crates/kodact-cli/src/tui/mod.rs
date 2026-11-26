@@ -1262,7 +1262,8 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
             app.dirty = false;
             last_draw = now;
         }
-        let hint = app.hint.as_ref().is_some_and(|(_, at)| at.elapsed() < render::HINT_FOR + render::SPINNER_STEP);
+        let hint = app.hint.as_ref().is_some_and(|(_, at)| at.elapsed() < render::HINT_FOR + render::SPINNER_STEP)
+            || app.toast.as_ref().is_some_and(|(_, _, at)| at.elapsed() < render::TOAST_FOR + render::SPINNER_STEP);
         let frame_wait = (last_draw + FRAME).saturating_duration_since(Instant::now());
         tokio::select! {
             ev = async {

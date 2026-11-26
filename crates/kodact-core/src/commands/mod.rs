@@ -235,7 +235,7 @@ builtins! {
         "Show the permission rules and working directories, or change the rules"
     ),
     (Plan, "plan", [], "[description]", "Enter plan mode; with a description, start planning it"),
-    (Plugin, "plugin", [], "[list]", "List loaded plugins"),
+    (Plugin, "plugin", ["plugins"], "[list]", "List loaded plugins"),
     (Recap, "recap", [], "", "Summarize the session in one line"),
     (ReleaseNotes, "release-notes", [], "", "Show what changed in each version"),
     (ReloadPlugins, "reload-plugins", [], "", "Reload plugins without restarting"),

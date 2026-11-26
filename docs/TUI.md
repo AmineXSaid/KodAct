@@ -590,6 +590,32 @@ keys in effect, the file and the unbound keys.
 | | 2. Yes, and ask before each edit | `Allow` |
 | | 3. No, keep planning (Esc) | `Deny { interrupt: true }` |
 
+## Two kinds of slash command
+
+The conversation holds what was said to the model; commands that act on the
+UI, the settings or the engine stay out of it.
+
+- **Prompt commands** are messages: custom commands (`commands/*.md`),
+  skills, MCP prompts, and a built-in when it sends a prompt
+  (`/plan <description>`, `/debug`). They are written as the person's message,
+  as any prompt is.
+- **Action commands** are the other built-ins (`/status`, `/plugin` and
+  `/plugins`, `/reload-plugins`, `/usage`, `/model x`, `/color`...). They are
+  not written into the scrollback and never become the session's title. Their
+  answer is a **toast** when it is one line of at most 100 characters (in the
+  status line for 5 s, red when it failed), and otherwise a **panel**: a screen
+  titled with the command, which Esc closes and which leaves nothing behind.
+  A command with its own screen or picker (`/diff`, `/context`, `/model`) keeps
+  it.
+- **How it is told:** the UI sends a built-in without writing it. The session
+  task answers its local result with `UiEvent::Action` (immediate commands
+  mid-turn too); if instead the engine accepts a prompt for it
+  (`PromptAccepted`), the UI writes the command as the person's message then.
+  `/clear`, `/resume`, `/rewind` and `/exit` keep their own handling: they
+  start the screen over or end it.
+- Other surfaces don't change: `-p`, stream-json and the line REPL answer
+  every command as text, as before.
+
 ## Screens
 
 A screen is what a command typed without arguments shows instead of its

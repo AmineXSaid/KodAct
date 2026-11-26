@@ -29,6 +29,8 @@ const SPINNER: [&str; 10] = kodact_core::glyphs::SPINNER;
 pub const SPINNER_STEP: Duration = Duration::from_millis(80);
 /// How long a hint stays in the status line.
 pub const HINT_FOR: Duration = Duration::from_secs(2);
+/// How long an action command's one-line answer stays in the status line.
+pub const TOAST_FOR: Duration = Duration::from_secs(5);
 pub(super) const MENU_ROWS: usize = 8;
 const LIVE_ROWS: usize = 3;
 /// The composer's placeholder, as KodAct's says it.
@@ -91,6 +93,12 @@ fn status_left(app: &App, now: Instant) -> (String, Style) {
     if let Some((h, at)) = &app.hint {
         if now.duration_since(*at) < HINT_FOR {
             return (h.clone(), app.theme.dim());
+        }
+    }
+    // An action command's answer (`/reload-plugins`): longer than a hint, red when it failed.
+    if let Some((text, is_error, at)) = &app.toast {
+        if now.duration_since(*at) < TOAST_FOR {
+            return (text.clone(), if *is_error { app.theme.error() } else { app.theme.accent() });
         }
     }
     let t = app.theme;

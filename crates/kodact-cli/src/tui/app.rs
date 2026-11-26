@@ -79,6 +79,12 @@ pub enum UiEvent {
         text: String,
         is_error: bool,
     },
+    /// The answer of an action command (`/status`, `/plugin`, `/reload-plugins`): shown as a
+    /// toast or a panel, never written into the conversation.
+    Action {
+        text: String,
+        is_error: bool,
+    },
     Status(StatusView),
     Commands(Vec<CommandInfo>),
     /// Every skill's name (at the start, and after `/reload-skills` or a plugin change).
@@ -336,6 +342,14 @@ pub struct App {
     last_ctrl_c: Option<Instant>,
     /// A short hint in the status line ("Press Ctrl-C again to exit").
     pub hint: Option<(String, Instant)>,
+    /// An action command's one-line answer, in the status line for `TOAST_FOR`: its text,
+    /// whether it is an error, and when it came.
+    pub toast: Option<(String, bool, Instant)>,
+    /// A built-in command sent but not shown: it is written as a prompt only if it turns into
+    /// one (the engine accepts a prompt for it), and stays out of the conversation otherwise.
+    unechoed: Option<String>,
+    /// The action command whose answer is awaited, for the panel's title.
+    action: Option<String>,
     /// A mode change not yet noted in the transcript: the mode it left, and whether a turn
     /// was running. Shift+Tab cycles through several modes; only where it lands is written,
     /// once, when the next prompt goes out or the running turn prints again.
@@ -464,6 +478,9 @@ impl App {
             last_esc: None,
             last_ctrl_c: None,
             hint: None,
+            toast: None,
+            unechoed: None,
+            action: None,
             mode_note: None,
             danger_armed: false,
             danger_confirmed: false,
@@ -869,6 +886,10 @@ impl App {
                     self.reply_lines(&text, is_error);
                 }
             }
+            UiEvent::Action { text, is_error } => {
+                self.unechoed = None;
+                self.show_action(&text, is_error);
+            }
             UiEvent::Status(s) => {
                 if s.model != self.status.model {
                     self.model_down = false;
@@ -900,6 +921,9 @@ impl App {
                 }
             }
             UiEvent::Idle => {
+                // A command that answered nothing leaves nothing behind.
+                self.unechoed = None;
+                self.action = None;
                 self.flush_live();
                 for r in std::mem::take(&mut self.running) {
                     self.commit_tool(r, ToolEnd::Stopped);
@@ -1242,6 +1266,14 @@ impl App {
                 }
             }
             EngineEvent::PromptAccepted { message, .. } => {
+                // A built-in that sent a prompt (`/plan <description>`) is part of the conversation.
+                if let Some(text) = self.unechoed.take() {
+                    self.action = None;
+                    self.echo_prompt(&text);
+                    self.activity = "Working".into();
+                    self.first_line = true;
+                    self.talked = true;
+                }
                 let names: Vec<String> = message
                     .content
                     .iter()
@@ -2626,6 +2658,21 @@ impl App {
     }
 
     /// Send `text` as if typed (queued while a turn runs).
+    /// Show an action command's answer without writing it into the conversation: one short
+    /// line is a toast in the status line, anything longer a panel that closes with Esc.
+    fn show_action(&mut self, text: &str, is_error: bool) {
+        let title = self.action.take().unwrap_or_default();
+        let text = text.trim_end();
+        if text.trim().is_empty() {
+            return;
+        }
+        if !text.contains('\n') && text.chars().count() <= TOAST_MAX_CHARS {
+            self.toast = Some((text.trim().to_string(), is_error, Instant::now()));
+            return;
+        }
+        self.open_screen(action_panel(&title, text, is_error));
+    }
+
     /// Show a transient status hint for `HINT_FOR` seconds.
     pub fn flash_hint(&mut self, msg: impl Into<String>) {
         self.hint = Some((msg.into(), Instant::now()));
@@ -2656,19 +2703,29 @@ impl App {
             _ => None,
         };
         if let Some((answer, is_error)) = local {
-            self.echo_prompt(&text);
-            self.reply_lines(&answer, is_error);
+            self.action = Some(text.trim().to_string());
+            self.show_action(&answer, is_error);
             return vec![];
         }
         if self.busy {
             // Immediate commands (/status, /usage, /btw ...) are answered from the session view
-            // while the turn runs (C17); anything else waits for the turn to end.
+            // while the turn runs (C17), as a toast or a panel; anything else waits for the
+            // turn to end.
             if kodact_core::commands::immediate(&text, &kodact_core::commands::Catalog::default()) {
-                self.echo_prompt(&text);
+                self.action = Some(text.trim().to_string());
                 return vec![Action::Send(text)];
             }
             self.queued.push_back(text);
             return vec![];
+        }
+        if is_action_candidate(&text) && self.pending_images.is_empty() {
+            // A built-in: shown only if it turns into a prompt (see `unechoed`).
+            self.action = Some(text.trim().to_string());
+            self.unechoed = Some(text.clone());
+            self.busy = true;
+            self.busy_since = Some(Instant::now());
+            self.activity = format!("Running {}", text.split_whitespace().next().unwrap_or(""));
+            return vec![Action::Send(text)];
         }
         if !self.pending_images.is_empty() {
             let imgs = std::mem::take(&mut self.pending_images);
@@ -2680,6 +2737,40 @@ impl App {
         }
         vec![Action::Send(self.start(text))]
     }
+}
+
+/// The longest answer shown as a toast; a longer one opens a panel.
+pub const TOAST_MAX_CHARS: usize = 100;
+
+/// `text` runs a built-in command that answers in the UI rather than in the conversation
+/// (`/status`, `/plugin`, `/reload-plugins`). Commands that put another conversation on screen
+/// (`/clear`, `/resume`, `/rewind`) and `/exit` keep their own handling; custom commands,
+/// skills and MCP prompts are prompts and always stay in the conversation.
+pub fn is_action_candidate(text: &str) -> bool {
+    use kodact_core::commands::Builtin;
+    match kodact_core::commands::builtin_of(text) {
+        Some(Builtin::Clear | Builtin::Resume | Builtin::Rewind | Builtin::Exit) | None => false,
+        Some(_) => true,
+    }
+}
+
+/// A panel for an action command's answer: its lines, titled with the command.
+fn action_panel(title: &str, text: &str, is_error: bool) -> Screen {
+    use kodact_core::commands::screens::{Row, Tone};
+    let rows = text
+        .lines()
+        .map(|l| {
+            let tone = if is_error || l.starts_with("FAIL") {
+                Tone::Removed
+            } else if l.starts_with("ok ") {
+                Tone::Added
+            } else {
+                Tone::Plain
+            };
+            Row::text(l, tone)
+        })
+        .collect();
+    Screen { title: if title.is_empty() { "KodAct".into() } else { title.to_string() }, rows }
 }
 
 #[cfg(test)]
@@ -2901,7 +2992,8 @@ mod tests {
         assert_eq!(a.theme.accent, Some(ratatui::style::Color::Green), "a theme change keeps it");
         a.take_pending();
         a.submit("/color mauve".into());
-        assert!(texts(&a.take_pending()).iter().any(|l| l.contains("Unknown colour \"mauve\"")));
+        assert!(a.take_pending().is_empty(), "an action leaves the conversation as it was");
+        assert!(a.toast.as_ref().is_some_and(|(t, err, _)| *err && t.contains("Unknown colour \"mauve\"")));
         a.submit("/color default".into());
         assert_eq!(a.theme.accent, None);
 
@@ -2972,6 +3064,50 @@ mod tests {
         assert_eq!(a.viewer().map(|v| v.0.title.as_str()), Some("Context"), "then the screen shows");
     }
 
+    /// Action commands answer in a toast or a panel and leave the conversation (and its title)
+    /// as it was; prompt commands are messages in it.
+    #[test]
+    fn action_commands_stay_out_of_the_conversation_and_prompt_commands_stay_in_it() {
+        let mut a = app();
+        a.take_pending();
+        // /status: not echoed, not the title, and its answer is a panel titled with it.
+        assert_eq!(a.submit("/status".into()), vec![Action::Send("/status".into())]);
+        assert!(a.take_pending().is_empty() && a.title.is_empty());
+        a.on_event(UiEvent::Action { text: "Version: 1\nModel: m".into(), is_error: false });
+        a.on_event(UiEvent::Idle);
+        assert!(a.take_pending().is_empty(), "nothing written into the conversation");
+        let (screen, _, _) = a.viewer().expect("a panel");
+        assert_eq!(screen.title, "/status");
+        assert_eq!(screen.rows.len(), 2);
+        a.on_key(key(KeyCode::Esc));
+        assert!(a.viewer().is_none() && a.take_pending().is_empty(), "closing it leaves nothing behind");
+
+        // /reload-plugins: a one-line answer is a toast; an error is a red one.
+        a.submit("/reload-plugins".into());
+        a.on_event(UiEvent::Action { text: "Reloaded plugins: 1 added.".into(), is_error: false });
+        a.on_event(UiEvent::Idle);
+        assert!(a.take_pending().is_empty() && a.viewer().is_none());
+        assert!(a.toast.as_ref().is_some_and(|(t, err, _)| !err && t == "Reloaded plugins: 1 added."));
+        a.submit("/plugins".into());
+        a.on_event(UiEvent::Action { text: "No plugins loaded.".into(), is_error: true });
+        assert!(a.toast.as_ref().is_some_and(|(_, err, _)| *err));
+        a.on_event(UiEvent::Idle);
+
+        // A built-in that turns into a prompt is written once its prompt is accepted.
+        a.submit("/plan add a cache".into());
+        assert!(a.take_pending().is_empty(), "not yet: it may answer locally");
+        a.on_event(UiEvent::Engine(EngineEvent::PromptAccepted {
+            message: kodact_types::Message::user_text("plan: add a cache"),
+            uuid: "u".into(),
+        }));
+        assert!(texts(&a.take_pending()).iter().any(|l| l.contains("❯ /plan add a cache")));
+        a.on_event(UiEvent::Idle);
+
+        // A skill or custom command is a prompt: written at once, as any message.
+        a.submit("/simplify the parser".into());
+        assert!(texts(&a.take_pending()).iter().any(|l| l.contains("❯ /simplify the parser")));
+    }
+
     #[test]
     fn immediate_commands_are_sent_while_busy() {
         let mut a = app();
@@ -2981,7 +3117,7 @@ mod tests {
         typed(&mut a, "/usage");
         assert_eq!(a.on_key(key(KeyCode::Enter)), vec![Action::Send("/usage".into())], "sent, not queued");
         assert!(a.queued.is_empty() && a.busy, "the turn goes on");
-        assert_eq!(texts(&a.take_pending()), ["", "❯ /usage"], "echoed");
+        assert!(a.take_pending().is_empty(), "an action command isn't written into the conversation");
         typed(&mut a, "/compact");
         assert!(a.on_key(key(KeyCode::Enter)).is_empty(), "not immediate: queued");
         assert_eq!(a.queued.len(), 1);
@@ -3988,7 +4124,10 @@ mod tests {
         typed(&mut a, "/keybindings");
         assert!(a.on_key(key(KeyCode::Enter)).is_empty());
         assert!(a.queued.is_empty(), "not queued behind the turn");
-        assert!(texts(&a.take_pending()).iter().any(|l| l.contains("Shift+Tab")));
+        assert!(a.take_pending().is_empty(), "nothing written into the conversation");
+        let (screen, _, _) = a.viewer().expect("a panel");
+        assert_eq!(screen.title, "/keybindings");
+        assert!(screen.rows.iter().any(|r| r.spans.iter().any(|s| s.text.contains("Shift+Tab"))));
         assert!(terminal_setup_text(false).contains("Alt+Enter") && terminal_setup_text(true).contains("works"));
     }
 
