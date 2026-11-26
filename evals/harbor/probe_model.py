@@ -35,6 +35,8 @@ SERVED = [
 WINDOW = [
     re.compile(r"max_model_len=(\d+)"),
     re.compile(r"maximum context length is (\d+)"),
+    # vLLM's newer wording: "Input length (72614) exceeds model's maximum context length (65536)."
+    re.compile(r"maximum context length \((\d+)\)"),
     re.compile(r"maximum model length of (\d+)"),
 ]
 

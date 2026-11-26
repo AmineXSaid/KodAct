@@ -22,6 +22,15 @@ def test_a_refusal_names_the_model_and_its_window():
     assert parse(qwen) == ("Qwen38-27B", "100000")
 
 
+def test_the_newer_vllm_wording_gives_the_window():
+    # kgpt-reasoning-text behind LiteLLM, 2026-11-25: the window only in parentheses.
+    kgpt = (
+        '{"detail":"litellm.BadRequestError: Hosted_vllmException - {\\"error\\":{\\"message\\":\\"Input length '
+        "(72614) exceeds model's maximum context length (65536).\\\"}}. Received Model Group=kgpt-reasoning-text\"}"
+    )
+    assert parse(kgpt) == ("kgpt-reasoning-text", "65536")
+
+
 def test_an_answer_gives_its_own_model_field_and_nothing_else_says_nothing():
     assert parse('{"id": "x", "model": "my-model", "choices": []}') == ("my-model", "")
     assert parse("<html>bad gateway</html>") == ("", "")

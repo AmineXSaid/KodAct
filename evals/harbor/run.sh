@@ -58,6 +58,15 @@ if [ -z "${KODACT_OPENAI_BASE_URL:-}${KODACT_BASE_URL:-}${KODACT_API_KEY:-}${KOD
   echo "error: no KODACT_* endpoint or key set; source your env file first" >&2
   exit 1
 fi
+# The finish check is a setting, on by default, not a nudge: in KODACT_NUDGES kodact warns
+# "unknown" in every trial and changes nothing (2026-11-25, 89 trials). Stop before the run.
+case ",${KODACT_NUDGES:-}," in
+  *,finishCheck,*)
+    echo "KODACT_NUDGES: finishCheck is not a nudge. The finish check is on by default;" >&2
+    echo "  KODACT_FINISH_CHECK=0 turns it off. Remove finishCheck from KODACT_NUDGES." >&2
+    exit 2
+    ;;
+esac
 # The binary must be built from the source the job is named after: rebuild it when it isn't.
 custom=""
 if [ -n "${KODACT_STATIC_BIN:-}" ]; then
@@ -135,6 +144,13 @@ if [ -n "${KODACT_OPENAI_BASE_URL:-}" ] && [ "${KODACT_HARBOR_PROBE:-1}" != 0 ];
       echo "warning: KODACT_CONTEXT_WINDOW=$KODACT_CONTEXT_WINDOW, but the server says $window" >&2
     fi
   fi
+fi
+# With no window from the server or by hand, kodact guesses 1,000,000 tokens for a model it doesn't
+# know, and on a smaller window learns it only from its first refusal (2026-11-25: a 65,536-token
+# model ran 89 tasks on the guess). Say so before the run, not after.
+if [ -z "${KODACT_CONTEXT_WINDOW:-}" ]; then
+  echo "warning: no context window known for $model (the probe found none): kodact will assume 1,000,000 tokens" >&2
+  echo "  until a refusal states the real one. Set KODACT_CONTEXT_WINDOW=<tokens> if you know it." >&2
 fi
 job="kodact-${mode}-${dataset_tag}-${model_tag}-${commit}${dirty}${custom}${ca}-$(date +%Y%m%d-%H%M%S)"
 echo "job: $job"
