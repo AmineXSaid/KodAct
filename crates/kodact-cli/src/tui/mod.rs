@@ -1049,7 +1049,7 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
         Err(f) if f.first_run => {
             let tty = std::io::IsTerminal::is_terminal(&std::io::stdin())
                 && std::io::IsTerminal::is_terminal(&std::io::stdout());
-            if tty && matches!(setup::run(&theme).await?, setup::SetupOutcome::Configured { .. }) {
+            if tty && matches!(setup::run(&theme, None).await?, setup::SetupOutcome::Configured { .. }) {
                 session::build(&o, ui_tx.clone()).await?
             } else {
                 for l in brand::first_run(&theme, kodact_core::VERSION, &f.message, cols) {

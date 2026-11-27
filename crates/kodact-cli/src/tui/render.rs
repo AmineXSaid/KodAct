@@ -1408,6 +1408,39 @@ mod tests {
         assert!(text.contains("Run the cart tests  7s"), "the step's own time: {text}");
     }
 
+    /// A sub-agent sent to another model shows the model on its running row, after what it does;
+    /// one on the session's model shows none.
+    #[test]
+    fn a_running_agent_on_another_model_shows_it() {
+        let mut a = app(false);
+        a.look = crate::tui::look::Look::Frame;
+        a.status.model = "deep-thinking".into();
+        typed(&mut a, "orchestrate");
+        a.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let start = a.busy_since.unwrap();
+        let agent = |id: &str, what: &str, input: serde_json::Value| crate::tui::app::Running {
+            id: id.into(),
+            header: vec![Span::raw("Delegating"), Span::raw(" "), Span::raw(what.to_string())],
+            name: "Task".into(),
+            input,
+            since: start,
+            step: None,
+            steps: 0,
+            trail: vec![],
+        };
+        a.running.push(agent("t1", "Summarize the logs", serde_json::json!({"model": "kgpt-reasoning-text"})));
+        a.running.push(agent("t2", "Find the config", serde_json::json!({})));
+        let (rows, _) = draw(&live_view_at(&a, 100, 20, start + Duration::from_secs(4)), 100);
+        let text = rows.join("\n");
+        let row = |what: &str| rows.iter().find(|r| r.contains(what)).cloned().unwrap_or_default();
+        assert!(row("Summarize the logs").contains("◆ kgpt-reasoning-text"), "{text}");
+        assert!(!row("Find the config").contains('◆'), "{text}");
+        assert!(
+            row("Summarize the logs").find('◆') < row("Summarize the logs").find("4s"),
+            "badge before the time: {text}"
+        );
+    }
+
     /// The spinner says the plan's task in progress, as the reference CLI's does: its activeForm,
     /// or its content when it has none; with no task in progress, the usual word.
     #[test]

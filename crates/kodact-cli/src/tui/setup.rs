@@ -1,7 +1,7 @@
 //! Interactive local BYOK onboarding wizard (`kodact setup` and automatic first-run).
 //!
 //! Writes provider settings (`env.<KEY>`, `model`, and optional `env.KODACT_OPENAI_BASE_URL`)
-//! directly to `~/.kodact/settings.json` with `0o600` permissions on Unix—zero servers,
+//! directly to the settings file of the config directory (`settings_path`) with `0o600` permissions on Unix—zero servers,
 //! zero accounts.
 //!
 //! The wizard is one centred card on the alternate screen: a stepper, the step's
@@ -570,6 +570,115 @@ pub fn write_settings(path: &Path, state: &SetupState) -> io::Result<()> {
     Ok(())
 }
 
+/// The file setup writes: `settings.json` in the config directory (`$KODACT_HOME`, else
+/// `~/.config/kodact` on Linux), where every session reads your own settings.
+pub fn settings_path() -> PathBuf {
+    kodact_config::kodact_home().join("settings.json")
+}
+
+/// [`settings_path`] as people write it (`~/.config/kodact/settings.json`).
+fn shown_settings_path() -> String {
+    kodact_config::short_path(&settings_path())
+}
+
+/// The variable an added endpoint's key is kept in (in the settings' `env` block):
+/// `work-gw` → `KODACT_ENDPOINT_WORK_GW_KEY`.
+pub fn endpoint_key_var(name: &str) -> String {
+    let up: String =
+        name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect();
+    format!("KODACT_ENDPOINT_{up}_KEY")
+}
+
+/// A name `endpoints` takes: letters, digits, `-` and `_`, not `default` (the session's own).
+pub fn valid_endpoint_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(format!("\"{name}\" can't name an endpoint: use letters, digits, - and _"));
+    }
+    if name == "default" {
+        return Err("\"default\" is the endpoint your settings already choose: pick another name".into());
+    }
+    Ok(())
+}
+
+/// Save the wizard's choice as another endpoint, `endpoints.<name>`, beside the one the settings
+/// already have: its type and URL, its key in the `env` block (`apiKeyEnv` names it), and the
+/// model chosen as one it serves. The default endpoint and `model` are left as they are.
+pub fn write_endpoint(path: &Path, name: &str, state: &SetupState) -> io::Result<()> {
+    valid_endpoint_name(name).map_err(io::Error::other)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut root: Map<String, Value> = if path.exists() {
+        let raw = std::fs::read_to_string(path).unwrap_or_default();
+        serde_json::from_str::<Value>(&raw).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default()
+    } else {
+        Map::new()
+    };
+    let p = state.provider();
+    let mut entry = Map::new();
+    let kind = match p {
+        Provider::Anthropic => "messages",
+        Provider::Gemini => "gemini",
+        Provider::OpenAi | Provider::Ollama | Provider::Custom => "openai",
+    };
+    entry.insert("type".into(), json!(kind));
+    match p {
+        Provider::OpenAi => {
+            entry.insert("baseUrl".into(), json!("https://api.openai.com/v1"));
+        }
+        Provider::Ollama | Provider::Custom => {
+            entry.insert("baseUrl".into(), json!(state.base_url.trim()));
+        }
+        _ => {}
+    }
+    let key = state.api_key.trim();
+    if !key.is_empty() {
+        let var = endpoint_key_var(name);
+        let env = root.entry("env").or_insert_with(|| Value::Object(Map::new()));
+        if let Some(env) = env.as_object_mut() {
+            env.insert(var.clone(), json!(key));
+        }
+        entry.insert("apiKeyEnv".into(), json!(var));
+    }
+    let model = state.selected_model();
+    if !model.trim().is_empty() {
+        entry.insert("models".into(), json!([model.trim()]));
+    }
+    let endpoints = root.entry("endpoints").or_insert_with(|| Value::Object(Map::new()));
+    if let Some(e) = endpoints.as_object_mut() {
+        e.insert(name.to_string(), Value::Object(entry));
+    }
+    let bytes = serde_json::to_vec_pretty(&Value::Object(root)).map_err(io::Error::other)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// The variables in this shell that win over what setup saved in the settings, by name only:
+/// a value set in the environment is used before the settings' own (a `~/.kodact-env` that
+/// exports `KODACT_MODEL` keeps its model whatever setup chose).
+pub fn overriding_vars(get: &dyn Fn(&str) -> Option<String>) -> Vec<&'static str> {
+    [
+        "KODACT_MODEL",
+        "KODACT_OPENAI_BASE_URL",
+        "KODACT_OPENAI_API_KEY",
+        "KODACT_BASE_URL",
+        "KODACT_API_KEY",
+        "KODACT_AUTH_TOKEN",
+        "KODACT_GEMINI_BASE_URL",
+        "KODACT_GEMINI_API_KEY",
+    ]
+    .into_iter()
+    .filter(|k| get(k).is_some_and(|v| !v.trim().is_empty()))
+    .collect()
+}
+
 /// What a `/models` probe needs, owned, so it can run while the card keeps drawing.
 fn probe_request(state: &SetupState) -> Option<(String, String)> {
     let url = match state.provider() {
@@ -912,7 +1021,7 @@ fn body(state: &SetupState, t: &Theme, w: usize, room: usize) -> Body {
         Step::Provider => {
             // The list is what the step is for: the intro and the note give way to it when short.
             let intro = "Where should KodAct send its requests? You can change this later.";
-            let note = "Saved locally to ~/.kodact/settings.json (0600). No server, no account.";
+            let note = &format!("Saved locally to {} (0600). No server, no account.", shown_settings_path());
             let count = |text: &str| {
                 let mut probe = Body { rows: vec![], cursor: None };
                 probe.wrapped("", text, Style::default(), w);
@@ -1062,7 +1171,7 @@ fn body(state: &SetupState, t: &Theme, w: usize, room: usize) -> Body {
                 ("Endpoint", endpoint),
                 ("API key", key),
                 ("Model", state.selected_model()),
-                ("Saved to", "~/.kodact/settings.json · 0600".to_string()),
+                ("Saved to", format!("{} · 0600", shown_settings_path())),
             ];
             for (k, v) in facts {
                 if k == "Saved to" && room < 8 {
@@ -1234,18 +1343,19 @@ impl Drop for Screen {
 
 type Probe = Pin<Box<dyn Future<Output = Option<Vec<String>>> + Send>>;
 
-/// Run the interactive setup wizard in the terminal, writing `~/.kodact/settings.json`.
-pub async fn run(theme: &Theme) -> Result<SetupOutcome, Fail> {
+/// Run the interactive setup wizard in the terminal, writing [`settings_path`].
+pub async fn run(theme: &Theme, add: Option<&str>) -> Result<SetupOutcome, Fail> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Ok(SetupOutcome::Cancelled);
     }
-    let settings_path: PathBuf = kodact_config::kodact_home().join("settings.json");
+    let settings_path: PathBuf = settings_path();
     let screen = Screen::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).map_err(|e| Fail::config(format!("terminal init failed: {e}")))?;
     let _ = terminal.clear();
 
-    let mut state = SetupState::with_env();
+    // Another endpoint needs its own key: the one in the environment is the default endpoint's.
+    let mut state = if add.is_some() { SetupState::new() } else { SetupState::with_env() };
     let mut events = EventStream::new();
     let mut probe: Option<Probe> = None;
     let mut ticker = tokio::time::interval(Duration::from_millis(80));
@@ -1296,7 +1406,10 @@ pub async fn run(theme: &Theme) -> Result<SetupOutcome, Fail> {
                     state.status = Some("Type the model ID to use.".into());
                 }
             }
-            Some(SetupAction::Save) => match write_settings(&settings_path, &state) {
+            Some(SetupAction::Save) => match match add {
+                Some(name) => write_endpoint(&settings_path, name, &state),
+                None => write_settings(&settings_path, &state),
+            } {
                 Ok(()) => {
                     let (provider, model) = (state.provider().label(), state.selected_model());
                     let _ = terminal.draw(|f| draw_done(f, theme, provider, &model));
@@ -1314,23 +1427,53 @@ pub async fn run(theme: &Theme) -> Result<SetupOutcome, Fail> {
 }
 
 /// Standalone `kodact setup` entrypoint.
-pub async fn run_standalone() -> Result<i32, Fail> {
+pub async fn run_standalone(add: Option<String>) -> Result<i32, Fail> {
     let theme = Theme::named("auto", crate::term::get().color, palette::Depth::detect());
-    match run(&theme).await? {
+    if let Some(name) = &add {
+        valid_endpoint_name(name).map_err(Fail::config)?;
+    }
+    match run(&theme, add.as_deref()).await? {
         SetupOutcome::Configured { provider, model } => {
+            let saved = match &add {
+                Some(name) => format!("  as endpoint {name} in {}", shown_settings_path()),
+                None => format!("  to {}", shown_settings_path()),
+            };
             let line = Line::from(vec![
                 Span::styled("✓ ", theme.success()),
                 Span::styled(format!("Saved {provider} · "), theme.bold()),
-                Span::styled(model, theme.accent()),
-                Span::styled("  to ~/.kodact/settings.json", theme.dim()),
+                Span::styled(model.clone(), theme.accent()),
+                Span::styled(saved, theme.dim()),
             ]);
             println!("{}", super::brand::ansi(&line));
-            let next = Line::from(vec![
-                Span::raw("  Run "),
-                Span::styled("kodact", theme.accent().add_modifier(Modifier::BOLD)),
-                Span::raw(" to start."),
-            ]);
+            let next = match &add {
+                Some(name) => Line::from(vec![
+                    Span::raw("  In any session, "),
+                    Span::styled(format!("/model {model}"), theme.accent().add_modifier(Modifier::BOLD)),
+                    Span::raw(format!(" (or {name}/<model>) uses it; your default endpoint stays.")),
+                ]),
+                None => Line::from(vec![
+                    Span::raw("  Run "),
+                    Span::styled("kodact", theme.accent().add_modifier(Modifier::BOLD)),
+                    Span::raw(" to start. Another endpoint: "),
+                    Span::styled("kodact setup --add <name>", theme.accent()),
+                ]),
+            };
             println!("{}", super::brand::ansi(&next));
+            // Variables in this shell beat the settings: say which, by name, before the next run
+            // quietly uses them instead.
+            let over = if add.is_none() { overriding_vars(&|k| std::env::var(k).ok()) } else { vec![] };
+            if !over.is_empty() {
+                let warn = Line::from(vec![
+                    Span::styled("▲ ", theme.warning()),
+                    Span::raw(format!(
+                        "Your shell sets {}, which win over what was just saved. Remove them from where they \
+                         are exported (a ~/.kodact-env, ~/.bashrc), or run `unset {}`.",
+                        over.join(", "),
+                        over.join(" ")
+                    )),
+                ]);
+                println!("{}", super::brand::ansi(&warn));
+            }
             Ok(0)
         }
         SetupOutcome::Cancelled => {
@@ -1398,6 +1541,48 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+    }
+
+    /// `kodact setup --add work` saves another endpoint beside the one there: its URL, its key
+    /// under its own variable, the model as one it serves; the default endpoint and model stay.
+    #[test]
+    fn adding_an_endpoint_keeps_the_default_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"env": {"KODACT_OPENAI_BASE_URL": "https://first.example.com/v1"}, "model": "deep-thinking"}"#,
+        )
+        .unwrap();
+        let mut s = SetupState::new();
+        s.provider_idx = Provider::ALL.iter().position(|p| *p == Provider::Custom).unwrap();
+        s.base_url = "https://second.example.com/v1".into();
+        s.api_key = "sk-second-0123456789".into();
+        s.replace_models(vec!["kgpt-reasoning-text".into()]);
+        write_endpoint(&path, "work-gw", &s).unwrap();
+        let raw: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["model"], "deep-thinking", "the default model stays");
+        assert_eq!(raw["env"]["KODACT_OPENAI_BASE_URL"], "https://first.example.com/v1", "and its endpoint");
+        let e = &raw["endpoints"]["work-gw"];
+        assert_eq!(e["type"], "openai");
+        assert_eq!(e["baseUrl"], "https://second.example.com/v1");
+        assert_eq!(e["apiKeyEnv"], "KODACT_ENDPOINT_WORK_GW_KEY");
+        assert_eq!(raw["env"]["KODACT_ENDPOINT_WORK_GW_KEY"], "sk-second-0123456789");
+        assert_eq!(e["models"], json!(["kgpt-reasoning-text"]));
+        assert!(valid_endpoint_name("default").is_err() && valid_endpoint_name("a/b").is_err());
+        assert!(write_endpoint(&path, "default", &s).is_err());
+    }
+
+    /// The variables that beat the settings are named after a setup, never their values.
+    #[test]
+    fn variables_that_override_the_setup_are_named() {
+        let env = |k: &str| match k {
+            "KODACT_MODEL" => Some("kgpt-reasoning-text".to_string()),
+            "KODACT_OPENAI_API_KEY" => Some("sk-x".to_string()),
+            "KODACT_BASE_URL" => Some("  ".to_string()),
+            _ => None,
+        };
+        assert_eq!(overriding_vars(&env), ["KODACT_MODEL", "KODACT_OPENAI_API_KEY"]);
     }
 
     #[test]

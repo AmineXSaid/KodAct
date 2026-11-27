@@ -223,7 +223,12 @@ pub struct Opts {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Interactive local setup wizard (provider, API key, and default model)
-    Setup,
+    Setup {
+        /// Add another endpoint, called NAME, beside the one you have: its models then work in
+        /// any session (`/model`, sub-agents), and your default endpoint and model stay
+        #[arg(long, value_name = "NAME")]
+        add: Option<String>,
+    },
     /// Check the health of the installation
     Doctor {
         /// Also contact the endpoint (its model list) and run the key helper, to check the URL and key

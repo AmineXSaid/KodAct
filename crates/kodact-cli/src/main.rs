@@ -745,7 +745,7 @@ fn main() {
     };
     let result = rt.block_on(async move {
         match cli.command {
-            Some(Command::Setup) => tui::setup::run_standalone().await,
+            Some(Command::Setup { add }) => tui::setup::run_standalone(add).await,
             Some(Command::Doctor { probe }) => run_doctor(probe).await,
             Some(Command::Config { action }) => run_config(action),
             Some(Command::Completion { shell }) => {
