@@ -2838,7 +2838,9 @@ impl App {
             self.toast = Some((text.trim().to_string(), is_error, Instant::now()));
             return;
         }
-        self.open_screen(action_panel(&title, text, is_error));
+        // Rows are cut, never wrapped, on screens: an answer is wrapped to the width first.
+        let width = self.input_width.saturating_sub(4).max(40);
+        self.open_screen(action_panel(&title, text, is_error, width));
     }
 
     /// Show a transient status hint for `HINT_FOR` seconds.
@@ -2922,12 +2924,38 @@ pub fn is_action_candidate(text: &str) -> bool {
     }
 }
 
+/// `line` in rows of at most `width` characters, broken between words (a word longer than a
+/// row is cut). An empty line stays one empty row.
+fn wrap_words(line: &str, width: usize) -> Vec<String> {
+    let mut rows = vec![];
+    let mut row = String::new();
+    for word in line.split(' ') {
+        let fits = row.chars().count() + usize::from(!row.is_empty()) + word.chars().count() <= width;
+        if !row.is_empty() && !fits {
+            rows.push(std::mem::take(&mut row));
+        }
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(word);
+        while row.chars().count() > width {
+            let head: String = row.chars().take(width).collect();
+            row = row.chars().skip(width).collect();
+            rows.push(head);
+        }
+    }
+    rows.push(row);
+    rows
+}
+
 /// A panel for an action command's answer: its lines, titled with the command.
-fn action_panel(title: &str, text: &str, is_error: bool) -> Screen {
+fn action_panel(title: &str, text: &str, is_error: bool, width: usize) -> Screen {
     use kodact_core::commands::screens::{Row, Tone};
     let rows = text
         .lines()
+        .flat_map(|l| wrap_words(l, width))
         .map(|l| {
+            let l = l.as_str();
             let tone = if is_error || l.starts_with("FAIL") {
                 Tone::Removed
             } else if l.starts_with("ok ") {
@@ -3274,6 +3302,22 @@ mod tests {
         // A skill or custom command is a prompt: written at once, as any message.
         a.submit("/simplify the parser".into());
         assert!(texts(&a.take_pending()).iter().any(|l| l.contains("❯ /simplify the parser")));
+    }
+
+    /// A long one-line answer opens a panel wrapped to the width, never cut.
+    #[test]
+    fn a_long_action_answer_is_wrapped_in_its_panel() {
+        let mut a = app();
+        a.input_width = 44;
+        a.submit("/model x".into());
+        let long = "Model: x · window unknown: set it in modelLimits. Your endpoint doesn't list x; if requests fail, /model shows the ones it does.";
+        a.on_event(UiEvent::Action { text: long.into(), is_error: false });
+        let (screen, _, _) = a.viewer().expect("a panel");
+        let rows: Vec<String> = screen.rows.iter().map(|r| r.spans.iter().map(|s| s.text.as_str()).collect()).collect();
+        assert!(rows.len() > 1 && rows.iter().all(|r| r.chars().count() <= 40), "{rows:?}");
+        assert_eq!(rows.join(" "), long, "nothing lost");
+        assert_eq!(wrap_words("", 10), [""]);
+        assert_eq!(wrap_words("abcdefghijkl", 5), ["abcde", "fghij", "kl"]);
     }
 
     #[test]

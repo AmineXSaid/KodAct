@@ -142,9 +142,6 @@ fn apply_model(d: &mut Driver, id: &str) -> Result<Vec<String>, String> {
     let rt = h.runtime();
     let mut notes = vec![];
     let info = model_info_or_default(id);
-    if known.is_none() {
-        notes.push(format!("KodAct doesn't know {id}: its context window, limits and pricing are guesses."));
-    }
     if let Some(e) = &rt.effort {
         if !info.effort_levels.contains(&e.as_str()) {
             notes.push(format!("Effort {e} isn't available on {}; it uses the model's default.", id));
@@ -171,13 +168,25 @@ pub(super) async fn model(d: &mut Driver, args: &str) -> Exec {
         Ok(n) => n,
         Err(e) => return err(e),
     };
+    // A model KodAct doesn't know: its endpoint states its window when asked for an impossible
+    // reply (one request, refused before anything is generated), so it is learned, not guessed.
+    if kodact_api::models::window_unknown(&id) && crate::probe_allowed() {
+        kodact_api::probe_limits(&d.engine.provider(), &id).await;
+    }
+    let window = if kodact_api::models::window_unknown(&id) {
+        "window unknown: set it in modelLimits".to_string()
+    } else {
+        format!("{} window", window_label(kodact_api::models::model_info_or_default(&id).context_window))
+    };
     // Still switched: a gateway may serve names it doesn't list. But say so before the
     // first request fails.
     if d.endpoint_lists(&id) == Some(false) {
         notes.push(format!("Your endpoint doesn't list {id}; if requests fail, /model shows the ones it does."));
     }
     let saved = save_default(d, Scope::User, &["model"], Some(json!(args)));
-    ok(join(&[format!("Set model to {id}."), notes.join(" "), saved]))
+    // Short enough for a toast: the full path is in /config.
+    let saved = if saved.starts_with("Saved in ") { "(saved as default)".to_string() } else { saved };
+    ok(join(&[format!("Model: {id} · {window}."), notes.join(" "), saved]))
 }
 
 pub(super) fn effort(d: &mut Driver, args: &str) -> Exec {

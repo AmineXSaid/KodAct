@@ -632,6 +632,7 @@ the context window to compact in time, and prices to show costs.
 | `KODACT_MODEL` | Default model |
 | `KODACT_TUI` | `inline` keeps the interactive UI in an inline viewport at the bottom of the terminal, writing output into its scrollback as it happens; by default the UI takes the whole window and prints the conversation into the scrollback when it closes |
 | `KODACT_MAX_OUTPUT_TOKENS` | Per-request output cap (wins over the model's stated limit; turns off the raise after a cut-off) |
+| `KODACT_PROBE_LIMITS` | `off` (or `0`, `false`, `no`): don't send the request that asks an endpoint for an unknown model's limits. By default, a model whose window no table, setting or model list gives is asked once, at start and on `/model`: a request for an impossible reply (100,000,000 tokens) that vLLM, LiteLLM and OpenAI-compatible servers refuse before generating anything, stating the window and reply limit. What they state is kept, as a refusal's is, so the next sessions don't ask again |
 | `KODACT_LEARNED_LIMITS` | `off` (or `0`, `false`, `no`): don't read or keep the limits endpoints stated by refusing a request in earlier sessions |
 | `KODACT_COMPACTION_MODEL` | The model that writes compaction summaries, for A/B runs (overrides `compaction.model`) |
 | `KODACT_CONTEXT_WINDOW` | Context window, in tokens, for a model with none of its own: not in `modelLimits`, the endpoint's list or the built-in table |

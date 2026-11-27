@@ -705,12 +705,23 @@ impl Session {
         if kodact_api::models::window_unknown(&model) {
             let provider = self.engine.provider();
             let _ = tokio::time::timeout(LISTED_WINDOW_WAIT, provider.list_models()).await;
+            // Not in the list: the endpoint states it when asked for an impossible reply (one
+            // request, refused before anything is generated). Kept for the next sessions too.
+            if kodact_api::models::window_unknown(&model) && probe_allowed() {
+                kodact_api::probe_limits(&provider, &model).await;
+            }
         }
         // Also when the listing came in before this call, from the request made at start.
         if kodact_api::models::limits_source(&model) == kodact_api::models::LimitsSource::Listed {
             self.warnings.retain(|w| !w.starts_with(UNKNOWN_MODEL_PREFIX));
         }
     }
+}
+
+/// `KODACT_PROBE_LIMITS=off` (or `0`, `false`, `no`): don't send the request that asks an
+/// endpoint for an unknown model's limits (for runs that must make no request but their own).
+pub(crate) fn probe_allowed() -> bool {
+    !matches!(env_nonempty("KODACT_PROBE_LIMITS").as_deref(), Some("0" | "false" | "off" | "no"))
 }
 
 /// Shown once when the session's model is in no table and nothing set its limits.

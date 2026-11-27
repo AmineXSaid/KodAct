@@ -113,13 +113,13 @@ async fn model_refuses_words_and_says_when_the_endpoint_does_not_list_the_id() {
     assert_eq!(t.d.engine.handle().model(), before, "nothing changed");
     // The endpoint's list isn't known: no claim about it.
     let out = local(&mut t.d, "/model some-gateway-alias").await;
-    assert!(out.contains("Set model to some-gateway-alias.") && !out.contains("doesn't list"), "{out}");
+    assert!(out.contains("Model: some-gateway-alias ·") && !out.contains("doesn't list"), "{out}");
     // Known: a listed id switches quietly, an unlisted one switches and says so.
     t.d.accept_models(Some(Ok(vec!["served-a".into(), "served-b".into()])));
     let out = local(&mut t.d, "/model served-b").await;
-    assert!(out.contains("Set model to served-b.") && !out.contains("doesn't list"), "{out}");
+    assert!(out.contains("Model: served-b ·") && !out.contains("doesn't list"), "{out}");
     let out = local(&mut t.d, "/model servd-b").await;
-    assert!(out.contains("Set model to servd-b.") && out.contains("Your endpoint doesn't list servd-b"), "{out}");
+    assert!(out.contains("Model: servd-b ·") && out.contains("Your endpoint doesn't list servd-b"), "{out}");
     assert_eq!(t.d.engine.handle().model(), "servd-b", "a gateway may serve what it doesn't list");
 }
 
@@ -145,7 +145,7 @@ async fn model_effort_and_fast_reach_the_request() {
 
     // Haiku has neither effort nor fast mode: both stop applying, and both say so.
     let out = local(d, "/model haiku").await;
-    assert!(out.contains("Set model to claude-haiku-4-5."), "{out}");
+    assert!(out.contains("Model: claude-haiku-4-5 ·"), "{out}");
     assert!(out.contains("Effort low isn't available") && out.contains("Fast mode isn't available"), "{out}");
     assert!(d.engine.system()[0].text.contains("Haiku 4.5"), "the environment names the new model");
     assert_eq!(d.info.init.model, "claude-haiku-4-5");
@@ -368,7 +368,8 @@ async fn interactive_surfaces_save_defaults() {
     t.d.info.user_settings = user.clone();
     let d = &mut t.d;
     let out = local(d, "/model sonnet").await;
-    assert!(out.contains(&format!("Saved in user settings ({}).", user.display())), "{out}");
+    // Short, for a toast: the file below holds it.
+    assert!(out.contains("(saved as default)"), "{out}");
     local(d, "/effort high").await;
     local(d, "/effort max").await;
     local(d, "/autocompact 400k").await;
@@ -1981,7 +1982,7 @@ async fn model_lists_only_what_the_endpoint_offers() {
     let m = crate::commands::picker::picker(&t.d, "/model").unwrap();
     let labels: Vec<&str> = m.choices.iter().map(|c| c.label.as_str()).collect();
     assert_eq!(labels, ["claude-opus-5-5", "local-coder", "local-large", "Another model…"]);
-    assert!(local(&mut t.d, "/model local-coder").await.starts_with("Set model to local-coder."));
+    assert!(local(&mut t.d, "/model local-coder").await.starts_with("Model: local-coder ·"));
     let m = crate::commands::picker::picker(&t.d, "/model").unwrap();
     assert_eq!(m.choices.len(), 3, "the current model is in the list now");
     assert!(m.choices[0].current);
@@ -1990,7 +1991,7 @@ async fn model_lists_only_what_the_endpoint_offers() {
 #[tokio::test]
 async fn unknown_models_show_unknown_cost_and_a_guessed_window() {
     let mut t = driver();
-    assert!(local(&mut t.d, "/model test-unpriced-model").await.starts_with("Set model to test-unpriced-model."));
+    assert!(local(&mut t.d, "/model test-unpriced-model").await.starts_with("Model: test-unpriced-model ·"));
     t.p.push(kodact_api::MockTurn::text("hi"));
     run(&mut t.d, "hello").await;
     let u = local(&mut t.d, "/usage").await;

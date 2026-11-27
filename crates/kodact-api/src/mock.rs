@@ -252,6 +252,18 @@ impl Provider for MockProvider {
     }
 
     async fn stream(&self, request: MessagesRequest, cancel: CancellationToken) -> Result<EventStream, ApiError> {
+        // An impossible reply (the limits probe, `crate::probe_limits`) is refused before anything
+        // is generated, as a real server refuses it: no scripted turn is used, nothing recorded.
+        if request.max_tokens >= 100_000_000 {
+            return Err(ApiError::Http {
+                status: 400,
+                kind: "invalid_request_error".into(),
+                message: "max_tokens is too large".into(),
+                retry_after: None,
+                url: String::new(),
+                origin: None,
+            });
+        }
         let turn = {
             let next = self.queue.lock().unwrap().pop_front();
             match (next, &self.responder) {
