@@ -100,6 +100,10 @@ pub struct LaunchOptions {
     pub no_session_persistence: bool,
     /// `--bare` / `--safe-mode`: no hooks, no memory files.
     pub bare: bool,
+    /// The terminal UI's defaults: the model's reasoning carried (`carryReasoning`) and the
+    /// `constraints`, `clock` and `thinkingTimeBox` nudges on, unless the environment or the
+    /// settings say otherwise. `-p` and the line REPL keep the measured defaults.
+    pub tui_defaults: bool,
     pub betas: Vec<String>,
     /// `--autocompact <auto|tokens>`: the window compaction thresholds use.
     pub autocompact: Option<String>,
@@ -322,7 +326,25 @@ pub(crate) fn summary_model(settings: &LoadedSettings) -> Option<String> {
 /// Which nudges are on: `KODACT_NUDGES` (a list such as `shellEdit,constraints`, or `all`, for
 /// A/B runs), else `nudges.<name>: true` in settings. Each is off until an eval task has
 /// measured it; `reminders: false` still turns them all off.
+/// The nudges the terminal UI turns on unless told otherwise ([`LaunchOptions::tui_defaults`]).
+pub const TUI_NUDGES: &str = "constraints,clock,thinkingTimeBox";
+
 pub(crate) fn nudges(settings: &LoadedSettings, warnings: &mut Vec<String>) -> kodact_engine::NudgeConfig {
+    nudges_with(settings, warnings, None)
+}
+
+/// As [`nudges`], with `default` (a list) on when neither `KODACT_NUDGES` nor any `nudges`
+/// setting is given.
+pub(crate) fn nudges_with(
+    settings: &LoadedSettings,
+    warnings: &mut Vec<String>,
+    default: Option<&str>,
+) -> kodact_engine::NudgeConfig {
+    if env_nonempty("KODACT_NUDGES").is_none() && settings.get("/nudges").is_none() {
+        if let Some(list) = default {
+            return kodact_engine::NudgeConfig::from_list(list).0;
+        }
+    }
     if let Some(list) = env_nonempty("KODACT_NUDGES") {
         let (c, unknown) = kodact_engine::NudgeConfig::from_list(&list);
         if !unknown.is_empty() {
@@ -370,10 +392,10 @@ pub(crate) fn line_edits(settings: &LoadedSettings) -> bool {
 /// Whether the model's reasoning goes back with each request where the endpoint drops it (chat
 /// completions), for the session and its sub-agents: `carryReasoning`, or `KODACT_CARRY_REASONING`
 /// (for A/B runs). Off by default until it is measured.
-pub(crate) fn carry_reasoning(settings: &LoadedSettings) -> bool {
+pub(crate) fn carry_reasoning(settings: &LoadedSettings, default: bool) -> bool {
     match env_nonempty("KODACT_CARRY_REASONING") {
         Some(v) => !matches!(v.as_str(), "0" | "false" | "off" | "no"),
-        None => settings.bool("/carryReasoning").unwrap_or(false),
+        None => settings.bool("/carryReasoning").unwrap_or(default),
     }
 }
 
@@ -705,12 +727,23 @@ impl Session {
         if kodact_api::models::window_unknown(&model) {
             let provider = self.engine.provider();
             let _ = tokio::time::timeout(LISTED_WINDOW_WAIT, provider.list_models()).await;
+            // Not in the list: the endpoint states it when asked for an impossible reply (one
+            // request, refused before anything is generated). Kept for the next sessions too.
+            if kodact_api::models::window_unknown(&model) && probe_allowed() {
+                kodact_api::probe_limits(&provider, &model).await;
+            }
         }
         // Also when the listing came in before this call, from the request made at start.
         if kodact_api::models::limits_source(&model) == kodact_api::models::LimitsSource::Listed {
             self.warnings.retain(|w| !w.starts_with(UNKNOWN_MODEL_PREFIX));
         }
     }
+}
+
+/// `KODACT_PROBE_LIMITS=off` (or `0`, `false`, `no`): don't send the request that asks an
+/// endpoint for an unknown model's limits (for runs that must make no request but their own).
+pub(crate) fn probe_allowed() -> bool {
+    !matches!(env_nonempty("KODACT_PROBE_LIMITS").as_deref(), Some("0" | "false" | "off" | "no"))
 }
 
 /// Shown once when the session's model is in no table and nothing set its limits.
@@ -1200,7 +1233,7 @@ pub fn build_session(
     if let Some(v) = &verify {
         env_info.checks = v.commands.clone();
     }
-    let nudge_config = nudges(&settings, &mut warnings);
+    let nudge_config = nudges_with(&settings, &mut warnings, opts.tui_defaults.then_some(TUI_NUDGES));
     let prompt = PromptSpec {
         replace: opts.system_prompt.clone(),
         append: opts.append_system_prompt.clone(),
@@ -1268,7 +1301,7 @@ pub fn build_session(
             keep_recent: keep_recent(&settings),
             summary_model: summary_model(&settings),
             // As in the session: a sub-agent on the same endpoint gets its reasoning back too.
-            carry_reasoning: carry_reasoning(&settings),
+            carry_reasoning: carry_reasoning(&settings, opts.tui_defaults),
             ..Default::default()
         },
         memory_context: memory.clone(),
@@ -1297,7 +1330,7 @@ pub fn build_session(
         autonomous,
         api_retry_wait: EngineConfig::default().api_retry_wait,
         time_box_floor: EngineConfig::default().time_box_floor,
-        carry_reasoning: carry_reasoning(&settings),
+        carry_reasoning: carry_reasoning(&settings, opts.tui_defaults),
         json_schema: opts.json_schema.clone(),
         pricing,
         initial_context: (!initial.is_empty()).then(|| initial.join("\n\n")),

@@ -2934,6 +2934,7 @@ fn action_panel(title: &str, text: &str, is_error: bool) -> Screen {
         .lines()
         .flat_map(|l| wrap_words(l, width))
         .map(|l| {
+            let l = l.as_str();
             let tone = if is_error || l.starts_with("FAIL") {
                 Tone::Removed
             } else if l.starts_with("ok ") {
@@ -3313,6 +3314,20 @@ mod tests {
         // A skill or custom command is a prompt: written at once, as any message.
         a.submit("/simplify the parser".into());
         assert!(texts(&a.take_pending()).iter().any(|l| l.contains("❯ /simplify the parser")));
+    }
+
+    /// A long one-line answer opens a panel wrapped to the width, never cut.
+    #[test]
+    fn a_long_action_answer_is_wrapped_in_its_panel() {
+        let mut a = app();
+        a.submit("/model x".into());
+        let long = "Model: x · window unknown: set it in modelLimits. Your endpoint doesn't list x; if requests fail, /model shows the ones it does.";
+        a.on_event(UiEvent::Action { text: long.into(), is_error: false });
+        let (screen, _, _) = a.viewer().expect("a panel");
+        let rows: Vec<String> = screen.rows.iter().map(|r| r.spans.iter().map(|s| s.text.as_str()).collect()).collect();
+        let width = crossterm::terminal::size().map(|(c, _)| c as usize).unwrap_or(80).saturating_sub(8).max(20);
+        assert!(rows.iter().all(|r| r.chars().count() <= width), "{rows:?}");
+        assert_eq!(rows.join(" "), long, "nothing lost");
     }
 
     #[test]

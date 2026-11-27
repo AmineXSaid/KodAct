@@ -251,3 +251,62 @@ fn unattended_runs_get_a_second_verification_reminder() {
     );
     assert_eq!(crate::verify_config(&s, dir.path(), true).unwrap().max_reminders, 3, "a setting wins");
 }
+
+/// The terminal UI turns on carried reasoning and the constraints, clock and thinking time-box
+/// nudges, unless the settings say otherwise; other surfaces keep the measured defaults.
+#[tokio::test]
+async fn the_terminal_ui_has_its_own_defaults_and_settings_still_win() {
+    let (d, p) = setup();
+    let plain = build_session(opts(d.path(), p.clone()), Arc::new(NullSink), Arc::new(DenyPrompter)).unwrap();
+    assert!(!plain.engine.cfg.carry_reasoning && !plain.engine.cfg.nudges.constraints);
+
+    let mut o = opts(d.path(), p.clone());
+    o.tui_defaults = true;
+    let tui = build_session(o, Arc::new(NullSink), Arc::new(DenyPrompter)).unwrap();
+    let n = &tui.engine.cfg.nudges;
+    assert!(tui.engine.cfg.carry_reasoning, "reasoning carried");
+    assert!(n.constraints && n.clock && n.thinking_time_box, "{n:?}");
+
+    std::fs::write(
+        d.path().join("proj/.kodact/settings.local.json"),
+        r#"{"carryReasoning": false, "nudges": {"clock": true}}"#,
+    )
+    .unwrap();
+    let mut o = opts(d.path(), p);
+    o.tui_defaults = true;
+    let set = build_session(o, Arc::new(NullSink), Arc::new(DenyPrompter)).unwrap();
+    let n = &set.engine.cfg.nudges;
+    assert!(!set.engine.cfg.carry_reasoning, "the setting wins");
+    assert!(n.clock && !n.constraints && !n.thinking_time_box, "the settings' nudges, not the defaults: {n:?}");
+}
+
+/// With several endpoints, /model's picker groups the models by endpoint, each with its name.
+#[tokio::test]
+async fn the_model_picker_groups_models_by_endpoint() {
+    use kodact_api::route::{Route, RoutedProvider};
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(d.path().join("proj/.kodact")).unwrap();
+    let (a, b) = (Arc::new(MockProvider::new(vec![])), Arc::new(MockProvider::new(vec![])));
+    a.set_models(&["deep-thinking", "quick-thinking"]);
+    b.set_models(&["kgpt-reasoning-text", "kgpt-mini-text"]);
+    let routed: Arc<dyn kodact_api::Provider> = Arc::new(RoutedProvider::new(
+        vec![Route::new("kpit", b, vec!["kgpt-*".into()]), Route::new("technica", a, vec![])],
+        1,
+    ));
+    let mut o = opts(d.path(), Arc::new(MockProvider::new(vec![])));
+    o.provider = Some(routed);
+    o.model = Some("deep-thinking".into());
+    let s = build_session(o, Arc::new(NullSink), Arc::new(DenyPrompter)).unwrap();
+    let mut drv = crate::Driver::new(s, crate::commands::Surface::Tui, None);
+    drv.load_models().await;
+    let p = crate::commands::picker::picker(&drv, "/model").unwrap();
+    let rows: Vec<(String, String)> = p.choices.iter().map(|c| (c.label.clone(), c.detail.clone())).collect();
+    let by = |e: &str| rows.iter().filter(|(_, d)| d == e).map(|(m, _)| m.as_str()).collect::<Vec<_>>();
+    assert_eq!(by("kpit"), ["kgpt-reasoning-text", "kgpt-mini-text"], "{rows:?}");
+    assert_eq!(by("technica"), ["deep-thinking", "quick-thinking"], "{rows:?}");
+    // Each endpoint's models are together.
+    let order: Vec<&str> =
+        rows.iter().map(|(_, d)| d.as_str()).filter(|d| !d.is_empty() && *d != "type its id").collect();
+    let changes = order.windows(2).filter(|w| w[0] != w[1]).count();
+    assert_eq!(changes, 1, "two groups: {order:?}");
+}

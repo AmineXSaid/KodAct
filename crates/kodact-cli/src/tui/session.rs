@@ -646,6 +646,8 @@ pub async fn build(
     ui: mpsc::UnboundedSender<UiEvent>,
 ) -> Result<(Driver, Vec<String>), crate::exit::Fail> {
     let mut lo = crate::launch_options(o)?;
+    // The terminal UI's own defaults: reasoning carried, the constraints/clock/time-box nudges.
+    lo.tui_defaults = true;
     let (mcp, mcp_warnings) = connecting(&lo, kodact_core::connect_mcp(&lo)).await;
     lo.mcp = Some(mcp.clone());
     let sink: Arc<dyn EventSink> = Arc::new(TuiSink(ui.clone()));

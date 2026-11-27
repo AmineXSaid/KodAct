@@ -510,6 +510,37 @@ pub fn usable_model(p: &std::sync::Arc<dyn Provider>, name: &str, listed: &[Stri
     Err(format!("`{}` names a Claude model none of your endpoints serves", name.trim()))
 }
 
+/// How long [`probe_limits`] waits for the endpoint's answer.
+pub const PROBE_WAIT: Duration = Duration::from_secs(8);
+
+/// Learn `model`'s context window (and reply limit) from its endpoint, without using the model:
+/// one request asking for an impossible reply (100,000,000 tokens), which vLLM, LiteLLM and
+/// OpenAI-compatible servers refuse before generating anything, stating the limit ("cannot be
+/// greater than max_model_len=65536", "maximum context length (65536)", "supports at most 16384
+/// completion tokens"). What it states is kept as the endpoint's own word, for this session and
+/// the next ([`models::reported_window`]). An endpoint that takes the request instead is stopped
+/// at once. Returns the window learned.
+pub async fn probe_limits(p: &std::sync::Arc<dyn Provider>, model: &str) -> Option<u64> {
+    let mut request: MessagesRequest =
+        serde_json::from_value(serde_json::json!({"model": model, "max_tokens": 100_000_000u32, "messages": []}))
+            .ok()?;
+    request.messages.push(kodact_types::Message::user_text("hi"));
+    let cancel = CancellationToken::new();
+    let answer = tokio::time::timeout(PROBE_WAIT, p.stream(request, cancel.clone())).await;
+    cancel.cancel();
+    let e = match answer {
+        Ok(Err(e)) => e,
+        // Taken (and stopped), or no answer in time: nothing stated.
+        _ => return None,
+    };
+    if let Some(n) = e.reported_max_output() {
+        models::reported_max_output(model, n);
+    }
+    let window = e.reported_limits().window?;
+    models::reported_window(model, window);
+    Some(window)
+}
+
 /// The provider whose endpoint serves `model`: `p` itself, or the endpoint a routed provider
 /// sends it to. Its name, origin and URL are that endpoint's.
 pub fn serving(p: &std::sync::Arc<dyn Provider>, model: &str) -> std::sync::Arc<dyn Provider> {
@@ -719,5 +750,59 @@ mod outage_tests {
         assert!(long.describe().contains("asks to wait 48m"), "{}", long.describe());
         assert_eq!(super::human_wait(std::time::Duration::from_secs(45)), "45s");
         assert_eq!(super::human_wait(std::time::Duration::from_secs(7500)), "2h 05m");
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// An endpoint that refuses every request with `message`, and counts them.
+    struct Refuses(&'static str, std::sync::atomic::AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl Provider for Refuses {
+        fn name(&self) -> &str {
+            "openai"
+        }
+        async fn stream(&self, r: MessagesRequest, _: CancellationToken) -> Result<EventStream, ApiError> {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(r.max_tokens, 100_000_000, "an impossible reply, refused before any token");
+            Err(ApiError::Http {
+                status: 400,
+                kind: "error".into(),
+                message: self.0.into(),
+                retry_after: None,
+                url: String::new(),
+                origin: None,
+            })
+        }
+    }
+
+    /// A model KodAct doesn't know: one refused request teaches its window, as the endpoint
+    /// states it, in the wordings vLLM uses behind LiteLLM; a refusal that states nothing
+    /// leaves the guess.
+    #[tokio::test]
+    async fn one_refused_request_teaches_an_unknown_models_window() {
+        let old: Arc<dyn Provider> = Arc::new(Refuses(
+            "litellm.BadRequestError: Hosted_vllmException - max_tokens=100000000 cannot be greater than max_model_len=65536. Please request fewer output tokens.",
+            Default::default(),
+        ));
+        assert!(models::window_unknown("probe-test-old-vllm"));
+        assert_eq!(probe_limits(&old, "probe-test-old-vllm").await, Some(65_536));
+        assert!(!models::window_unknown("probe-test-old-vllm"));
+        assert_eq!(models::model_info_or_default("probe-test-old-vllm").context_window, 65_536);
+        assert_eq!(models::limits_source("probe-test-old-vllm"), models::LimitsSource::Listed);
+
+        let new: Arc<dyn Provider> = Arc::new(Refuses(
+            "Input length (100000010) exceeds model's maximum context length (131072).",
+            Default::default(),
+        ));
+        assert_eq!(probe_limits(&new, "probe-test-new-vllm").await, Some(131_072));
+
+        let silent: Arc<dyn Provider> = Arc::new(Refuses("bad request", Default::default()));
+        assert_eq!(probe_limits(&silent, "probe-test-silent").await, None);
+        assert!(models::window_unknown("probe-test-silent"));
     }
 }

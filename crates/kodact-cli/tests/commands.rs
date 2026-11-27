@@ -209,7 +209,7 @@ async fn settings_commands_persist_and_reach_the_api() {
     }
     let out = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output()).await.unwrap().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("Set model to claude-opus-5-5. (This session only.)"), "{stdout}");
+    assert!(stdout.contains("Model: claude-opus-5-5 · 1M window. (This session only.)"), "{stdout}");
     let reqs = api.requests();
     assert_eq!(reqs.len(), 1);
     assert_eq!((reqs[0]["model"].as_str(), reqs[0]["speed"].as_str()), (Some("claude-opus-5-5"), Some("fast")));
