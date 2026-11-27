@@ -65,7 +65,8 @@ pub struct TaskSpec {
     #[serde(default)]
     pub crash: Option<CrashSpec>,
     /// What the check needs on this machine: `chromium` (a headless Chrome or Chromium, for a
-    /// check that reads a page after its scripts ran). A task whose needs aren't met is skipped,
+    /// check that reads a page after its scripts ran), `office` (LibreOffice and the Python
+    /// packages that read Office files and PDFs, for the document tasks). A task whose needs aren't met is skipped,
     /// and says why, not failed.
     #[serde(default)]
     pub requires: Vec<String>,
@@ -83,6 +84,20 @@ pub fn chrome() -> Option<std::path::PathBuf> {
         .find_map(|name| std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file()))
 }
 
+/// Whether the document checks can run here: LibreOffice to render and recalculate, and the
+/// Python packages that read Office files and PDFs.
+fn office() -> bool {
+    let run = |cmd: &str, args: &[&str]| {
+        std::process::Command::new(cmd)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    run("soffice", &["--version"]) && run("python3", &["-c", "import pptx, docx, openpyxl, pypdf, pdfplumber"])
+}
+
 /// Why `task` can't be checked on this machine, if it can't.
 pub fn unmet(task: &Task) -> Option<String> {
     task.spec.requires.iter().find_map(|r| match r.as_str() {
@@ -90,6 +105,11 @@ pub fn unmet(task: &Task) -> Option<String> {
             Some("needs a headless Chrome or Chromium (set KODACT_EVAL_CHROME, or put chromium on PATH)".to_string())
         }
         "chromium" => None,
+        "office" if !office() => Some(
+            "needs LibreOffice (soffice) and the Python packages python-pptx, python-docx, openpyxl, pypdf and pdfplumber"
+                .to_string(),
+        ),
+        "office" => None,
         other => Some(format!("needs {other}, which kodact-eval doesn't know")),
     })
 }

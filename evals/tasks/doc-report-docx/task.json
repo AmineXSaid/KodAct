@@ -1,0 +1,8 @@
+{
+  "instruction": "Write the Q3 incident report as incident-report.docx, from brief.md and incidents.csv: a summary, the incidents by team as a table, and the agreed actions as a numbered list, with page numbers in the footer. Follow the brief.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["documents", "office", "docx"],
+  "requires": ["office"],
+  "timeout_secs": 1200
+}

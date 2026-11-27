@@ -19,6 +19,10 @@ run's own (a small window with `KODACT_CONTEXT_WINDOW`).
 `KODACT_EVAL_CHROME`, else `chromium`, `chromium-browser`, `google-chrome` or
 `chrome` on `PATH`. Without one the task is skipped by `run` and `validate` (and
 by the test that validates every task), with the reason, instead of failing.
+`"requires": ["office"]` says the check needs LibreOffice (`soffice`, to render and
+recalculate) and the Python packages python-pptx, python-docx, openpyxl, pypdf and
+pdfplumber; the document tasks (`doc-*`) use it. Their starting files come from
+`evals/tasks/doc-fixtures.py`.
 
 `"followups": ["...", "..."]` makes the task a chat: kodact runs over
 stream-json, gets the instruction, and each follow-up is sent as the next turn
@@ -105,6 +109,12 @@ carries over (a task's own `env` can set it back).
 
 | Task | Pillar | What it tests |
 | --- | --- | --- |
+| doc-deck-from-notes | verification | Everyday: a leadership deck from meeting notes, one slide per section, the revenue as a chart. The check wants a native chart with the right numbers, and renders the deck: no text past a slide's edge, no text on text, nothing under 10pt (the prompt says big screen) |
+| doc-edit-deck | tool-design | Edit a deck in place: retitle a slide, insert one after slide 2 on slide 2's layout with its bullets in the layout's body, every other slide untouched |
+| doc-report-docx | verification | A two-page incident report from a brief and a CSV: Word's heading styles (an outline), the table with the CSV's numbers, the actions as Word's numbered list (not typed numbers), page numbers in the footer, two pages when rendered |
+| doc-budget-xlsx | verification | A budget workbook from 240 expenses: totals and shares as formulas, recalculated by LibreOffice and checked against the data, the share as a percentage, a bar chart |
+| doc-pdf-form | tool-design | Fill a PDF form (text fields and a checkbox) from JSON and append a PDF: the values must show in a viewer (appearances, or NeedAppearances), or be flattened into the page |
+| doc-big-workbook | long-horizon | Scale: 50,000 sales rows summarised per region by month and product, and an overview; every number checked against the data |
 | fix-median | verification | Fix a bug so the visible tests pass; hidden cases catch partial fixes |
 | invoice-rounding | verification | Round totals to cents; rounding in the shared helper breaks another test, which only running the suite reveals |
 | slugify-trap | verification | Optimize without changing behaviour; hidden edge cases punish skipped tests (false finish) |

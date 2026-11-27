@@ -1,0 +1,8 @@
+{
+  "instruction": "sales.csv has this year's 50,000 sales. Make sales-summary.xlsx: one sheet per region showing revenue by month (rows) and product (columns), and an Overview sheet with each region's revenue for the year.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "long-horizon",
+  "tags": ["documents", "office", "xlsx", "scale"],
+  "requires": ["office"],
+  "timeout_secs": 1200
+}

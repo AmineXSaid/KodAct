@@ -2838,9 +2838,7 @@ impl App {
             self.toast = Some((text.trim().to_string(), is_error, Instant::now()));
             return;
         }
-        // Rows are cut, never wrapped, on screens: an answer is wrapped to the width first.
-        let width = self.input_width.saturating_sub(4).max(40);
-        self.open_screen(action_panel(&title, text, is_error, width));
+        self.open_screen(action_panel(&title, text, is_error));
     }
 
     /// Show a transient status hint for `HINT_FOR` seconds.
@@ -2924,33 +2922,14 @@ pub fn is_action_candidate(text: &str) -> bool {
     }
 }
 
-/// `line` in rows of at most `width` characters, broken between words (a word longer than a
-/// row is cut). An empty line stays one empty row.
-fn wrap_words(line: &str, width: usize) -> Vec<String> {
-    let mut rows = vec![];
-    let mut row = String::new();
-    for word in line.split(' ') {
-        let fits = row.chars().count() + usize::from(!row.is_empty()) + word.chars().count() <= width;
-        if !row.is_empty() && !fits {
-            rows.push(std::mem::take(&mut row));
-        }
-        if !row.is_empty() {
-            row.push(' ');
-        }
-        row.push_str(word);
-        while row.chars().count() > width {
-            let head: String = row.chars().take(width).collect();
-            row = row.chars().skip(width).collect();
-            rows.push(head);
-        }
-    }
-    rows.push(row);
-    rows
-}
-
-/// A panel for an action command's answer: its lines, titled with the command.
-fn action_panel(title: &str, text: &str, is_error: bool, width: usize) -> Screen {
+/// A panel for an action command's answer: its lines, titled with the command, each
+/// wrapped at words to the panel's width (a screen cuts rows to fit, and a sentence cut
+/// off mid-word is lost).
+fn action_panel(title: &str, text: &str, is_error: bool) -> Screen {
     use kodact_core::commands::screens::{Row, Tone};
+    let cols = crossterm::terminal::size().map(|(c, _)| c as usize).unwrap_or(80);
+    // The viewer's frame and row marker take 8 columns.
+    let width = cols.saturating_sub(8).max(20);
     let rows = text
         .lines()
         .flat_map(|l| wrap_words(l, width))
@@ -2969,8 +2948,41 @@ fn action_panel(title: &str, text: &str, is_error: bool, width: usize) -> Screen
     Screen { title: if title.is_empty() { "KodAct".into() } else { title.to_string() }, rows }
 }
 
+/// `line` broken at spaces into lines at most `width` columns wide; a word wider than that
+/// gets a line of its own. A wrapped line keeps the original's indent.
+fn wrap_words(line: &str, width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthStr;
+    if line.width() <= width {
+        return vec![line.to_string()];
+    }
+    let indent: String = line.chars().take_while(|c| *c == ' ').collect();
+    let mut out = vec![];
+    let mut cur = String::new();
+    for word in line.split(' ').filter(|w| !w.is_empty()) {
+        let lead = if cur.is_empty() { indent.as_str() } else { " " };
+        if !cur.is_empty() && cur.width() + lead.width() + word.width() > width {
+            out.push(std::mem::take(&mut cur));
+            cur.push_str(&indent);
+        } else {
+            cur.push_str(lead);
+        }
+        cur.push_str(word);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn panel_lines_wrap_at_words_and_keep_their_indent() {
+        let lines = super::wrap_words("  Set model to quick-thinking. KodAct doesn't know it", 20);
+        assert_eq!(lines, ["  Set model to", "  quick-thinking.", "  KodAct doesn't", "  know it"]);
+        assert_eq!(super::wrap_words("short", 20), ["short"]);
+    }
+
     use super::*;
     use crate::tui::text::plain;
     use kodact_types::{MessageContent, StopReason, Usage};
@@ -3308,16 +3320,14 @@ mod tests {
     #[test]
     fn a_long_action_answer_is_wrapped_in_its_panel() {
         let mut a = app();
-        a.input_width = 44;
         a.submit("/model x".into());
         let long = "Model: x · window unknown: set it in modelLimits. Your endpoint doesn't list x; if requests fail, /model shows the ones it does.";
         a.on_event(UiEvent::Action { text: long.into(), is_error: false });
         let (screen, _, _) = a.viewer().expect("a panel");
         let rows: Vec<String> = screen.rows.iter().map(|r| r.spans.iter().map(|s| s.text.as_str()).collect()).collect();
-        assert!(rows.len() > 1 && rows.iter().all(|r| r.chars().count() <= 40), "{rows:?}");
+        let width = crossterm::terminal::size().map(|(c, _)| c as usize).unwrap_or(80).saturating_sub(8).max(20);
+        assert!(rows.iter().all(|r| r.chars().count() <= width), "{rows:?}");
         assert_eq!(rows.join(" "), long, "nothing lost");
-        assert_eq!(wrap_words("", 10), [""]);
-        assert_eq!(wrap_words("abcdefghijkl", 5), ["abcde", "fghij", "kl"]);
     }
 
     #[test]

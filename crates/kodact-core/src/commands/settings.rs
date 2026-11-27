@@ -164,6 +164,10 @@ pub(super) async fn model(d: &mut Driver, args: &str) -> Exec {
         return err(format!("A model id is one word, without spaces: \"{args}\" isn't one. /model lists the models."));
     }
     let id = kodact_api::resolve_model(args);
+    // As a session does at start: give the endpoint a moment to list the model's window.
+    if kodact_api::models::window_unknown(&id) {
+        let _ = tokio::time::timeout(crate::LISTED_WINDOW_WAIT, d.load_models()).await;
+    }
     let mut notes = match apply_model(d, &id) {
         Ok(n) => n,
         Err(e) => return err(e),
