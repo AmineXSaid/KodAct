@@ -135,6 +135,7 @@ fn launch_options(o: &Opts) -> Result<LaunchOptions, Fail> {
         session_id: o.session_id.clone(),
         no_session_persistence: o.no_session_persistence,
         bare: o.bare || o.safe_mode,
+        tui_defaults: false,
         betas: o.betas.clone(),
         autocompact: o.autocompact.clone(),
         agents_json: o.agents.clone(),

@@ -66,16 +66,42 @@ pub fn picker(d: &Driver, text: &str) -> Option<Picker> {
     }
 }
 
-/// The endpoint's own models (after `Driver::load_models`), and any other by hand.
+/// The endpoints' own models (after `Driver::load_models`), and any other by hand. With several
+/// endpoints, the models are grouped by endpoint, in the order the endpoints first appear, each
+/// with its endpoint's name beside it (the session's own endpoint by its host).
 fn models(d: &Driver) -> Picker {
     let current = d.engine.handle().model();
-    let mut choices: Vec<Choice> = d
-        .model_choices()
+    let provider = d.engine.provider();
+    let endpoint = |m: &str| -> String {
+        match provider.endpoint_for(m) {
+            Some((name, _)) if name == crate::endpoints::DEFAULT_NAME => {
+                kodact_api::serving(&provider, m).base_url().map(|u| host_of(&u)).unwrap_or_else(|| name.clone())
+            }
+            Some((name, _)) => name,
+            None => String::new(),
+        }
+    };
+    let mut groups: Vec<(String, Vec<String>)> = vec![];
+    for m in d.model_choices() {
+        let e = endpoint(&m);
+        match groups.iter_mut().find(|(g, _)| *g == e) {
+            Some((_, ms)) => ms.push(m),
+            None => groups.push((e, vec![m])),
+        }
+    }
+    let mut choices: Vec<Choice> = groups
         .into_iter()
-        .map(|m| Choice { current: m == current, ..choice(m.clone(), "", Pick::Run(format!("/model {m}"))) })
+        .flat_map(|(e, ms)| ms.into_iter().map(move |m| (e.clone(), m)))
+        .map(|(e, m)| Choice { current: m == current, ..choice(m.clone(), e, Pick::Run(format!("/model {m}"))) })
         .collect();
     choices.push(choice("Another model…", "type its id", Pick::Edit("/model ".into())));
     Picker { title: "Select a model".into(), choices }
+}
+
+/// `https://llm-proxy.example.com/v1` → `llm-proxy.example.com`.
+fn host_of(url: &str) -> String {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    rest.split('/').next().unwrap_or(rest).to_string()
 }
 
 fn resume(d: &Driver) -> Option<Picker> {
