@@ -1483,7 +1483,10 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                 stopped_by = Some(signal);
                 break;
             }
-            _ = tick.tick(), if app.busy || hint || render::sidebar_moving(&app) => app.dirty = true,
+            _ = tick.tick(), if app.busy || hint || render::sidebar_moving(&app) || app.manager_live() => {
+                app.refresh_manager();
+                app.dirty = true;
+            }
             _ = tokio::time::sleep(frame_wait), if app.dirty && !frame_wait.is_zero() => {}
         }
     }

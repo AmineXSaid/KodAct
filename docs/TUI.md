@@ -679,8 +679,16 @@ The screens:
   (asks, then runs `/tasks stop <id>`; the turn goes on), and for one that
   kept its worktree branch, "Show its changes" (`!git diff --stat
   HEAD...<branch>`) and "Merge it into the current branch" (asks, then
-  `!git merge --no-edit <branch>`). The UI answers it at once, mid-turn too,
-  and writes nothing into the conversation; reopen it to refresh.
+  `!git merge --no-edit <branch>`). Background agents (`/subtask`) are listed
+  with the others, marked `background`, with their steps as they take them
+  (`system/subtask_step`) and their report once handed back; stopping one runs
+  `/tasks stop <id>`. The UI answers it at once, mid-turn too, and writes
+  nothing into the conversation. While it is open it follows the agents: each
+  event rebuilds it in place (the highlighted row and scroll stay), and it
+  ticks while one runs so the times move.
+- **Answer panels** (an action command's longer answer) don't hold the
+  keyboard: a character typed closes the panel and goes to the input; `q` and
+  Space keep their meaning there.
 - **`/agents`:** "+ Create an agent…" (a form: name, description,
   instructions, tools as a multi-select of the session's tools, model,
   scope, which runs `/agents create ...`), then each agent with its source,

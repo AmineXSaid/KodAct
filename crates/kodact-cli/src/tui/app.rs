@@ -301,6 +301,8 @@ pub struct App {
     ran_on: std::collections::HashMap<String, RanOn>,
     /// Every sub-agent of the session, in the order started, for `/manager`.
     pub agent_log: Vec<AgentRecord>,
+    /// The open screen is an action command's answer, to read: typing goes on in the input.
+    answer_panel: bool,
     /// Tool calls still running, in call order: their header waits in the live
     /// region with a turning dot, and goes to scrollback with its result.
     pub running: Vec<Running>,
@@ -455,6 +457,7 @@ impl App {
             calls: Default::default(),
             ran_on: Default::default(),
             agent_log: Vec::new(),
+            answer_panel: false,
             running: vec![],
             theme,
             editor: Editor::with_history(history),
@@ -892,6 +895,12 @@ impl App {
     // ---- session events ----
 
     pub fn on_event(&mut self, ev: UiEvent) {
+        self.on_event_inner(ev);
+        // An open /manager follows what changed.
+        self.refresh_manager();
+    }
+
+    fn on_event_inner(&mut self, ev: UiEvent) {
         self.dirty = true;
         // A running turn prints again: note the mode it now runs under, once Shift+Tab rests.
         if self.mode_note.is_some_and(|(_, at, _)| at.elapsed() >= super::render::HINT_FOR) {
@@ -1320,6 +1329,16 @@ impl App {
             EngineEvent::Notice { level, text } => self.notice(level, &text),
             EngineEvent::System { subtype, data } => match subtype.as_str() {
                 "compact_boundary" => self.notice(NoticeLevel::Info, "Conversation compacted."),
+                // Background agents (`/subtask`), for /manager.
+                "subtask" => self.on_subtask(&data),
+                "subtask_step" => {
+                    let id = data.get("id").and_then(Value::as_str).unwrap_or("");
+                    if let Some(rec) = self.agent_log.iter_mut().find(|a| a.id == id) {
+                        let tool = data.get("tool").and_then(Value::as_str).unwrap_or("a tool");
+                        let arg = data.get("arg").and_then(Value::as_str).unwrap_or("");
+                        rec.trail.push(if arg.is_empty() { tool.to_string() } else { format!("{tool} {arg}") });
+                    }
+                }
                 "model_fallback" => self.notice(
                     NoticeLevel::Warning,
                     &format!(
@@ -1709,6 +1728,16 @@ impl App {
 
     fn dialog_key(&mut self, key: KeyEvent) -> Vec<Action> {
         if matches!(self.dialog.as_ref().map(|d| &d.kind), Some(DialogKind::Viewer { .. })) {
+            // An answer is there to read, not to hold the keyboard: a character typed closes it and
+            // goes to the input (`q` and Space keep their meaning there: close, next page).
+            let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+            if let (true, true, KeyCode::Char(c)) = (self.answer_panel, plain, key.code) {
+                if c != 'q' && c != ' ' {
+                    self.dialog = None;
+                    self.answer_panel = false;
+                    return self.on_key(key);
+                }
+            }
             return self.viewer_key(key);
         }
         if matches!(self.dialog.as_ref().map(|d| &d.kind), Some(DialogKind::Form { .. })) {
@@ -2045,6 +2074,7 @@ impl App {
 
     /// Show a screen (`/diff`, `/context`, `/hooks`, `/agents`).
     pub fn open_screen(&mut self, screen: Screen) {
+        self.answer_panel = false;
         self.flush_live();
         let kind = DialogKind::Viewer { screen, cursor: 0, top: 0, back: vec![] };
         self.show(Dialog { prompt: None, reply: None, kind, selected: 0, scroll: 0, typing: None });
@@ -2854,6 +2884,7 @@ impl App {
             return;
         }
         self.open_screen(action_panel(&title, text, is_error));
+        self.answer_panel = true;
     }
 
     /// Show a transient status hint for `HINT_FOR` seconds.
@@ -2940,8 +2971,10 @@ pub enum AgentState {
 /// One sub-agent of the session, as the UI saw it: its call, its steps and its result.
 #[derive(Debug, Clone)]
 pub struct AgentRecord {
-    /// Its Task call's id (what `/tasks stop` takes).
+    /// Its Task call's id, or its subtask id (what `/tasks stop` takes).
     pub id: String,
+    /// Started by `/subtask`: in the background, from the whole conversation.
+    pub background: bool,
     pub description: String,
     pub agent_type: String,
     /// The model its call asked for, and the one (and endpoint) its result says it ran on.
@@ -2966,6 +2999,7 @@ impl AgentRecord {
         let s = |k: &str| input.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
         AgentRecord {
             id: id.to_string(),
+            background: false,
             description: s("description").unwrap_or("(no description)").to_string(),
             agent_type: s("subagent_type").unwrap_or("general-purpose").to_string(),
             asked_model: s("model").map(str::to_string),
@@ -3014,6 +3048,65 @@ impl AgentRecord {
     }
 }
 
+impl App {
+    /// A background agent (`/subtask`) started or finished: kept with the others for /manager.
+    fn on_subtask(&mut self, data: &Value) {
+        let id = data.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+        if id.is_empty() {
+            return;
+        }
+        let status = data.get("status").and_then(Value::as_str).unwrap_or("");
+        if status == "started" {
+            let task = data.get("task").and_then(Value::as_str).unwrap_or("(no task)");
+            let mut rec = AgentRecord::started(&id, &json!({"description": task.lines().next().unwrap_or(task)}));
+            rec.background = true;
+            rec.agent_type = "subtask".into();
+            self.agent_log.push(rec);
+            return;
+        }
+        let Some(rec) = self.agent_log.iter_mut().find(|a| a.id == id) else { return };
+        rec.report = data.get("result").and_then(Value::as_str).unwrap_or("").to_string();
+        rec.duration_ms = data.get("duration_ms").and_then(Value::as_u64);
+        rec.tool_calls = data.get("num_tool_calls").and_then(Value::as_u64);
+        rec.state = match status {
+            "completed" => AgentState::Done,
+            "stopped" | "interrupted" => AgentState::Stopped,
+            _ => AgentState::Failed,
+        };
+    }
+
+    /// `/manager` is the open screen: rebuilt from the agents as they are now, keeping its
+    /// place (highlighted row, scroll, the way back from a jump).
+    pub fn refresh_manager(&mut self) {
+        let open = matches!(
+            self.dialog.as_ref().map(|d| &d.kind),
+            Some(DialogKind::Viewer { screen, .. }) if screen.title.starts_with(MANAGER_TITLE)
+        );
+        if !open {
+            return;
+        }
+        let fresh = self.manager_screen();
+        if let Some(Dialog { kind: DialogKind::Viewer { screen, cursor, top, .. }, .. }) = self.dialog.as_mut() {
+            let last = fresh.rows.len().saturating_sub(1);
+            *cursor = (*cursor).min(last);
+            *top = (*top).min(last);
+            *screen = fresh;
+            self.dirty = true;
+        }
+    }
+
+    /// /manager is open while an agent runs: the UI keeps ticking, so its times move.
+    pub fn manager_live(&self) -> bool {
+        matches!(
+            self.dialog.as_ref().map(|d| &d.kind),
+            Some(DialogKind::Viewer { screen, .. }) if screen.title.starts_with(MANAGER_TITLE)
+        ) && self.agent_log.iter().any(|a| a.state == AgentState::Running)
+    }
+}
+
+/// How the manager's title starts, which tells its screen from the others.
+const MANAGER_TITLE: &str = "Agents · ";
+
 /// The report lines shown in `/manager`, at most.
 const MANAGER_REPORT_LINES: usize = 12;
 
@@ -3028,7 +3121,7 @@ impl App {
             action,
         };
         let running = self.agent_log.iter().filter(|a| a.state == AgentState::Running).count();
-        let title = format!("Agents · {running} running · {} done", self.agent_log.len() - running);
+        let title = format!("{MANAGER_TITLE}{running} running · {} done", self.agent_log.len() - running);
         if self.agent_log.is_empty() {
             let rows = vec![
                 Row::text("No agents in this session yet.", Tone::Plain),
@@ -3078,7 +3171,14 @@ impl App {
                 .push(row(vec![(format!("{mark} {}", a.description), Tone::Bold), (format!("  {word}"), tone)], None));
             sections.push(row(
                 vec![
-                    (format!("  {} agent · ", a.agent_type), Tone::Dim),
+                    (
+                        if a.background {
+                            format!("  background subtask {} · ", a.id)
+                        } else {
+                            format!("  {} agent · ", a.agent_type)
+                        },
+                        Tone::Dim,
+                    ),
                     (format!("◆ {}", model(a)), Tone::Accent),
                     (format!(" · {} · {} tool calls", time(a), steps(a)), Tone::Dim),
                 ],
@@ -3147,6 +3247,7 @@ impl App {
                 row(
                     vec![
                         (format!("{mark} {word:<8} "), tone),
+                        (if a.background { "background · ".to_string() } else { String::new() }, Tone::Dim),
                         (a.description.clone(), Tone::Bold),
                         (format!("  ◆ {}", model(a)), Tone::Accent),
                         (format!("  {} · {} steps", time(a), steps(a)), Tone::Dim),
@@ -3156,7 +3257,7 @@ impl App {
             })
             .collect();
         rows.push(Row::blank());
-        rows.push(Row::text("Enter: its details · reopen /manager to refresh", Tone::Dim));
+        rows.push(Row::text("Enter: its details · it follows the agents as they work", Tone::Dim));
         rows.extend(sections);
         Screen { title, rows }
     }
@@ -3701,6 +3802,76 @@ mod tests {
         assert!(a.submit("/manager".into()).is_empty());
         assert!(a.take_pending().is_empty());
         assert!(a.viewer().is_some_and(|(s, _, _)| s.title.starts_with("Agents")));
+    }
+
+    /// Background agents (`/subtask`) are in /manager with the others, and an open manager
+    /// follows them as they work: new steps, the end, without reopening, keeping its place.
+    #[test]
+    fn the_manager_shows_background_agents_and_follows_them() {
+        use kodact_core::commands::screens::RowAction;
+        let mut a = app();
+        let sys = |a: &mut App, subtype: &str, data: Value| {
+            a.on_event(UiEvent::Engine(EngineEvent::System { subtype: subtype.into(), data }))
+        };
+        let rows = |a: &App| -> Vec<String> {
+            let (s, _, _) = a.viewer().expect("the manager is open");
+            s.rows.iter().map(|r| r.spans.iter().map(|s| s.text.as_str()).collect()).collect()
+        };
+        sys(
+            &mut a,
+            "subtask",
+            json!({"id": "sub-1", "status": "started", "task": "Audit the dependencies\nin detail"}),
+        );
+        assert!(a.submit("/manager".into()).is_empty());
+        let r = rows(&a);
+        assert!(
+            r[0].contains("running") && r[0].contains("background · ") && r[0].contains("Audit the dependencies"),
+            "{r:#?}"
+        );
+        let (s, _, _) = a.viewer().unwrap();
+        assert!(s
+            .rows
+            .iter()
+            .any(|r| matches!(&r.action, Some(RowAction::Confirm { command, .. }) if command == "/tasks stop sub-1")));
+
+        // A step while open: the open screen has it, at the same place.
+        a.on_key(key(KeyCode::Enter));
+        let at = a.viewer().unwrap().1;
+        sys(&mut a, "subtask_step", json!({"id": "sub-1", "tool": "Read", "arg": "Cargo.toml"}));
+        assert!(rows(&a).iter().any(|l| l.contains("Read Cargo.toml")), "{:#?}", rows(&a));
+        assert_eq!(a.viewer().unwrap().1, at, "the highlighted row stays");
+
+        // Its end, as the driver hands it back.
+        sys(
+            &mut a,
+            "subtask",
+            json!({"id": "sub-1", "status": "completed", "task": "Audit the dependencies", "result": "2 crates are outdated.",
+                   "num_tool_calls": 5, "duration_ms": 31000}),
+        );
+        let r = rows(&a);
+        assert!(a.viewer().unwrap().0.title.contains("0 running · 1 done"), "{r:#?}");
+        assert!(r.iter().any(|l| l.contains("2 crates are outdated.")), "{r:#?}");
+        assert!(r[0].contains("31s · 5 steps"), "{r:#?}");
+        assert!(!a.manager_live(), "nothing running: no ticking for it");
+    }
+
+    /// An answer panel doesn't hold the keyboard: a typed character closes it and goes to the
+    /// input. A screen to act on (/manager) keeps its keys.
+    #[test]
+    fn typing_goes_past_an_answer_panel() {
+        let mut a = app();
+        a.submit("/subtask audit".into());
+        let long = "Started subtask_1 in the background: audit. Its report comes back to this conversation when it's done; /tasks stop subtask_1 ends it.";
+        a.on_event(UiEvent::Action { text: long.into(), is_error: false });
+        assert!(a.viewer().is_some(), "a panel");
+        typed(&mut a, "/man");
+        assert!(a.viewer().is_none(), "closed by typing");
+        assert_eq!(a.editor.text(), "/man", "and the keys went to the input");
+
+        a.editor.clear();
+        a.submit("/manager".into());
+        typed(&mut a, "x");
+        assert!(a.viewer().is_some(), "the manager keeps its keys");
     }
 
     #[test]

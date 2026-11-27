@@ -142,8 +142,23 @@ impl EventSink for SubtaskSink {
     fn emit(&self, event: EngineEvent) {
         match event {
             EngineEvent::Assistant { message, .. } => {
-                let n = message.content.iter().filter(|b| matches!(b, ContentBlock::ToolUse { .. })).count();
-                self.calls.fetch_add(n, Ordering::Relaxed);
+                // Each step it starts, in a few words, so a manager view can follow it
+                // (`system/subtask_step`: its id, the tool, the tool's main argument).
+                for b in &message.content {
+                    if let ContentBlock::ToolUse { name, input, .. } = b {
+                        self.calls.fetch_add(1, Ordering::Relaxed);
+                        let arg = input
+                            .as_object()
+                            .and_then(|o| o.values().find_map(serde_json::Value::as_str))
+                            .and_then(|s| s.lines().next())
+                            .map(|s| s.chars().take(80).collect::<String>())
+                            .unwrap_or_default();
+                        self.parent.emit(EngineEvent::System {
+                            subtype: "subtask_step".into(),
+                            data: serde_json::json!({"id": self.id, "tool": name, "arg": arg}),
+                        });
+                    }
+                }
             }
             EngineEvent::Notice { level, text } => {
                 self.parent.emit(EngineEvent::Notice { level, text: format!("[{}] {text}", self.id) })
@@ -429,5 +444,46 @@ async fn run(child: &mut Engine, prompt: String, stop: &CancellationToken) -> Tu
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {}
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kodact_engine::VecSink;
+
+    /// Each tool call a subtask starts reaches the session as `system/subtask_step` (its id, the
+    /// tool, the main argument), and is counted; its other messages stay in its transcript.
+    #[test]
+    fn a_subtasks_steps_reach_the_session() {
+        let parent = Arc::new(VecSink::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sink = SubtaskSink::new("sub-3", parent.clone(), calls.clone());
+        let mut message: kodact_types::ApiMessage = serde_json::from_value(serde_json::json!({
+            "id": "m", "type": "message", "role": "assistant", "model": "m", "content": [],
+            "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 0, "output_tokens": 0}
+        }))
+        .unwrap();
+        message.content = vec![
+            ContentBlock::text("Looking."),
+            ContentBlock::ToolUse {
+                id: "c1".into(),
+                name: "Grep".into(),
+                input: serde_json::json!({"pattern": "fn main\nmore"}),
+                cache_control: None,
+                provider: None,
+            },
+        ];
+        sink.emit(EngineEvent::Assistant { message, uuid: "u".into(), parent_tool_use_id: None });
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        let events = parent.0.lock().unwrap();
+        assert_eq!(events.len(), 1, "only the step: {events:?}");
+        match &events[0] {
+            EngineEvent::System { subtype, data } => {
+                assert_eq!(subtype, "subtask_step");
+                assert_eq!(data, &serde_json::json!({"id": "sub-3", "tool": "Grep", "arg": "fn main"}));
+            }
+            e => panic!("{e:?}"),
+        }
     }
 }
