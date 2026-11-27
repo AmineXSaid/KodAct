@@ -86,44 +86,49 @@ impl PermissionPrompter for LinePrompter {
 impl LinePrompter {
     /// AskUserQuestion: number the options; an answer is option numbers or free text.
     async fn questions(&self, p: &PermissionPrompt) -> PermissionAnswer {
+        let Ok(parsed) = kodact_tools::builtin::parse_questions(&p.input) else {
+            return PermissionAnswer::Deny { message: "No questions were provided.".into(), interrupt: false };
+        };
         let mut input = p.input.clone();
+        if !input.is_object() {
+            input = serde_json::json!({});
+        }
         let mut answers = serde_json::Map::new();
-        for q in input["questions"].as_array().cloned().unwrap_or_default() {
-            let question = q["question"].as_str().unwrap_or("").to_string();
-            let options: Vec<String> = q["options"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|o| o["label"].as_str().map(str::to_string))
-                .collect();
-            eprintln!("\n{}", crate::term::bold(&question));
-            for (i, o) in q["options"].as_array().into_iter().flatten().enumerate() {
-                eprintln!(
-                    "  {}. {} {}",
-                    i + 1,
-                    o["label"].as_str().unwrap_or(""),
-                    crate::term::dim(o["description"].as_str().unwrap_or(""))
-                );
+        for q in parsed {
+            let options: Vec<String> = q.options.iter().map(|(l, _)| l.clone()).collect();
+            eprintln!("\n{}", crate::term::bold(&q.question));
+            for (i, (label, desc)) in q.options.iter().enumerate() {
+                if desc.is_empty() {
+                    eprintln!("  {}. {label}", i + 1);
+                } else {
+                    eprintln!("  {}. {label} {}", i + 1, crate::term::dim(desc));
+                }
             }
-            let multi = q["multiSelect"].as_bool().unwrap_or(false);
-            eprint!(
-                "  {} ",
-                if multi { "Numbers (e.g. 1,3) or your own answer:" } else { "Number or your own answer:" }
-            );
+            let prompt_line = if options.is_empty() {
+                "Your answer:"
+            } else if q.multi {
+                "Numbers (e.g. 1,3) or your own answer:"
+            } else {
+                "Number or your own answer:"
+            };
+            eprint!("  {prompt_line} ");
             let _ = std::io::stderr().flush();
             let line = self.lines.lock().await.recv().await.unwrap_or_default();
-            let picked: Option<Vec<String>> = line
-                .split(',')
-                .map(|t| t.trim().parse::<usize>().ok().and_then(|n| options.get(n.wrapping_sub(1)).cloned()))
-                .collect();
+            let picked: Option<Vec<String>> = (!options.is_empty())
+                .then(|| {
+                    line.split(',')
+                        .map(|t| t.trim().parse::<usize>().ok().and_then(|n| options.get(n.wrapping_sub(1)).cloned()))
+                        .collect()
+                })
+                .flatten();
             let answer = match picked {
-                Some(p) if !p.is_empty() && (multi || p.len() == 1) => p.join(", "),
+                Some(p) if !p.is_empty() && (q.multi || p.len() == 1) => p.join(", "),
                 _ => line.trim().to_string(),
             };
             if answer.is_empty() {
                 return PermissionAnswer::Deny { message: "The user did not answer.".into(), interrupt: false };
             }
-            answers.insert(question, serde_json::json!(answer));
+            answers.insert(q.question, serde_json::json!(answer));
         }
         input["answers"] = serde_json::Value::Object(answers);
         PermissionAnswer::Allow { updated_input: Some(input), updated_permissions: vec![] }

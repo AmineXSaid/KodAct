@@ -3319,6 +3319,23 @@ async fn c8_headless_questions_and_plans_are_answered_by_contract() {
     let mut e = h.engine();
     e.submit(prompt("go")).await;
     assert!(!tool_results(&e)[0].2);
+
+    // BypassPermissions still asks the person on AskUserQuestion (and ignores any answers
+    // hallucinated by the model itself), while headless BypassPermissions declines via DenyPrompter.
+    let mut prefilled = question();
+    prefilled["answers"] = json!({"Which database?": "Hallucinated"});
+    let h = Harness::new(vec![MockTurn::tool("AskUserQuestion", prefilled.clone()), MockTurn::text("ok")]);
+    let mut e =
+        h.engine_with(EngineConfig::default(), PermissionMode::BypassPermissions, Arc::new(Answering), json!({}));
+    e.submit(prompt("go")).await;
+    let res = tool_results(&e);
+    assert!(!res[0].2 && res[0].1.contains("\"Which database?\" = \"Postgres\""), "{res:?}");
+
+    let h = Harness::new(vec![MockTurn::tool("AskUserQuestion", prefilled), MockTurn::text("assumed")]);
+    let mut e = h.engine();
+    e.submit(prompt("go")).await;
+    let res = tool_results(&e);
+    assert!(res[0].2 && res[0].1.contains("no interactive user"), "{res:?}");
 }
 
 #[tokio::test]

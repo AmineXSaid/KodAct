@@ -323,6 +323,24 @@ pub fn result_lines(
             }
             out
         }
+        ("AskUserQuestion", Some(v)) if v["answers"].is_object() => {
+            let answers = v["answers"].as_object().unwrap();
+            if answers.len() == 1 {
+                let (_, ans) = answers.iter().next().unwrap();
+                let s = ans.as_str().map(str::to_string).unwrap_or_else(|| ans.to_string());
+                return one(s.chars().take(200).collect(), t.dim());
+            }
+            answers
+                .iter()
+                .enumerate()
+                .map(|(i, (q, ans))| {
+                    let lead = if i == 0 { mark() } else { Span::raw(RESULT_INDENT) };
+                    let a = ans.as_str().map(str::to_string).unwrap_or_else(|| ans.to_string());
+                    let line: String = format!("{q} → {a}").chars().take(200).collect();
+                    Line::from(vec![lead, Span::styled(line, t.dim())])
+                })
+                .collect()
+        }
         _ => {
             let more = text.lines().count().saturating_sub(1);
             let more = if more > 0 { format!(" (+{more} lines)") } else { String::new() };
@@ -392,6 +410,9 @@ pub fn tool_verb(name: &str, done: bool) -> &'static str {
         "WebSearch" => ("Searched the web", "Searching the web"),
         "Task" => ("Delegated", "Delegating"),
         "TodoWrite" => ("Updated the plan", "Updating the plan"),
+        "AskUserQuestion" => ("Asked", "Asking"),
+        "EnterPlanMode" => ("Entered plan mode", "Entering plan mode"),
+        "ExitPlanMode" => ("Presented the plan", "Presenting the plan"),
         "Skill" => ("Used skill", "Using skill"),
         _ => ("Called", "Calling"),
     };
@@ -603,6 +624,15 @@ pub fn summarize(tool: &str, input: &Value) -> String {
             let done = a.iter().filter(|t| t["status"] == "completed").count();
             format!("{done} of {} done", a.len())
         }),
+        "AskUserQuestion" => kodact_tools::builtin::parse_questions(input).ok().and_then(|qs| {
+            let first = qs.first()?;
+            Some(if qs.len() == 1 {
+                first.question.clone()
+            } else {
+                format!("{} (+{} more)", first.question, qs.len() - 1)
+            })
+        }),
+        "EnterPlanMode" | "ExitPlanMode" => Some(String::new()),
         _ => input.as_object().and_then(|o| o.values().find_map(Value::as_str).map(str::to_string)),
     });
     let v = v.unwrap_or_default();

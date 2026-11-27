@@ -585,7 +585,7 @@ keys in effect, the file and the unbound keys.
 | Permission | 1. Yes | `Allow` |
 | | 2. Yes, and don't ask again for `<rule>`, or "Yes, and allow all edits this session (shift+tab)" for an edit (only when the prompt has suggestions) | `Allow` with the suggestions as `updated_permissions` |
 | | 3. No, and tell KodAct what to do instead (Esc) | `Deny { interrupt: true }` |
-| AskUserQuestion | The options, then "Type an answer"; multi-select toggles with Space | `Allow` with `input.answers = {question: answer}` (the shape `LinePrompter` uses) |
+| AskUserQuestion | The options, then "Type an answer" (or free text directly when there are no options); multi-select toggles with Space or digit keys; Esc cancels | `Allow` with `input.answers = {question: answer}`, or `Deny { interrupt: true }` on Esc |
 | Plan approval (the plan goes to scrollback first) | 1. Yes, and accept edits without asking | `Allow` plus `setMode acceptEdits` (session) |
 | | 2. Yes, and ask before each edit | `Allow` |
 | | 3. No, keep planning (Esc) | `Deny { interrupt: true }` |

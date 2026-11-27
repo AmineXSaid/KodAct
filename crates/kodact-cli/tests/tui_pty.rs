@@ -173,3 +173,56 @@ async fn a_welcome_card_sends_its_prompt() {
     tui.wait_for("Here is the map", WAIT).unwrap_or_else(|s| panic!("no answer:\n{s}"));
     assert!(prompt_sent(&api).contains("Explain this project"), "{}", prompt_sent(&api));
 }
+
+/// AskUserQuestion in a real terminal: multi-select, typed free-form answer, Esc cancel,
+/// and `--dangerously-skip-permissions` (which approves plans without skipping user questions).
+#[tokio::test(flavor = "multi_thread")]
+async fn ask_user_question_works_in_the_terminal_including_bypass_mode() {
+    use serde_json::json;
+
+    // 1. Two questions (5-option multi-select + typed answer), even under --dangerously-skip-permissions.
+    let d = dirs();
+    let q = json!({
+        "questions": [
+            {
+                "question": "Which stack components?",
+                "multi_select": true,
+                "options": ["Postgres", "Redis", "SQLite", "ClickHouse", "Kafka"]
+            },
+            {
+                "question": "Service name?",
+                "options": ["api"]
+            }
+        ]
+    });
+    let api = MockApi::start(vec![MockTurn::tool("AskUserQuestion", q), MockTurn::text("Configured the stack.")]).await;
+    let mut tui = Pty::spawn(&kodact_bin(), &d.cwd, &d.home, &api.url, &["--dangerously-skip-permissions"], 100, 30);
+    tui.wait_for("What shall we build?", WAIT).unwrap_or_else(|s| panic!("no front page:\n{s}"));
+    tui.keys("set up the service\r");
+    tui.wait_for("Which stack components? (1/2)", WAIT).unwrap_or_else(|s| panic!("question 1 never opened:\n{s}"));
+    // Toggle options 1 (Postgres) and 5 (Kafka), then confirm with Enter.
+    tui.keys("15\r");
+    tui.wait_for("Service name? (2/2)", WAIT).unwrap_or_else(|s| panic!("question 2 never opened:\n{s}"));
+    // Choose "2. Type an answer", type "billing-svc", and press Enter.
+    tui.keys("2");
+    tui.wait_for("Enter to submit", WAIT).unwrap_or_else(|s| panic!("typing mode never opened:\n{s}"));
+    tui.keys("billing-svc\r");
+    let screen = tui.wait_for("Configured the stack.", WAIT).unwrap_or_else(|s| panic!("turn never finished:\n{s}"));
+    assert!(screen.contains("Asked Which stack components?"), "built-in header shown:\n{screen}");
+    let second_req = api.requests()[1].to_string();
+    assert!(second_req.contains("Postgres, Kafka") && second_req.contains("billing-svc"), "{second_req}");
+
+    // 2. Esc cancels an open AskUserQuestion dialog and returns control to the prompt box.
+    let d = dirs();
+    let api = MockApi::start(vec![MockTurn::tool(
+        "AskUserQuestion",
+        json!({"question": "Which region?", "options": ["eu-west-1", "us-east-1"]}),
+    )])
+    .await;
+    let mut tui = Pty::spawn(&kodact_bin(), &d.cwd, &d.home, &api.url, &[], 100, 30);
+    tui.wait_for("What shall we build?", WAIT).unwrap_or_else(|s| panic!("no front page:\n{s}"));
+    tui.keys("deploy it\r");
+    tui.wait_for("Which region?", WAIT).unwrap_or_else(|s| panic!("dialog never opened:\n{s}"));
+    tui.keys("\x1b");
+    tui.wait_for("Interrupted", WAIT).unwrap_or_else(|s| panic!("Esc did not cancel question:\n{s}"));
+}

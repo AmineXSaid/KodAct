@@ -24,7 +24,7 @@ pub use bash::{
 pub use edit::{apply_edit, apply_edit_near, apply_line_edit, Edit, MultiEdit};
 pub use glob::Glob;
 pub use grep::Grep;
-pub use interact::{AskUserQuestion, EnterPlanMode, ExitPlanMode};
+pub use interact::{parse_questions, AskUserQuestion, EnterPlanMode, ExitPlanMode, ParsedQuestion};
 pub use ls::Ls;
 pub use memory::{drop_checkpoint, notes_path, Checkpoint, Checkpoints, Notes, NotesStore};
 pub use near::{NearKind, NearMatch};
