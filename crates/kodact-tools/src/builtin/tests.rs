@@ -614,6 +614,9 @@ async fn glob_and_grep() {
     assert!(content.contains("b.rs:2:// todo two") && content.contains("b.rs-3-x"), "{content}");
     let typed = Grep.call(json!({"pattern": "TODO", "type": "md"}), &c).await.text_content();
     assert!(typed.contains("notes.md") && !typed.contains("a.rs"), "{typed}");
+    // The output mode given as `type` (a chat's search failed on "Unknown file type content").
+    let mode_as_type = Grep.call(json!({"pattern": "todo two", "type": "content"}), &c).await.text_content();
+    assert!(mode_as_type.contains("b.rs:2:// todo two"), "{mode_as_type}");
     let ml = Grep.call(json!({"pattern": "struct B;.*two", "multiline": true}), &c).await.text_content();
     assert!(ml.contains("b.rs"), "{ml}");
 }
