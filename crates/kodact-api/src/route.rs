@@ -317,6 +317,48 @@ mod tests {
         assert!(Arc::ptr_eq(&p.serving("c").unwrap(), &p.routes()[2].provider));
     }
 
+    /// An endpoint whose model list never comes, beside working ones.
+    struct Hangs;
+
+    #[async_trait::async_trait]
+    impl Provider for Hangs {
+        fn name(&self) -> &str {
+            "openai"
+        }
+        async fn stream(&self, _: MessagesRequest, _: CancellationToken) -> Result<EventStream, ApiError> {
+            Err(ApiError::Cancelled)
+        }
+        async fn list_models(&self) -> Option<Result<Vec<String>, ApiError>> {
+            std::future::pending().await
+        }
+    }
+
+    /// Fifty endpoints, one of which never answers: every model reaches its own endpoint, the
+    /// lists are asked for in parallel and once, and the hanging one costs one [`LIST_WAIT`] at
+    /// most, not one per endpoint or per request.
+    #[tokio::test(start_paused = true)]
+    async fn fifty_endpoints_and_one_that_hangs() {
+        let mocks: Vec<Arc<MockProvider>> = (0..50).map(|i| mock(Some(&[format!("model-{i}").as_str()]))).collect();
+        let mut routes: Vec<Route> =
+            mocks.iter().enumerate().map(|(i, m)| Route::new(format!("ep{i}"), m.clone(), vec![])).collect();
+        routes.insert(7, Route::new("dead", Arc::new(Hangs), vec![]));
+        let p = RoutedProvider::new(routes, 0);
+        let start = tokio::time::Instant::now();
+        for i in [49, 0, 25, 3, 49] {
+            send(&p, &format!("model-{i}")).await;
+        }
+        assert!(start.elapsed() <= LIST_WAIT + Duration::from_millis(50), "{:?}", start.elapsed());
+        assert_eq!(sent(&mocks[49]), ["model-49", "model-49"]);
+        assert_eq!(sent(&mocks[0]), ["model-0"]);
+        assert_eq!(sent(&mocks[25]), ["model-25"]);
+        assert_eq!(sent(&mocks[3]), ["model-3"]);
+        // By name too, and every endpoint's models in the list.
+        send(&p, "ep12/anything").await;
+        assert_eq!(sent(&mocks[12]), ["anything"]);
+        let all = p.list_models().await.unwrap().unwrap();
+        assert_eq!(all.len(), 50, "{all:?}");
+    }
+
     /// The lists are asked for once: later requests for unplaced models don't ask again.
     #[tokio::test]
     async fn the_lists_are_asked_for_once() {

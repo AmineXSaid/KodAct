@@ -604,14 +604,21 @@ pub fn existing_endpoint(settings: &Value, get: &dyn Fn(&str) -> Option<String>)
     {
         "your provider".to_string()
     } else {
-        return None;
+        // Only named endpoints: how many.
+        let n = settings.get("endpoints").and_then(Value::as_object).map_or(0, |e| e.len());
+        return (n > 0).then(|| format!("{n} endpoint{}", if n == 1 { "" } else { "s" }));
+    };
+    // However many were added beside it, counted.
+    let more = match settings.get("endpoints").and_then(Value::as_object).map_or(0, |e| e.len()) {
+        0 => String::new(),
+        n => format!(" (and {n} more endpoint{})", if n == 1 { "" } else { "s" }),
     };
     let model = get("KODACT_MODEL")
         .filter(|m| !m.trim().is_empty())
         .or_else(|| settings.get("model").and_then(Value::as_str).map(str::to_string));
     Some(match model {
-        Some(m) => format!("{place} · {m}"),
-        None => place,
+        Some(m) => format!("{place} · {m}{more}"),
+        None => format!("{place}{more}"),
     })
 }
 
@@ -1674,6 +1681,12 @@ mod tests {
             "the shell wins, as it does"
         );
         assert!(!d.contains("sk-"));
+        // Any number of endpoints added beside it are counted.
+        let mut many = file.clone();
+        many["endpoints"] = Value::Object((0..50).map(|i| (format!("ep{i}"), json!({"type": "openai"}))).collect());
+        assert_eq!(existing_endpoint(&many, &none).unwrap(), "gpt.example.net · deep-thinking (and 50 more endpoints)");
+        let only = json!({"endpoints": {"a": {}, "b": {}}});
+        assert_eq!(existing_endpoint(&only, &none).unwrap(), "2 endpoints");
     }
 
     /// The variables that beat the settings are named after a setup, never their values.
