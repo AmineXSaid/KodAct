@@ -1326,29 +1326,25 @@ impl App {
     fn open_dialog(&mut self, prompt: PermissionPrompt, reply: oneshot::Sender<PermissionAnswer>) {
         self.danger_armed = false;
         self.flush_live();
+        let mut typing = None;
         let kind = match prompt.tool_name.as_str() {
             "AskUserQuestion" => {
-                let questions: Vec<Question> = prompt.input["questions"]
-                    .as_array()
+                let questions: Vec<Question> = kodact_tools::builtin::parse_questions(&prompt.input)
+                    .unwrap_or_default()
                     .into_iter()
-                    .flatten()
-                    .map(|q| Question {
-                        question: q["question"].as_str().unwrap_or("").to_string(),
-                        options: q["options"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .map(|o| {
-                                (
-                                    o["label"].as_str().unwrap_or("").to_string(),
-                                    o["description"].as_str().unwrap_or("").to_string(),
-                                )
-                            })
-                            .collect(),
-                        multi: q["multiSelect"].as_bool().unwrap_or(false),
-                    })
+                    .map(|q| Question { question: q.question, options: q.options, multi: q.multi })
                     .collect();
-                let picked = vec![false; questions.first().map(|q| q.options.len()).unwrap_or(0)];
+                let Some(first) = questions.first() else {
+                    let _ = reply.send(PermissionAnswer::Deny {
+                        message: "No questions were provided.".into(),
+                        interrupt: false,
+                    });
+                    return;
+                };
+                if first.options.is_empty() {
+                    typing = Some(Editor::default());
+                }
+                let picked = vec![false; first.options.len()];
                 DialogKind::Questions { questions, at: 0, answers: serde_json::Map::new(), picked }
             }
             "ExitPlanMode" => {
@@ -1375,8 +1371,7 @@ impl App {
             DialogKind::Permission { always, danger: Some(_) } => 1 + usize::from(always.is_some()),
             _ => 0,
         };
-        self.dialog =
-            Some(Dialog { prompt: Some(prompt), reply: Some(reply), kind, selected, scroll: 0, typing: None });
+        self.dialog = Some(Dialog { prompt: Some(prompt), reply: Some(reply), kind, selected, scroll: 0, typing });
         self.asked_at = Some(Instant::now());
     }
 
@@ -1425,14 +1420,18 @@ impl App {
                 ("No, keep planning".into(), "esc".into()),
             ],
             DialogKind::Questions { questions, at, picked, .. } => {
-                let q = &questions[*at];
+                let Some(q) = questions.get(*at) else { return vec![] };
+                if q.options.is_empty() {
+                    return vec![];
+                }
                 let mut v: Vec<(String, String)> = q
                     .options
                     .iter()
                     .enumerate()
                     .map(|(i, (l, desc))| {
+                        let checked = picked.get(i).copied().unwrap_or(false);
                         let label =
-                            if q.multi { format!("[{}] {l}", if picked[i] { "x" } else { " " }) } else { l.clone() };
+                            if q.multi { format!("[{}] {l}", if checked { "x" } else { " " }) } else { l.clone() };
                         (label, desc.clone())
                     })
                     .collect();
@@ -1497,6 +1496,7 @@ impl App {
             ("Bash" | "PowerShell", _) => "Preparing a command".into(),
             ("Task" | "Agent", _) => "Briefing an agent".into(),
             ("TodoWrite", _) => "Updating the plan".into(),
+            ("AskUserQuestion", _) => "Preparing a question".into(),
             _ => "Preparing the next step".into(),
         }
     }
@@ -1541,10 +1541,29 @@ impl App {
         }
     }
 
+    /// Custom footer hint for question dialogs (typing mode, multi-select).
+    pub fn dialog_question_hint(&self) -> Option<&'static str> {
+        let d = self.dialog.as_ref()?;
+        let DialogKind::Questions { questions, at, .. } = &d.kind else { return None };
+        let q = questions.get(*at)?;
+        if d.typing.is_some() {
+            Some(if q.options.is_empty() {
+                "Enter to submit · Esc to cancel"
+            } else {
+                "Enter to submit · Esc to go back"
+            })
+        } else if q.multi {
+            Some("Space to toggle · Enter to confirm · Esc to cancel")
+        } else {
+            Some("Enter to select · Esc to cancel")
+        }
+    }
+
     /// The tool call the open question is about.
     pub fn asking_for(&self) -> Option<&str> {
         let d = self.dialog.as_ref()?;
-        matches!(d.kind, DialogKind::Permission { .. }).then(|| d.prompt.as_ref().map(|p| p.tool_use_id.as_str()))?
+        matches!(d.kind, DialogKind::Permission { .. } | DialogKind::Plan | DialogKind::Questions { .. })
+            .then(|| d.prompt.as_ref().map(|p| p.tool_use_id.as_str()))?
     }
 
     pub fn waiting_for_answer(&self) -> bool {
@@ -1622,12 +1641,12 @@ impl App {
             DialogKind::Viewer { screen, .. } => (screen.title.clone(), vec![]),
             DialogKind::Form { form, .. } => (form.title.clone(), vec![]),
             DialogKind::Questions { questions, at, .. } => {
-                let q = &questions[*at];
+                let Some(q) = questions.get(*at) else { return (String::new(), vec![]) };
                 let n = questions.len();
                 let title = if n > 1 { format!("{} ({}/{n})", q.question, at + 1) } else { q.question.clone() };
                 let mut body = vec![];
                 if let Some(e) = &d.typing {
-                    body.push(format!("> {}", e.text()));
+                    body.push(format!("❯ {}", e.text_with_cursor()));
                 }
                 (title, body)
             }
@@ -1666,6 +1685,13 @@ impl App {
         true
     }
 
+    fn cancel_question_dialog(&mut self) {
+        self.answer(PermissionAnswer::Deny {
+            message: "The user cancelled the question. Wait for their instructions on what to do instead.".into(),
+            interrupt: true,
+        });
+    }
+
     fn dialog_key(&mut self, key: KeyEvent) -> Vec<Action> {
         if matches!(self.dialog.as_ref().map(|d| &d.kind), Some(DialogKind::Viewer { .. })) {
             return self.viewer_key(key);
@@ -1701,20 +1727,128 @@ impl App {
             return vec![];
         }
         // Typing a free-form answer.
-        if let Some(e) = d.typing.as_mut() {
+        if d.typing.is_some() {
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let alt = key.modifiers.contains(KeyModifiers::ALT);
+            let no_options = match &d.kind {
+                DialogKind::Questions { questions, at, .. } => questions.get(*at).is_none_or(|q| q.options.is_empty()),
+                _ => false,
+            };
             match key.code {
                 KeyCode::Enter => {
-                    let text = e.text();
-                    d.typing = None;
-                    if !text.trim().is_empty() {
-                        self.answer_question(text);
+                    let text = d.typing.as_ref().map(Editor::text).unwrap_or_default();
+                    let trimmed = text.trim().to_string();
+                    if !trimmed.is_empty() {
+                        d.typing = None;
+                        self.answer_question(trimmed);
+                    } else {
+                        self.set_hint("Type an answer first, or press Esc");
                     }
                 }
-                KeyCode::Esc => d.typing = None,
-                KeyCode::Backspace => e.backspace(),
-                KeyCode::Left => e.left(),
-                KeyCode::Right => e.right(),
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => e.insert(&c.to_string()),
+                KeyCode::Esc => {
+                    if no_options {
+                        self.cancel_question_dialog();
+                    } else {
+                        d.typing = None;
+                    }
+                }
+                KeyCode::Backspace if alt || ctrl => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.delete_word();
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.backspace();
+                    }
+                }
+                KeyCode::Delete => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.delete();
+                    }
+                }
+                KeyCode::Left if ctrl => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.word_left();
+                    }
+                }
+                KeyCode::Right if ctrl => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.word_right();
+                    }
+                }
+                KeyCode::Left => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.left();
+                    }
+                }
+                KeyCode::Right => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.right();
+                    }
+                }
+                KeyCode::Home => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.home();
+                    }
+                }
+                KeyCode::End => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.end();
+                    }
+                }
+                KeyCode::Char('a') if ctrl => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.home();
+                    }
+                }
+                KeyCode::Char('e') if ctrl => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.end();
+                    }
+                }
+                KeyCode::Char('w') if ctrl => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.delete_word();
+                    }
+                }
+                KeyCode::Char('u') if ctrl => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.kill_to_start();
+                    }
+                }
+                KeyCode::Char('k') if ctrl => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.kill_to_end();
+                    }
+                }
+                KeyCode::Char('z') if ctrl => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.undo();
+                    }
+                }
+                KeyCode::Char('y') if ctrl => {
+                    if let Some(e) = d.typing.as_mut() {
+                        if !e.redo() {
+                            e.yank();
+                        }
+                    }
+                }
+                KeyCode::Char('b') if alt => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.word_left();
+                    }
+                }
+                KeyCode::Char('f') if alt => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.word_right();
+                    }
+                }
+                KeyCode::Char(c) if !ctrl && c != '\n' && c != '\r' => {
+                    if let Some(e) = d.typing.as_mut() {
+                        e.insert(&c.to_string());
+                    }
+                }
                 _ => {}
             }
             return vec![];
@@ -1752,16 +1886,23 @@ impl App {
             KeyCode::PageDown => d.selected = (d.selected + DIALOG_PAGE).min(n.saturating_sub(1)),
             KeyCode::Home => d.selected = 0,
             KeyCode::End => d.selected = n.saturating_sub(1),
-            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' && !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let i = c as usize - '1' as usize;
                 if i < n {
+                    if let DialogKind::Questions { questions, at, picked, .. } = &mut d.kind {
+                        if questions.get(*at).is_some_and(|q| q.multi) && i < picked.len() {
+                            d.selected = i;
+                            picked[i] = !picked[i];
+                            return vec![];
+                        }
+                    }
                     d.selected = i;
                     return self.choose(i);
                 }
             }
             KeyCode::Char(' ') => {
                 if let DialogKind::Questions { questions, at, picked, .. } = &mut d.kind {
-                    if questions[*at].multi && d.selected < picked.len() {
+                    if questions.get(*at).is_some_and(|q| q.multi) && d.selected < picked.len() {
                         picked[d.selected] = !picked[d.selected];
                     }
                 }
@@ -1770,7 +1911,13 @@ impl App {
                 let i = d.selected;
                 return self.choose(i);
             }
-            KeyCode::Esc => return self.choose(n.saturating_sub(1)),
+            KeyCode::Esc => {
+                if matches!(d.kind, DialogKind::Questions { .. }) {
+                    self.cancel_question_dialog();
+                    return vec![];
+                }
+                return self.choose(n.saturating_sub(1));
+            }
             _ => {}
         }
         vec![]
@@ -1822,14 +1969,13 @@ impl App {
                 self.answer(a);
             }
             DialogKind::Questions { questions, at, picked, .. } => {
-                if i + 1 == n {
-                    // "Type an answer"; Esc on it declines.
-                    if d.selected + 1 == n && d.typing.is_none() {
+                let Some(q) = questions.get(*at) else { return vec![] };
+                if i >= q.options.len() || i + 1 == n {
+                    if d.typing.is_none() {
                         d.typing = Some(Editor::default());
                     }
                     return vec![];
                 }
-                let q = &questions[*at];
                 let answer = if q.multi {
                     let mut chosen: Vec<String> =
                         q.options.iter().zip(picked.iter()).filter(|(_, p)| **p).map(|(o, _)| o.0.clone()).collect();
@@ -1849,14 +1995,20 @@ impl App {
     fn answer_question(&mut self, answer: String) {
         let Some(d) = self.dialog.as_mut() else { return };
         let DialogKind::Questions { questions, at, answers, picked } = &mut d.kind else { return };
-        answers.insert(questions[*at].question.clone(), json!(answer));
+        let Some(cur) = questions.get(*at) else { return };
+        answers.insert(cur.question.clone(), json!(answer));
         if *at + 1 < questions.len() {
             *at += 1;
-            *picked = vec![false; questions[*at].options.len()];
+            let next_opts = questions[*at].options.len();
+            *picked = vec![false; next_opts];
             d.selected = 0;
+            d.typing = (next_opts == 0).then(Editor::default);
             return;
         }
-        let mut input = d.prompt.as_ref().map(|p| p.input.clone()).unwrap_or_default();
+        let mut input = d.prompt.as_ref().map(|p| p.input.clone()).unwrap_or_else(|| json!({}));
+        if !input.is_object() {
+            input = json!({});
+        }
         input["answers"] = Value::Object(std::mem::take(answers));
         self.answer(PermissionAnswer::Allow { updated_input: Some(input), updated_permissions: vec![] });
     }
@@ -3966,6 +4118,93 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn ask_user_question_dialog_handles_esc_typing_multiselect_and_shapes() {
+        let mut a = app();
+
+        // Esc cancels from an option row and from "Type an answer" (instead of trapping or opening typing).
+        for down in [false, true] {
+            let (tx, mut rx) = oneshot::channel();
+            let q = json!({"questions": [{"question": "Which db?", "options": ["sqlite", "postgres"]}]});
+            a.on_event(UiEvent::Ask { prompt: prompt("AskUserQuestion", q), reply: tx });
+            assert_eq!(
+                a.dialog_options(),
+                vec![
+                    ("sqlite".into(), String::new()),
+                    ("postgres".into(), String::new()),
+                    ("Type an answer".into(), String::new()),
+                ]
+            );
+            if down {
+                a.on_key(key(KeyCode::End));
+            }
+            a.on_key(key(KeyCode::Esc));
+            assert!(matches!(rx.try_recv().unwrap(), PermissionAnswer::Deny { interrupt: true, .. }));
+            assert!(a.dialog.is_none());
+        }
+
+        // Inside "Type an answer", Esc returns to options, cursor/word edits work, and Enter submits.
+        let (tx, mut rx) = oneshot::channel();
+        let q = json!({"question": "Which cache?", "options": ["redis", "memcached"]});
+        a.on_event(UiEvent::Ask { prompt: prompt("AskUserQuestion", q.clone()), reply: tx });
+        a.on_key(key(KeyCode::Char('3')));
+        assert_eq!(a.dialog_text().1, ["❯ ▏"]);
+        a.on_key(key(KeyCode::Esc));
+        assert!(a.dialog_text().1.is_empty(), "Esc leaves typing back to options");
+        a.on_key(key(KeyCode::Enter));
+        typed(&mut a, "dragonfly old");
+        a.on_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+        a.on_key(key(KeyCode::Enter));
+        match rx.try_recv().unwrap() {
+            PermissionAnswer::Allow { updated_input: Some(v), .. } => {
+                assert_eq!(v["answers"], json!({"Which cache?": "dragonfly"}));
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // Multi-select: digit keys toggle options without premature submit; Enter confirms all picked.
+        let (tx, mut rx) = oneshot::channel();
+        let q6 = json!({"questions": [{
+            "question": "Allow which?",
+            "multiSelect": true,
+            "options": ["one", "two", "three", "four", "five"]
+        }]});
+        a.on_event(UiEvent::Ask { prompt: prompt("AskUserQuestion", q6), reply: tx });
+        a.on_key(key(KeyCode::Char('1')));
+        a.on_key(key(KeyCode::Char('5')));
+        assert!(rx.try_recv().is_err(), "multi-select digits toggle rather than submitting early");
+        a.on_key(key(KeyCode::Enter));
+        match rx.try_recv().unwrap() {
+            PermissionAnswer::Allow { updated_input: Some(v), .. } => {
+                assert_eq!(v["answers"], json!({"Allow which?": "one, five"}));
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // Open-ended question (0 options): starts directly in typing mode; Esc cancels.
+        let (tx, mut rx) = oneshot::channel();
+        a.on_event(UiEvent::Ask {
+            prompt: prompt("AskUserQuestion", json!({"questions": [{"question": "Service name?"}]})),
+            reply: tx,
+        });
+        assert!(a.dialog_options().is_empty());
+        assert_eq!(a.dialog_text().1, ["❯ ▏"]);
+        a.on_key(key(KeyCode::Esc));
+        assert!(matches!(rx.try_recv().unwrap(), PermissionAnswer::Deny { interrupt: true, .. }));
+
+        // Transcript header and result lines read as a built-in question, not an outside tool.
+        let header = texts(&[Line::from(tool_header(&a.theme, "AskUserQuestion", &q, true))]);
+        assert_eq!(header, ["Asked Which cache?"]);
+        let res = texts(&result_lines(
+            &a.theme,
+            "AskUserQuestion",
+            "The user answered",
+            false,
+            Some(&json!({"answers": {"Which cache?": "dragonfly"}})),
+        ));
+        assert_eq!(res, ["  └ dragonfly"]);
     }
 
     fn picker() -> Picker {

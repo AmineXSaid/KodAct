@@ -235,7 +235,7 @@ pub(super) fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
     // The keys the rows show, and no others.
     let keys: Vec<&str> = options.iter().map(|(_, k)| k.as_str()).filter(|k| k.len() == 1).collect();
     let hint = if !permission {
-        "Enter to select · Esc to cancel".to_string()
+        app.dialog_question_hint().unwrap_or("Enter to select · Esc to cancel").to_string()
     } else if app.dialog_danger().is_some() {
         let always = if keys.contains(&"a") { " · a always" } else { "" };
         format!("y to allow{always} · Enter, n or Esc to deny")
@@ -278,8 +278,10 @@ pub(super) fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
     let whole = |head: &[Line<'static>], shown: Vec<Line<'static>>, foot: Option<String>| {
         let mut all = head.to_vec();
         all.extend(danger_rows.iter().cloned());
-        all.push(Line::default());
-        all.extend(shown);
+        if !shown.is_empty() || !options.is_empty() {
+            all.push(Line::default());
+            all.extend(shown);
+        }
         all.push(Line::default());
         all.push(Line::from(Span::styled(foot.unwrap_or_else(|| hint.clone()), t.dim())));
         framed(app, title.clone(), all, w)

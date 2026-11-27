@@ -103,14 +103,19 @@ fn blocked_path(subject: &Subject) -> Option<String> {
     }
 }
 
+fn has_answers(input: &Value) -> bool {
+    input.get("answers").and_then(Value::as_object).is_some_and(|a| !a.is_empty())
+}
+
 fn decide_for(perm: &kodact_permissions::Engine, req: &Request<'_>, needs_user: bool) -> Decision {
     let decision = perm.decide(req);
     // Questions for the person always reach them (contract C8): only deny rules and
-    // bypassPermissions (which approves plans) skip the prompt.
+    // dontAsk skip the prompt, while bypassPermissions approves plans (never AskUserQuestion,
+    // which has no answer unless the prompter asks).
     if needs_user {
         match decision {
             d @ Decision::Deny { reason: kodact_permissions::Reason::Rule { .. } } => d,
-            _ if perm.mode == PermissionMode::BypassPermissions => {
+            _ if perm.mode == PermissionMode::BypassPermissions && req.tool != "AskUserQuestion" => {
                 Decision::Allow { reason: kodact_permissions::Reason::Mode(perm.mode) }
             }
             _ if perm.mode == PermissionMode::DontAsk => {
@@ -172,6 +177,13 @@ async fn run_one(
     if let Err(e) = tool.validate(&input, &ctx) {
         return CallResult::plain(id, ToolOutput::error(format!("<tool_use_error>{e}</tool_use_error>")));
     }
+    // Answers to AskUserQuestion come only from the person (or a PreToolUse hook's updatedInput),
+    // never from the model's own tool call.
+    if name == "AskUserQuestion" {
+        if let Some(obj) = input.as_object_mut() {
+            obj.remove("answers");
+        }
+    }
 
     // 1. Rules and mode.
     let perm = shared.permissions.read().unwrap().clone();
@@ -215,6 +227,12 @@ async fn run_one(
                 writes_after: 0,
             };
         }
+        if let Some(u) = o.updated_input {
+            input = u;
+            if let Err(e) = tool.validate(&input, &ctx) {
+                return CallResult::plain(id, ToolOutput::error(format!("<tool_use_error>{e}</tool_use_error>")));
+            }
+        }
         if let Some((d, reason)) = o.permission {
             let reason = kodact_permissions::Reason::Rule {
                 behavior: kodact_permissions::Behavior::Ask,
@@ -225,22 +243,16 @@ async fn run_one(
                     hook_overrode = true;
                     Decision::Deny { reason }
                 }
-                "allow" => {
+                "allow" if name != "AskUserQuestion" || has_answers(&input) => {
                     hook_overrode = true;
                     Decision::Allow { reason }
                 }
-                "ask" => {
+                "allow" | "ask" => {
                     hook_overrode = true;
                     Decision::Ask { reason, suggestions: perm.suggest(&req) }
                 }
                 _ => decision,
             };
-        }
-        if let Some(u) = o.updated_input {
-            input = u;
-            if let Err(e) = tool.validate(&input, &ctx) {
-                return CallResult::plain(id, ToolOutput::error(format!("<tool_use_error>{e}</tool_use_error>")));
-            }
         }
     }
 

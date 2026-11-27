@@ -97,6 +97,14 @@ impl Editor {
         self.text.iter().collect()
     }
 
+    /// The text with `▏` marking the cursor position.
+    pub fn text_with_cursor(&self) -> String {
+        let at = self.cursor.min(self.text.len());
+        let before: String = self.text[..at].iter().collect();
+        let after: String = self.text[at..].iter().collect();
+        format!("{before}▏{after}")
+    }
+
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
