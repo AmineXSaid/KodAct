@@ -1084,6 +1084,15 @@ impl App {
             // Sub-agents' own messages stay in their transcripts; their steps show on the
             // row of the call that runs them, so delegated work is never a silent wait.
             EngineEvent::Assistant { message, parent_tool_use_id: Some(parent), .. } => {
+                // Its task list, for its progress bar in /manager.
+                if let Some(rec) = self.agent_log.iter_mut().find(|a| a.id == parent) {
+                    if let Some(t) = message.content.iter().rev().find_map(|b| match b {
+                        ContentBlock::ToolUse { name, input, .. } if name == "TodoWrite" => todo_counts(input),
+                        _ => None,
+                    }) {
+                        rec.todos = Some(t);
+                    }
+                }
                 if let Some(r) = self.running.iter_mut().find(|r| r.id == parent) {
                     for b in &message.content {
                         if let ContentBlock::ToolUse { name, input, .. } = b {
@@ -1337,6 +1346,11 @@ impl App {
                         let tool = data.get("tool").and_then(Value::as_str).unwrap_or("a tool");
                         let arg = data.get("arg").and_then(Value::as_str).unwrap_or("");
                         rec.trail.push(if arg.is_empty() { tool.to_string() } else { format!("{tool} {arg}") });
+                        if let Some([done, total]) =
+                            data.get("todos").and_then(|t| serde_json::from_value::<[usize; 2]>(t.clone()).ok())
+                        {
+                            rec.todos = Some((done, total));
+                        }
                     }
                 }
                 "model_fallback" => self.notice(
@@ -2988,6 +3002,8 @@ pub struct AgentRecord {
     pub trail: Vec<String>,
     /// Its report (or why it failed), as returned.
     pub report: String,
+    /// Its task list (TodoWrite), as done of total: a measured progress bar.
+    pub todos: Option<(usize, usize)>,
     /// Its own git worktree when it had one: the branch, the folder, and whether it was kept.
     pub branch: Option<String>,
     pub worktree: Option<String>,
@@ -3011,6 +3027,7 @@ impl AgentRecord {
             tool_calls: None,
             trail: vec![],
             report: String::new(),
+            todos: None,
             branch: None,
             worktree: None,
             kept: false,
@@ -3101,6 +3118,50 @@ impl App {
             self.dialog.as_ref().map(|d| &d.kind),
             Some(DialogKind::Viewer { screen, .. }) if screen.title.starts_with(MANAGER_TITLE)
         ) && self.agent_log.iter().any(|a| a.state == AgentState::Running)
+    }
+}
+
+/// Cells in a /manager progress bar.
+const BAR_CELLS: usize = 12;
+/// How long the moving bar of an agent without a task list takes per cell.
+const BAR_STEP_MS: u128 = 120;
+
+/// A TodoWrite call's list as (done, total); `None` for an empty or malformed one.
+fn todo_counts(input: &Value) -> Option<(usize, usize)> {
+    let list = input.get("todos")?.as_array()?;
+    (!list.is_empty()).then(|| (list.iter().filter(|t| t["status"] == "completed").count(), list.len()))
+}
+
+/// An agent's progress bar, its tone, and what it counts. With a task list, a measured bar
+/// (`▕██████░░░░░░▏ 3/6 `); without one, while it runs, a block sweeping across, so the bar
+/// moves only while it works (it measures nothing it can't know); once done, full; failed or
+/// stopped, as far as its list got.
+fn progress_bar(a: &AgentRecord) -> (String, kodact_core::commands::screens::Tone, String) {
+    use kodact_core::commands::screens::Tone;
+    let fill = |n: usize| format!("▕{}{}▏", "█".repeat(n), "░".repeat(BAR_CELLS - n));
+    let tone = match a.state {
+        AgentState::Running => Tone::Accent,
+        AgentState::Done => Tone::Added,
+        AgentState::Failed => Tone::Removed,
+        AgentState::Stopped => Tone::Dim,
+    };
+    match (a.todos, a.state) {
+        (_, AgentState::Done) => {
+            (fill(BAR_CELLS), tone, a.todos.map(|(_, t)| format!(" {t}/{t} ")).unwrap_or_else(|| " ".into()))
+        }
+        (Some((done, total)), _) => {
+            let n = (done * BAR_CELLS).checked_div(total).unwrap_or(0).min(BAR_CELLS);
+            (fill(n), tone, format!(" {done}/{total} "))
+        }
+        (None, AgentState::Running) => {
+            // A three-cell block sweeping back and forth.
+            let period = 2 * (BAR_CELLS - 3);
+            let i = (a.started.elapsed().as_millis() / BAR_STEP_MS) as usize % period;
+            let at = if i <= BAR_CELLS - 3 { i } else { period - i };
+            let cells: String = (0..BAR_CELLS).map(|c| if (at..at + 3).contains(&c) { '█' } else { '░' }).collect();
+            (format!("▕{cells}▏"), tone, " ".into())
+        }
+        (None, _) => (fill(0), tone, " ".into()),
     }
 }
 
@@ -3244,9 +3305,12 @@ impl App {
             .map(|(a, at)| {
                 let (mark, word) = a.state_word();
                 let tone = if a.state == AgentState::Running { Tone::Accent } else { Tone::Plain };
+                let (bar, bar_tone, count) = progress_bar(a);
                 row(
                     vec![
                         (format!("{mark} {word:<8} "), tone),
+                        (bar, bar_tone),
+                        (count, Tone::Dim),
                         (if a.background { "background · ".to_string() } else { String::new() }, Tone::Dim),
                         (a.description.clone(), Tone::Bold),
                         (format!("  ◆ {}", model(a)), Tone::Accent),
@@ -3872,6 +3936,102 @@ mod tests {
         a.submit("/manager".into());
         typed(&mut a, "x");
         assert!(a.viewer().is_some(), "the manager keeps its keys");
+    }
+
+    /// The manager's progress bars: measured from an agent's task list (a sub-agent's TodoWrite,
+    /// a background agent's steps), moving while one without a list works, full when done.
+    #[test]
+    fn the_manager_shows_progress_bars() {
+        use kodact_core::commands::screens::Tone;
+        let mut a = app();
+        let todo = |done: usize, total: usize| {
+            let items: Vec<Value> = (0..total)
+                .map(|i| json!({"content": format!("t{i}"), "status": if i < done { "completed" } else { "pending" }, "activeForm": "x"}))
+                .collect();
+            json!({"todos": items})
+        };
+        // A Task agent, then a TodoWrite inside it (a child message).
+        a.on_event(UiEvent::Engine(EngineEvent::Assistant {
+            message: kodact_types::ApiMessage {
+                id: "m1".into(),
+                kind: "message".into(),
+                role: kodact_types::Role::Assistant,
+                model: "m".into(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "Task".into(),
+                    input: json!({"description": "Port the API", "prompt": "p"}),
+                    cache_control: None,
+                    provider: None,
+                }],
+                stop_reason: None,
+                stop_sequence: None,
+                usage: Default::default(),
+            },
+            uuid: "u1".into(),
+            parent_tool_use_id: None,
+        }));
+        a.on_event(UiEvent::Engine(EngineEvent::Assistant {
+            message: kodact_types::ApiMessage {
+                id: "m2".into(),
+                kind: "message".into(),
+                role: kodact_types::Role::Assistant,
+                model: "m".into(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "c1".into(),
+                    name: "TodoWrite".into(),
+                    input: todo(3, 6),
+                    cache_control: None,
+                    provider: None,
+                }],
+                stop_reason: None,
+                stop_sequence: None,
+                usage: Default::default(),
+            },
+            uuid: "u2".into(),
+            parent_tool_use_id: Some("t1".into()),
+        }));
+        let rec = a.agent_log.iter().find(|r| r.id == "t1").unwrap().clone();
+        assert_eq!(rec.todos, Some((3, 6)));
+        let (bar, tone, count) = progress_bar(&rec);
+        assert_eq!((bar.as_str(), tone, count.as_str()), ("▕██████░░░░░░▏", Tone::Accent, " 3/6 "));
+
+        // A background agent's list comes with its steps.
+        a.on_event(UiEvent::Engine(EngineEvent::System {
+            subtype: "subtask".into(),
+            data: json!({"id": "s1", "status": "started", "task": "Audit"}),
+        }));
+        a.on_event(UiEvent::Engine(EngineEvent::System {
+            subtype: "subtask_step".into(),
+            data: json!({"id": "s1", "tool": "TodoWrite", "arg": "", "todos": [1, 4]}),
+        }));
+        assert_eq!(a.agent_log.iter().find(|r| r.id == "s1").unwrap().todos, Some((1, 4)));
+
+        // Without a list, the bar moves while it runs, and only then.
+        let mut busy = rec.clone();
+        busy.todos = None;
+        let at = |ms: u64| {
+            let mut r = busy.clone();
+            r.started = Instant::now() - std::time::Duration::from_millis(ms);
+            progress_bar(&r).0
+        };
+        assert_ne!(at(0), at(BAR_STEP_MS as u64 * 2), "it moves");
+        assert_eq!(at(0).matches('█').count(), 3);
+        let mut done = busy.clone();
+        done.state = AgentState::Done;
+        assert_eq!(progress_bar(&done).0, format!("▕{}▏", "█".repeat(BAR_CELLS)));
+        let mut failed = rec.clone();
+        failed.state = AgentState::Failed;
+        assert_eq!(
+            progress_bar(&failed),
+            ("▕██████░░░░░░▏".to_string(), Tone::Removed, " 3/6 ".to_string()),
+            "as far as it got"
+        );
+
+        // In the list row.
+        let screen = a.manager_screen();
+        let first: String = screen.rows[0].spans.iter().map(|s| s.text.as_str()).collect();
+        assert!(first.contains("▕██████░░░░░░▏ 3/6 ") && first.contains("Port the API"), "{first}");
     }
 
     #[test]

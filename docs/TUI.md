@@ -686,6 +686,12 @@ The screens:
   nothing into the conversation. While it is open it follows the agents: each
   event rebuilds it in place (the highlighted row and scroll stay), and it
   ticks while one runs so the times move.
+  Each row has a progress bar: measured (`▕██████░░░░░░▏ 3/6`) when the agent
+  keeps a task list (its TodoWrite calls, a background agent's
+  `subtask_step` `todos`), and otherwise, while it runs, a block sweeping
+  across, so the bar moves only while it works and claims no progress it
+  can't know. Done: full and green; failed or stopped: red or dim, as far as
+  its list got.
 - **Answer panels** (an action command's longer answer) don't hold the
   keyboard: a character typed closes the panel and goes to the input; `q` and
   Space keep their meaning there.

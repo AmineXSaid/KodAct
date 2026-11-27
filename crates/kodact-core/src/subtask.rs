@@ -153,10 +153,13 @@ impl EventSink for SubtaskSink {
                             .and_then(|s| s.lines().next())
                             .map(|s| s.chars().take(80).collect::<String>())
                             .unwrap_or_default();
-                        self.parent.emit(EngineEvent::System {
-                            subtype: "subtask_step".into(),
-                            data: serde_json::json!({"id": self.id, "tool": name, "arg": arg}),
-                        });
+                        let mut data = serde_json::json!({"id": self.id, "tool": name, "arg": arg});
+                        // Its task list, as done of total, for a progress bar.
+                        if let Some(list) = input.get("todos").and_then(serde_json::Value::as_array) {
+                            let done = list.iter().filter(|t| t["status"] == "completed").count();
+                            data["todos"] = serde_json::json!([done, list.len()]);
+                        }
+                        self.parent.emit(EngineEvent::System { subtype: "subtask_step".into(), data });
                     }
                 }
             }
