@@ -129,6 +129,9 @@ async fn cycling_modes_leaves_one_note_in_the_transcript() {
 async fn setup_walks_to_a_saved_settings_file() {
     let d = dirs();
     let mut tui = Pty::spawn(&kodact_bin(), &d.cwd, &d.home, "http://127.0.0.1:9", &["setup"], 100, 30);
+    // The test's terminal sets an endpoint: setup asks to replace it or add another first.
+    tui.wait_for("Replace it", WAIT).unwrap_or_else(|s| panic!("no question:\n{s}"));
+    tui.keys("1\r");
     tui.wait_for("Choose a provider", WAIT).unwrap_or_else(|s| panic!("no wizard:\n{s}"));
     tui.keys("\r");
     tui.wait_for("KODACT_API_KEY", WAIT).unwrap_or_else(|s| panic!("no key step:\n{s}"));
