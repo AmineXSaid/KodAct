@@ -299,6 +299,8 @@ pub struct App {
     calls: std::collections::HashMap<String, (String, Value)>,
     /// What each finished sub-agent ran on, by its call's id, for its row's badge.
     ran_on: std::collections::HashMap<String, RanOn>,
+    /// Every sub-agent of the session, in the order started, for `/manager`.
+    pub agent_log: Vec<AgentRecord>,
     /// Tool calls still running, in call order: their header waits in the live
     /// region with a turning dot, and goes to scrollback with its result.
     pub running: Vec<Running>,
@@ -452,6 +454,7 @@ impl App {
         App {
             calls: Default::default(),
             ran_on: Default::default(),
+            agent_log: Vec::new(),
             running: vec![],
             theme,
             editor: Editor::with_history(history),
@@ -845,6 +848,12 @@ impl App {
             line.spans.insert(at, Span::styled(format!("  {}", seconds(r.since.elapsed())), t.subtle()));
         }
         self.pending.push(line);
+        if let Some(rec) = self.agent_log.iter_mut().find(|a| a.id == r.id) {
+            rec.trail = r.trail.clone();
+            if end == ToolEnd::Stopped && rec.state == AgentState::Running {
+                rec.state = AgentState::Stopped;
+            }
+        }
         // A sub-agent's work, kept small: its first step, how many more, its last two.
         if !self.look.plain_steps() && is_agent_tool(&r.name) && !r.trail.is_empty() {
             self.pending.extend(agent_tree(&t, &r.trail, false));
@@ -1181,6 +1190,9 @@ impl App {
                         ContentBlock::ToolUse { name, .. } if self.focus => self.activity = format!("Running {name}"),
                         ContentBlock::ToolUse { id, name, input, .. } => {
                             self.calls.insert(id.clone(), (name.clone(), input.clone()));
+                            if is_agent_tool(name) {
+                                self.agent_log.push(AgentRecord::started(id, input));
+                            }
                             let header = self.header(name, input, false);
                             self.running.push(Running {
                                 id: id.clone(),
@@ -1213,6 +1225,9 @@ impl App {
                         let failed = *is_error == Some(true);
                         if matches!(tool.as_str(), "Task" | "Agent") {
                             self.agents_done += 1;
+                            if let Some(rec) = self.agent_log.iter_mut().find(|a| a.id == *tool_use_id) {
+                                rec.finished(&content.to_text(), failed, tool_use_result.as_ref());
+                            }
                             // The model it really ran on, from its result.
                             if let Some(ran) =
                                 tool_use_result.as_ref().and_then(|v| RanOn::from_result(&input, v, &self.status.model))
@@ -2868,6 +2883,12 @@ impl App {
             "/terminal-setup" => Some((terminal_setup_text(super::keyboard_protocol()), false)),
             t if t == "/color" || t.starts_with("/color ") => Some(self.color_command(t["/color".len()..].trim())),
             t if t == "/focus" || t.starts_with("/focus ") => Some(self.focus_command(t["/focus".len()..].trim())),
+            // The agents' manager: a screen of what the UI saw, at once, even mid-turn.
+            "/manager" => {
+                let screen = self.manager_screen();
+                self.open_screen(screen);
+                return vec![];
+            }
             _ => None,
         };
         if let Some((answer, is_error)) = local {
@@ -2904,6 +2925,240 @@ impl App {
             return vec![Action::SendWithImages(sent, imgs)];
         }
         vec![Action::Send(self.start(text))]
+    }
+}
+
+/// Where a sub-agent is, for `/manager`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentState {
+    Running,
+    Done,
+    Failed,
+    Stopped,
+}
+
+/// One sub-agent of the session, as the UI saw it: its call, its steps and its result.
+#[derive(Debug, Clone)]
+pub struct AgentRecord {
+    /// Its Task call's id (what `/tasks stop` takes).
+    pub id: String,
+    pub description: String,
+    pub agent_type: String,
+    /// The model its call asked for, and the one (and endpoint) its result says it ran on.
+    pub asked_model: Option<String>,
+    pub model: Option<String>,
+    pub endpoint: Option<String>,
+    pub state: AgentState,
+    pub started: Instant,
+    pub duration_ms: Option<u64>,
+    pub tool_calls: Option<u64>,
+    pub trail: Vec<String>,
+    /// Its report (or why it failed), as returned.
+    pub report: String,
+    /// Its own git worktree when it had one: the branch, the folder, and whether it was kept.
+    pub branch: Option<String>,
+    pub worktree: Option<String>,
+    pub kept: bool,
+}
+
+impl AgentRecord {
+    fn started(id: &str, input: &Value) -> Self {
+        let s = |k: &str| input.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
+        AgentRecord {
+            id: id.to_string(),
+            description: s("description").unwrap_or("(no description)").to_string(),
+            agent_type: s("subagent_type").unwrap_or("general-purpose").to_string(),
+            asked_model: s("model").map(str::to_string),
+            model: None,
+            endpoint: None,
+            state: AgentState::Running,
+            started: Instant::now(),
+            duration_ms: None,
+            tool_calls: None,
+            trail: vec![],
+            report: String::new(),
+            branch: None,
+            worktree: None,
+            kept: false,
+        }
+    }
+
+    fn finished(&mut self, text: &str, failed: bool, result: Option<&Value>) {
+        self.report = text.to_string();
+        let status = result.and_then(|r| r.get("status")).and_then(Value::as_str);
+        self.state = match (failed, status) {
+            (_, Some("stopped")) => AgentState::Stopped,
+            (true, _) => AgentState::Failed,
+            _ => AgentState::Done,
+        };
+        if let Some(r) = result {
+            self.model = r.get("model").and_then(Value::as_str).map(str::to_string);
+            self.endpoint = r.get("endpoint").and_then(Value::as_str).map(str::to_string);
+            self.duration_ms = r.get("totalDurationMs").and_then(Value::as_u64);
+            self.tool_calls = r.get("totalToolUseCount").and_then(Value::as_u64);
+            if let Some(w) = r.get("worktree") {
+                self.branch = w.get("branch").and_then(Value::as_str).map(str::to_string);
+                self.worktree = w.get("path").and_then(Value::as_str).map(str::to_string);
+                self.kept = w.get("kept").and_then(Value::as_bool).unwrap_or(false);
+            }
+        }
+    }
+
+    fn state_word(&self) -> (&'static str, &'static str) {
+        match self.state {
+            AgentState::Running => ("●", "running"),
+            AgentState::Done => ("✓", "done"),
+            AgentState::Failed => ("✗", "failed"),
+            AgentState::Stopped => ("■", "stopped"),
+        }
+    }
+}
+
+/// The report lines shown in `/manager`, at most.
+const MANAGER_REPORT_LINES: usize = 12;
+
+impl App {
+    /// `/manager`: every sub-agent of the session, running first, each with where it ran, its
+    /// time and steps; Enter on one goes to its details (steps, report, branch), where it can be
+    /// stopped, or its branch looked at and merged. Built from what the UI saw: reopen to refresh.
+    pub fn manager_screen(&self) -> Screen {
+        use kodact_core::commands::screens::{Row, RowAction, Span as S, Tone};
+        let row = |spans: Vec<(String, Tone)>, action: Option<RowAction>| Row {
+            spans: spans.into_iter().map(|(text, tone)| S { text, tone }).collect(),
+            action,
+        };
+        let running = self.agent_log.iter().filter(|a| a.state == AgentState::Running).count();
+        let title = format!("Agents · {running} running · {} done", self.agent_log.len() - running);
+        if self.agent_log.is_empty() {
+            let rows = vec![
+                Row::text("No agents in this session yet.", Tone::Plain),
+                Row::blank(),
+                Row::text("The model starts them with the Task tool (ask it to split work across agents,", Tone::Dim),
+                Row::text(
+                    "on other models too); /subtask starts one in the background (/tasks lists those).",
+                    Tone::Dim,
+                ),
+            ];
+            return Screen { title, rows };
+        }
+        // Running first, then the rest, newest first.
+        let mut order: Vec<&AgentRecord> = self.agent_log.iter().filter(|a| a.state == AgentState::Running).collect();
+        order.extend(self.agent_log.iter().rev().filter(|a| a.state != AgentState::Running));
+        let live = |a: &AgentRecord| self.running.iter().find(|r| r.id == a.id);
+        let time = |a: &AgentRecord| match a.duration_ms {
+            Some(ms) => format!("{}s", ms / 1000),
+            None => format!("{}s", a.started.elapsed().as_secs()),
+        };
+        let steps = |a: &AgentRecord| match (live(a), a.tool_calls) {
+            (Some(r), _) => r.steps,
+            (None, Some(n)) => n as usize,
+            (None, None) => a.trail.len(),
+        };
+        let model = |a: &AgentRecord| -> String {
+            let m = a.model.clone().or_else(|| a.asked_model.clone()).unwrap_or_else(|| self.status.model.clone());
+            match &a.endpoint {
+                Some(e) => format!("{m} · {e}"),
+                None => m,
+            }
+        };
+        // The list, then one section per agent; each list row jumps to its section.
+        let head = order.len() + 2;
+        let mut sections: Vec<Row> = vec![];
+        let mut starts = vec![];
+        for a in &order {
+            starts.push(head + sections.len());
+            let (mark, word) = a.state_word();
+            let tone = match a.state {
+                AgentState::Running => Tone::Accent,
+                AgentState::Done => Tone::Added,
+                AgentState::Failed => Tone::Removed,
+                AgentState::Stopped => Tone::Dim,
+            };
+            sections
+                .push(row(vec![(format!("{mark} {}", a.description), Tone::Bold), (format!("  {word}"), tone)], None));
+            sections.push(row(
+                vec![
+                    (format!("  {} agent · ", a.agent_type), Tone::Dim),
+                    (format!("◆ {}", model(a)), Tone::Accent),
+                    (format!(" · {} · {} tool calls", time(a), steps(a)), Tone::Dim),
+                ],
+                None,
+            ));
+            if let Some(asked) = &a.asked_model {
+                if a.model.as_ref().is_some_and(|m| *m != kodact_api::resolve_model(asked)) {
+                    sections.push(Row::text(format!("  asked for {asked}, which no endpoint serves"), Tone::Removed));
+                }
+            }
+            let trail: Vec<String> = live(a).map(|r| r.trail.clone()).unwrap_or_else(|| a.trail.clone());
+            if !trail.is_empty() {
+                sections.push(Row::text("  Steps", Tone::Dim));
+                let shown = trail.len().min(8);
+                if trail.len() > shown {
+                    sections.push(Row::text(format!("    … {} earlier", trail.len() - shown), Tone::Dim));
+                }
+                for t in &trail[trail.len() - shown..] {
+                    sections.push(Row::text(format!("    {t}"), Tone::Plain));
+                }
+            }
+            if !a.report.trim().is_empty() {
+                let label = if a.state == AgentState::Failed { "  Why it failed" } else { "  Report" };
+                sections.push(Row::text(label, Tone::Dim));
+                let lines: Vec<&str> = a.report.lines().filter(|l| !l.trim().is_empty()).collect();
+                for l in lines.iter().take(MANAGER_REPORT_LINES) {
+                    sections.push(Row::text(format!("    {l}"), Tone::Plain));
+                }
+                if lines.len() > MANAGER_REPORT_LINES {
+                    sections
+                        .push(Row::text(format!("    … {} more lines", lines.len() - MANAGER_REPORT_LINES), Tone::Dim));
+                }
+            }
+            if a.state == AgentState::Running {
+                sections.push(row(
+                    vec![("  › Stop this agent".into(), Tone::Accent)],
+                    Some(RowAction::Confirm {
+                        question: format!("Stop \"{}\"? The turn goes on, told it was stopped.", a.description),
+                        command: format!("/tasks stop {}", a.id),
+                    }),
+                ));
+            }
+            if let (Some(branch), true) = (&a.branch, a.kept) {
+                let at = a.worktree.as_ref().map(|w| format!(" · {w}")).unwrap_or_default();
+                sections.push(Row::text(format!("  Branch {branch}{at}"), Tone::Dim));
+                sections.push(row(
+                    vec![("  › Show its changes".into(), Tone::Accent)],
+                    Some(RowAction::Run(format!("!git diff --stat HEAD...{branch}"))),
+                ));
+                sections.push(row(
+                    vec![("  › Merge it into the current branch".into(), Tone::Accent)],
+                    Some(RowAction::Confirm {
+                        question: format!("Merge {branch} into the current branch?"),
+                        command: format!("!git merge --no-edit {branch}"),
+                    }),
+                ));
+            }
+            sections.push(Row::blank());
+        }
+        let mut rows: Vec<Row> = order
+            .iter()
+            .zip(&starts)
+            .map(|(a, at)| {
+                let (mark, word) = a.state_word();
+                let tone = if a.state == AgentState::Running { Tone::Accent } else { Tone::Plain };
+                row(
+                    vec![
+                        (format!("{mark} {word:<8} "), tone),
+                        (a.description.clone(), Tone::Bold),
+                        (format!("  ◆ {}", model(a)), Tone::Accent),
+                        (format!("  {} · {} steps", time(a), steps(a)), Tone::Dim),
+                    ],
+                    Some(RowAction::Jump(*at)),
+                )
+            })
+            .collect();
+        rows.push(Row::blank());
+        rows.push(Row::text("Enter: its details · reopen /manager to refresh", Tone::Dim));
+        rows.extend(sections);
+        Screen { title, rows }
     }
 }
 
@@ -3328,6 +3583,124 @@ mod tests {
         let width = crossterm::terminal::size().map(|(c, _)| c as usize).unwrap_or(80).saturating_sub(8).max(20);
         assert!(rows.iter().all(|r| r.chars().count() <= width), "{rows:?}");
         assert_eq!(rows.join(" "), long, "nothing lost");
+    }
+
+    /// `/manager` lists every agent of the session, running first, with its model and endpoint,
+    /// and jumps to its details: steps, report, and the actions it allows (stop a running one;
+    /// look at and merge a kept branch, after a yes).
+    #[test]
+    fn the_manager_lists_agents_and_acts_on_them() {
+        use kodact_core::commands::screens::RowAction;
+        let mut a = app();
+        a.status.model = "deep-thinking".into();
+        assert!(a.manager_screen().title.contains("0 running"));
+        let call = |a: &mut App, id: &str, input: Value| {
+            a.on_event(UiEvent::Engine(EngineEvent::Assistant {
+                message: kodact_types::ApiMessage {
+                    id: format!("m-{id}"),
+                    kind: "message".into(),
+                    role: kodact_types::Role::Assistant,
+                    model: "deep-thinking".into(),
+                    content: vec![ContentBlock::ToolUse {
+                        id: id.into(),
+                        name: "Task".into(),
+                        input,
+                        cache_control: None,
+                        provider: None,
+                    }],
+                    stop_reason: None,
+                    stop_sequence: None,
+                    usage: Default::default(),
+                },
+                uuid: format!("u-{id}"),
+                parent_tool_use_id: None,
+            }));
+        };
+        let done = |a: &mut App, id: &str, text: &str, failed: bool, result: Value| {
+            a.on_event(UiEvent::Engine(EngineEvent::User {
+                message: kodact_types::Message::user(vec![ContentBlock::ToolResult {
+                    tool_use_id: id.into(),
+                    content: kodact_types::ToolResultContent::Text(text.into()),
+                    is_error: Some(failed),
+                    cache_control: None,
+                }]),
+                uuid: format!("r-{id}"),
+                tool_use_result: Some(result),
+                is_meta: false,
+                parent_tool_use_id: None,
+            }));
+        };
+        a.submit("split the work".into());
+        call(
+            &mut a,
+            "t1",
+            json!({"description": "Refactor the parser", "prompt": "p", "model": "kgpt-reasoning-text", "isolation": "worktree"}),
+        );
+        call(
+            &mut a,
+            "t2",
+            json!({"description": "Write the tests", "prompt": "p", "subagent_type": "general-purpose"}),
+        );
+        call(&mut a, "t3", json!({"description": "Check the docs", "prompt": "p"}));
+        done(
+            &mut a,
+            "t1",
+            "Parser split into lexer.rs and parse.rs.\nAll 42 tests pass.",
+            false,
+            json!({"status": "completed", "model": "kgpt-reasoning-text", "endpoint": "kpit", "totalDurationMs": 42000,
+                   "totalToolUseCount": 9, "worktree": {"path": "/p/.kodact/worktrees/agent-1", "branch": "kodact/agent-1", "kept": true}}),
+        );
+        done(
+            &mut a,
+            "t3",
+            "FAILED: the docs folder is missing",
+            true,
+            json!({"status": "failed", "model": "deep-thinking"}),
+        );
+
+        let screen = a.manager_screen();
+        assert_eq!(screen.title, "Agents · 1 running · 2 done");
+        let text =
+            |r: &kodact_core::commands::screens::Row| r.spans.iter().map(|s| s.text.as_str()).collect::<String>();
+        let rows: Vec<String> = screen.rows.iter().map(text).collect();
+        // The list: running first, then newest first.
+        assert!(rows[0].contains("running") && rows[0].contains("Write the tests"), "{rows:#?}");
+        assert!(rows[1].contains("failed") && rows[1].contains("Check the docs"), "{rows:#?}");
+        assert!(
+            rows[2].contains("done")
+                && rows[2].contains("Refactor the parser")
+                && rows[2].contains("◆ kgpt-reasoning-text · kpit"),
+            "{rows:#?}"
+        );
+        // Each list row jumps to its own details.
+        for (i, title) in [(0, "Write the tests"), (1, "Check the docs"), (2, "Refactor the parser")] {
+            let Some(RowAction::Jump(at)) = &screen.rows[i].action else { panic!("row {i} jumps: {rows:#?}") };
+            assert!(rows[*at].contains(title), "{} → {}", rows[i], rows[*at]);
+        }
+        assert!(rows.iter().any(|r| r.contains("All 42 tests pass.")), "the report: {rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("Why it failed")), "{rows:#?}");
+        let actions: Vec<&RowAction> = screen.rows.iter().filter_map(|r| r.action.as_ref()).collect();
+        assert!(actions.iter().any(|x| matches!(x, RowAction::Confirm { command, .. } if command == "/tasks stop t2")));
+        assert!(actions
+            .iter()
+            .any(|x| matches!(x, RowAction::Run(c) if c == "!git diff --stat HEAD...kodact/agent-1")));
+        assert!(actions.iter().any(
+            |x| matches!(x, RowAction::Confirm { command, .. } if command == "!git merge --no-edit kodact/agent-1")
+        ));
+        // A finished agent can't be stopped; one without a kept branch has nothing to merge.
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|x| matches!(x, RowAction::Confirm { command, .. } if command.starts_with("/tasks stop")))
+                .count(),
+            1
+        );
+
+        // Typed: it opens at once and writes nothing into the conversation.
+        a.take_pending();
+        assert!(a.submit("/manager".into()).is_empty());
+        assert!(a.take_pending().is_empty());
+        assert!(a.viewer().is_some_and(|(s, _, _)| s.title.starts_with("Agents")));
     }
 
     #[test]

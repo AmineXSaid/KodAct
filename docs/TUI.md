@@ -671,6 +671,16 @@ The screens:
   `/hooks` numbers them, each with its source and timeout. Enter on a user,
   project or local hook asks, then runs `/hooks remove <Event> <n>`. The
   session reloads after a change, so the hook applies at once.
+- **`/manager`:** every sub-agent of the session, as the UI saw it: running
+  first, then newest first, each with its state, description, `◆ model ·
+  endpoint`, time and steps. Enter on one jumps to its details: its type,
+  model and endpoint, tool calls, its steps, the first lines of its report (or
+  why it failed), and its actions: "Stop this agent" for a running one
+  (asks, then runs `/tasks stop <id>`; the turn goes on), and for one that
+  kept its worktree branch, "Show its changes" (`!git diff --stat
+  HEAD...<branch>`) and "Merge it into the current branch" (asks, then
+  `!git merge --no-edit <branch>`). The UI answers it at once, mid-turn too,
+  and writes nothing into the conversation; reopen it to refresh.
 - **`/agents`:** "+ Create an agent…" (a form: name, description,
   instructions, tools as a multi-select of the session's tools, model,
   scope, which runs `/agents create ...`), then each agent with its source,

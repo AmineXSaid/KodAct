@@ -29,7 +29,7 @@ pub async fn execute_immediate(v: &SessionView, text: &str, cancel: &Cancellatio
         return None;
     }
     Some(match spec.id {
-        Builtin::Keybindings | Builtin::TerminalSetup | Builtin::Color | Builtin::Focus => {
+        Builtin::Keybindings | Builtin::TerminalSetup | Builtin::Color | Builtin::Focus | Builtin::Manager => {
             err(format!("/{} works only in the terminal UI.", spec.name))
         }
         id => run(v, id, args.trim(), cancel).await,
@@ -245,6 +245,10 @@ fn tasks(v: &SessionView, args: &str) -> Exec {
         }
         if let Some(msg) = crate::subtask::stop_row(&d.subtasks, &d.finished_subtasks, id) {
             return ok(msg);
+        }
+        // A Task agent of the running turn, by its call's id: it stops, the turn goes on.
+        if d.handle.stop_agent(id) {
+            return ok(format!("Stopped agent {id}: its turn goes on, told the agent was stopped."));
         }
         return match shells.get(id) {
             Some(sh) => match sh.stop() {

@@ -216,6 +216,15 @@ builtins! {
         "Run a prompt on a schedule, or let KodAct pace it; /tasks lists them"
     ),
     (
+        Manager,
+        "manager",
+        [],
+        "",
+        "See the session's agents: model, steps, report; stop one or merge its branch",
+        Surfaces::TUI,
+        true
+    ),
+    (
         Mcp,
         "mcp",
         [],
