@@ -142,8 +142,10 @@ fn apply_model(d: &mut Driver, id: &str) -> Result<Vec<String>, String> {
     let rt = h.runtime();
     let mut notes = vec![];
     let info = model_info_or_default(id);
-    if known.is_none() {
-        notes.push(format!("KodAct doesn't know {id}: its context window, limits and pricing are guesses."));
+    // Unknown only when nothing gave its window: not the table, not "modelLimits" or
+    // KODACT_CONTEXT_WINDOW, not the endpoint's model list. Then say what it assumes.
+    if kodact_api::models::limits_source(id) == kodact_api::models::LimitsSource::Guessed {
+        notes.push(crate::unknown_model_notice(id, d.engine.cfg.pricing.contains_key(id)));
     }
     if let Some(e) = &rt.effort {
         if !info.effort_levels.contains(&e.as_str()) {
@@ -167,6 +169,10 @@ pub(super) async fn model(d: &mut Driver, args: &str) -> Exec {
         return err(format!("A model id is one word, without spaces: \"{args}\" isn't one. /model lists the models."));
     }
     let id = kodact_api::resolve_model(args);
+    // As a session does at start: give the endpoint a moment to list the model's window.
+    if kodact_api::models::window_unknown(&id) {
+        let _ = tokio::time::timeout(crate::LISTED_WINDOW_WAIT, d.load_models()).await;
+    }
     let mut notes = match apply_model(d, &id) {
         Ok(n) => n,
         Err(e) => return err(e),
