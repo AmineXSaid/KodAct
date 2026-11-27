@@ -1,0 +1,8 @@
+{
+  "instruction": "In deck.pptx, rename slide 3 to \"Hiring plan\", and add a \"Risks\" slide after slide 2, with three bullets on schedule, budget and staffing risk, laid out like slide 2. Leave the rest of the deck as it is.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": ["documents", "office", "pptx"],
+  "requires": ["office"],
+  "timeout_secs": 900
+}

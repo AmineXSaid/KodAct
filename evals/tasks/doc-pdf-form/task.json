@@ -1,0 +1,8 @@
+{
+  "instruction": "Fill in application.pdf with the details in details.json, then add appendix.pdf after it, and save the result as application-filled.pdf.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "tool-design",
+  "tags": ["documents", "pdf"],
+  "requires": ["office"],
+  "timeout_secs": 900
+}

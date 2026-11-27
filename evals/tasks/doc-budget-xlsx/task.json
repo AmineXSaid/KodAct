@@ -1,0 +1,8 @@
+{
+  "instruction": "Build budget.xlsx from expenses.csv: the expenses on a sheet named Data, and a Summary sheet with each category's total and its share of the whole, as formulas so they update when Data changes. Show the share as a percentage, and add a bar chart of the totals.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["documents", "office", "xlsx"],
+  "requires": ["office"],
+  "timeout_secs": 1200
+}

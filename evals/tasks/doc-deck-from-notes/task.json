@@ -1,0 +1,8 @@
+{
+  "instruction": "Make q3-review.pptx, a deck for the leadership meeting from notes.md: a title slide, then one slide for each section of the notes. Show the monthly revenue as a chart. It will be presented on a big screen, so it has to be readable.",
+  "check": "python3 \"$KODACT_EVAL_TASK_DIR/hidden/check.py\"",
+  "pillar": "verification",
+  "tags": ["documents", "office", "pptx"],
+  "requires": ["office"],
+  "timeout_secs": 1200
+}
