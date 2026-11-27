@@ -111,7 +111,16 @@ impl Tool for Grep {
                 crate::missing_path_hint(&root)
             ));
         }
-        let mode = match str_arg(&input, "output_mode") {
+        // A model sometimes puts the output mode in `type` (`type: "content"`);
+        // no file type has those names, so read it as the mode it meant.
+        let misplaced = match str_arg(&input, "type") {
+            t @ ("content" | "count" | "files_with_matches") => Some(t),
+            _ => None,
+        };
+        let mode = match misplaced
+            .filter(|_| str_arg(&input, "output_mode").is_empty())
+            .unwrap_or(str_arg(&input, "output_mode"))
+        {
             "content" => Mode::Content,
             "count" => Mode::Count,
             _ => Mode::Files,
@@ -121,7 +130,7 @@ impl Tool for Grep {
             Ok(g) => g,
             Err(e) => return ToolOutput::error(e),
         };
-        let ty = str_arg(&input, "type").to_string();
+        let ty = if misplaced.is_some() { String::new() } else { str_arg(&input, "type").to_string() };
         let ctx_c = arg_usize(&input, "-C").or_else(|| arg_usize(&input, "context")).unwrap_or(0);
         let after = arg_usize(&input, "-A").unwrap_or(ctx_c);
         let before = arg_usize(&input, "-B").unwrap_or(ctx_c);
