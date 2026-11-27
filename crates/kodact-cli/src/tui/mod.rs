@@ -24,6 +24,7 @@ pub mod front;
 pub mod keys;
 pub mod layout;
 pub mod look;
+pub mod manager;
 pub mod overlays;
 pub mod palette;
 pub mod render;
@@ -1483,10 +1484,7 @@ pub async fn run(prompt: Option<String>, o: Opts) -> Result<i32, Fail> {
                 stopped_by = Some(signal);
                 break;
             }
-            _ = tick.tick(), if app.busy || hint || render::sidebar_moving(&app) || app.manager_live() => {
-                app.refresh_manager();
-                app.dirty = true;
-            }
+            _ = tick.tick(), if app.busy || hint || render::sidebar_moving(&app) || app.manager_live() => app.dirty = true,
             _ = tokio::time::sleep(frame_wait), if app.dirty && !frame_wait.is_zero() => {}
         }
     }
@@ -2888,6 +2886,99 @@ mod snapshots {
             done(&mut a, "p2", "ok", false, Some(json!({"oldTodos": first, "newTodos": second})));
             a.busy_since = Some(std::time::Instant::now() - std::time::Duration::from_secs(23));
             shot(name, &mut a, 100, 24);
+        }
+
+        // 30. /manager: an orchestrated session, wide in both themes, narrow, and asking.
+        for (name, light, w, h, ask) in [
+            ("30-manager-dark", false, 150, 34, false),
+            ("31-manager-light", true, 150, 34, false),
+            ("32-manager-narrow", false, 92, 40, false),
+            ("33-manager-confirm", false, 150, 34, true),
+        ] {
+            let mut a = app();
+            a.theme = Theme { color: true, light, accent: None, depth: Default::default() };
+            a.status.model = "deep-thinking".into();
+            a.submit("split the migration across agents".into());
+            a.front = false;
+            let ago = |s: u64| std::time::Instant::now() - std::time::Duration::from_secs(s);
+            // Running, with a task list and steps.
+            a.on_event(msg(
+                vec![
+                    call("t1", "Task", json!({"description": "Port the billing API to the new client", "prompt": "p", "model": "kgpt-reasoning-text"})),
+                    call("t2", "Task", json!({"description": "Write the migration tests", "prompt": "p"})),
+                    call("t3", "Task", json!({"description": "Refactor the parser", "prompt": "p", "model": "kgpt-reasoning-text", "isolation": "worktree"})),
+                    call("t4", "Task", json!({"description": "Check the docs build", "prompt": "p"})),
+                ],
+                StopReason::ToolUse,
+                None,
+            ));
+            let todos = |d: usize, n: usize| json!({"todos": (0..n).map(|i| json!({"content": format!("t{i}"), "status": if i < d { "completed" } else { "pending" }, "activeForm": "x"})).collect::<Vec<_>>()});
+            for (step, input) in [
+                ("TodoWrite", todos(4, 7)),
+                ("Read", json!({"file_path": "/home/kryptonite/KodAct/billing/api.py"})),
+                ("Grep", json!({"pattern": "LegacyClient", "path": "billing"})),
+                (
+                    "Edit",
+                    json!({"file_path": "/home/kryptonite/KodAct/billing/client.py", "old_string": "a", "new_string": "b"}),
+                ),
+                ("Bash", json!({"command": "pytest -q billing", "description": "Run the billing tests"})),
+            ] {
+                a.on_event(msg(vec![call("c", step, input)], StopReason::ToolUse, Some("t1")));
+            }
+            for (step, input) in [
+                ("Glob", json!({"pattern": "migrations/**/*.py"})),
+                ("Read", json!({"file_path": "/home/kryptonite/KodAct/migrations/0042_accounts.py"})),
+            ] {
+                a.on_event(msg(vec![call("c", step, input)], StopReason::ToolUse, Some("t2")));
+            }
+            done(
+                &mut a,
+                "t3",
+                "Split the parser into lexer.rs and parse.rs; the public API is unchanged.\nAll 214 tests pass, and the parse benchmark is 18% faster.\nNothing else in the crate needed to change.",
+                false,
+                Some(json!({"status": "completed", "model": "kgpt-reasoning-text", "endpoint": "kpit", "totalDurationMs": 162000, "totalToolUseCount": 23,
+                    "worktree": {"path": "/home/kryptonite/KodAct/.kodact/worktrees/agent-3f2a", "branch": "kodact/agent-3f2a", "kept": true}})),
+            );
+            done(
+                &mut a,
+                "t4",
+                "FAILED: the docs build needs mkdocs-material, which can't be installed offline.",
+                true,
+                Some(
+                    json!({"status": "failed", "model": "deep-thinking", "totalDurationMs": 41000, "totalToolUseCount": 6}),
+                ),
+            );
+            a.on_event(UiEvent::Engine(kodact_engine::EngineEvent::System {
+                subtype: "subtask".into(),
+                data: json!({"id": "subtask_1", "status": "started", "task": "Audit the dependencies"}),
+            }));
+            a.on_event(UiEvent::Engine(kodact_engine::EngineEvent::System {
+                subtype: "subtask_step".into(),
+                data: json!({"id": "subtask_1", "tool": "TodoWrite", "arg": "", "todos": [1, 3]}),
+            }));
+            // Times as in a real session.
+            for r in a.agent_log.iter_mut() {
+                r.started = match r.id.as_str() {
+                    "t1" => ago(134),
+                    "t2" => ago(47),
+                    "subtask_1" => ago(12),
+                    _ => r.started,
+                };
+            }
+            for r in a.running.iter_mut() {
+                r.since = match r.id.as_str() {
+                    "t1" => ago(134),
+                    _ => ago(47),
+                };
+            }
+            a.submit("/manager".into());
+            if ask {
+                a.on_key(crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char('s'),
+                    crossterm::event::KeyModifiers::NONE,
+                ));
+            }
+            shot(name, &mut a, w, h);
         }
     }
 }

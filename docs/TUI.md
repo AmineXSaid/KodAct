@@ -671,27 +671,35 @@ The screens:
   `/hooks` numbers them, each with its source and timeout. Enter on a user,
   project or local hook asks, then runs `/hooks remove <Event> <n>`. The
   session reloads after a change, so the hook applies at once.
-- **`/manager`:** every sub-agent of the session, as the UI saw it: running
-  first, then newest first, each with its state, description, `◆ model ·
-  endpoint`, time and steps. Enter on one jumps to its details: its type,
-  model and endpoint, tool calls, its steps, the first lines of its report (or
-  why it failed), and its actions: "Stop this agent" for a running one
-  (asks, then runs `/tasks stop <id>`; the turn goes on), and for one that
-  kept its worktree branch, "Show its changes" (`!git diff --stat
-  HEAD...<branch>`) and "Merge it into the current branch" (asks, then
-  `!git merge --no-edit <branch>`). Background agents (`/subtask`) are listed
-  with the others, marked `background`, with their steps as they take them
-  (`system/subtask_step`) and their report once handed back; stopping one runs
-  `/tasks stop <id>`. The UI answers it at once, mid-turn too, and writes
-  nothing into the conversation. While it is open it follows the agents: each
-  event rebuilds it in place (the highlighted row and scroll stay), and it
-  ticks while one runs so the times move.
-  Each row has a progress bar: measured (`▕██████░░░░░░▏ 3/6`) when the agent
-  keeps a task list (its TodoWrite calls, a background agent's
-  `subtask_step` `todos`), and otherwise, while it runs, a block sweeping
-  across, so the bar moves only while it works and claims no progress it
-  can't know. Done: full and green; failed or stopped: red or dim, as far as
-  its list got.
+- **`/manager`:** the session's agents in one view, drawn straight from what
+  the UI saw, every frame, so it is always current (`tui/manager.rs`). A
+  rounded box in the accent: the header carries the totals (● running, ✓
+  done, ✗ failed, ■ stopped) and, on the right, the agents' time and tool
+  calls in all. On a wide terminal (96 columns inside the box) the agents are
+  on the left and the highlighted one's details on the right; narrower, the
+  details go under the list. Each agent takes two rows: its state (a spinner
+  while it runs), `bg` for a background one (`/subtask`), its description and
+  time; then its progress bar, what it counts, and `◆ model`. The highlighted
+  one sits on the wine tint with an accent edge. The details: its name and a
+  filled state pill; model and endpoint (and the model asked for when no
+  endpoint served it), the kind of agent, time and tool calls; a wide bar;
+  its steps as they come (the latest with the spinner while it runs); its
+  report, or why it failed, in red; its branch. **Bars** are measured when the
+  agent keeps a task list (its TodoWrite calls; a background agent's
+  `subtask_step` `todos`): the sea-glass, its leading cell the brightest;
+  without a list, while it runs, a head sweeping across with a trail fading
+  behind it, so it moves only while the agent works and claims nothing it
+  can't know; done, full in sage; failed or stopped, as far as the list got.
+  **Keys**, shown as keycaps for the highlighted agent: ↑↓ (j k, Home, End)
+  select; `s` stops a running one and `m` merges a kept worktree branch,
+  each after `y` (the question replaces the keys, in amber); `d` shows the
+  branch's changes (`!git diff --stat HEAD...<branch>`); ⏎ (o) reads the
+  whole report; esc (q) closes. A merge or a diff closes it, so its output
+  lands in the conversation. While it is open the agents aren't drawn again
+  above it, and the UI ticks while one runs. It opens at once, mid-turn too,
+  and writes nothing into the conversation. Its look is checked in the
+  snapshot test (`KODACT_SNAPSHOT_DIR`, scenes 30–33: dark, light, narrow,
+  asking).
 - **Answer panels** (an action command's longer answer) don't hold the
   keyboard: a character typed closes the panel and goes to the input; `q` and
   Space keep their meaning there.

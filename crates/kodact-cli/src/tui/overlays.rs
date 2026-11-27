@@ -180,6 +180,9 @@ pub(super) fn form(app: &App, w: usize) -> Vec<Line<'static>> {
 }
 
 pub(super) fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
+    if let Some((sel, confirm)) = app.manager() {
+        return super::manager::draw(app, sel, confirm, w, room, std::time::Instant::now());
+    }
     if app.viewer().is_some() {
         return viewer(app, w, room);
     }

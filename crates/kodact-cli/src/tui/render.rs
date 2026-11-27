@@ -730,6 +730,10 @@ fn live_view_inner(app: &App, width: u16, max_height: u16, now: Instant, front_b
         if app.asking_for() == Some(r.id.as_str()) {
             continue;
         }
+        // The manager is open: it shows the agents, live; they aren't drawn twice.
+        if is_agent(&r.name) && app.manager().is_some() {
+            continue;
+        }
         let mut spans = if is_agent(&r.name) {
             // A sub-agent: a wave of dots and the word for it, so
             // its state never rests on the motion or the colour alone.

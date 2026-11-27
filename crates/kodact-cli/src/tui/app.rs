@@ -163,6 +163,12 @@ enum DialogKind {
         picker: Picker,
         filter: String,
     },
+    /// `/manager`: the session's agents (tui/manager.rs). `sel` is the highlighted agent, in
+    /// `manager::ordered`'s order; `confirm` the question waiting for y/n and the command a yes runs.
+    Manager {
+        sel: usize,
+        confirm: Option<(String, String)>,
+    },
     /// A screen: scrolling rows, some with an action (docs/TUI.md, "Screens").
     Viewer {
         screen: Screen,
@@ -895,12 +901,6 @@ impl App {
     // ---- session events ----
 
     pub fn on_event(&mut self, ev: UiEvent) {
-        self.on_event_inner(ev);
-        // An open /manager follows what changed.
-        self.refresh_manager();
-    }
-
-    fn on_event_inner(&mut self, ev: UiEvent) {
         self.dirty = true;
         // A running turn prints again: note the mode it now runs under, once Shift+Tab rests.
         if self.mode_note.is_some_and(|(_, at, _)| at.elapsed() >= super::render::HINT_FOR) {
@@ -1486,7 +1486,7 @@ impl App {
                 v.push(("Type an answer".into(), String::new()));
                 v
             }
-            DialogKind::Viewer { .. } | DialogKind::Form { .. } => vec![],
+            DialogKind::Viewer { .. } | DialogKind::Form { .. } | DialogKind::Manager { .. } => vec![],
             DialogKind::Picker { .. } => self
                 .picker_rows()
                 .into_iter()
@@ -1687,6 +1687,7 @@ impl App {
             }
             DialogKind::Plan => ("Go ahead with this plan?".into(), vec![]),
             DialogKind::Viewer { screen, .. } => (screen.title.clone(), vec![]),
+            DialogKind::Manager { .. } => ("Agents".into(), vec![]),
             DialogKind::Form { form, .. } => (form.title.clone(), vec![]),
             DialogKind::Questions { questions, at, .. } => {
                 let Some(q) = questions.get(*at) else { return (String::new(), vec![]) };
@@ -1741,6 +1742,9 @@ impl App {
     }
 
     fn dialog_key(&mut self, key: KeyEvent) -> Vec<Action> {
+        if matches!(self.dialog.as_ref().map(|d| &d.kind), Some(DialogKind::Manager { .. })) {
+            return self.manager_key(key);
+        }
         if matches!(self.dialog.as_ref().map(|d| &d.kind), Some(DialogKind::Viewer { .. })) {
             // An answer is there to read, not to hold the keyboard: a character typed closes it and
             // goes to the input (`q` and Space keep their meaning there: close, next page).
@@ -2004,7 +2008,7 @@ impl App {
                     }
                 };
             }
-            DialogKind::Viewer { .. } | DialogKind::Form { .. } => {}
+            DialogKind::Viewer { .. } | DialogKind::Form { .. } | DialogKind::Manager { .. } => {}
             DialogKind::Permission { always, .. } => {
                 let always_row = always.is_some();
                 let suggestions = d.prompt.as_ref().map(|p| p.suggestions.clone()).unwrap_or_default();
@@ -2930,8 +2934,7 @@ impl App {
             t if t == "/focus" || t.starts_with("/focus ") => Some(self.focus_command(t["/focus".len()..].trim())),
             // The agents' manager: a screen of what the UI saw, at once, even mid-turn.
             "/manager" => {
-                let screen = self.manager_screen();
-                self.open_screen(screen);
+                self.open_manager();
                 return vec![];
             }
             _ => None,
@@ -3054,15 +3057,6 @@ impl AgentRecord {
             }
         }
     }
-
-    fn state_word(&self) -> (&'static str, &'static str) {
-        match self.state {
-            AgentState::Running => ("●", "running"),
-            AgentState::Done => ("✓", "done"),
-            AgentState::Failed => ("✗", "failed"),
-            AgentState::Stopped => ("■", "stopped"),
-        }
-    }
 }
 
 impl App {
@@ -3092,239 +3086,106 @@ impl App {
         };
     }
 
-    /// `/manager` is the open screen: rebuilt from the agents as they are now, keeping its
-    /// place (highlighted row, scroll, the way back from a jump).
-    pub fn refresh_manager(&mut self) {
-        let open = matches!(
-            self.dialog.as_ref().map(|d| &d.kind),
-            Some(DialogKind::Viewer { screen, .. }) if screen.title.starts_with(MANAGER_TITLE)
-        );
-        if !open {
-            return;
-        }
-        let fresh = self.manager_screen();
-        if let Some(Dialog { kind: DialogKind::Viewer { screen, cursor, top, .. }, .. }) = self.dialog.as_mut() {
-            let last = fresh.rows.len().saturating_sub(1);
-            *cursor = (*cursor).min(last);
-            *top = (*top).min(last);
-            *screen = fresh;
-            self.dirty = true;
+    /// /manager is open while an agent runs: the UI keeps ticking, so its spinners, bars and
+    /// times move.
+    pub fn manager_live(&self) -> bool {
+        self.manager().is_some() && self.agent_log.iter().any(|a| a.state == AgentState::Running)
+    }
+
+    /// The open manager: the highlighted agent and the question waiting for y/n, if any.
+    pub fn manager(&self) -> Option<(usize, Option<&str>)> {
+        match &self.dialog.as_ref()?.kind {
+            DialogKind::Manager { sel, confirm } => Some((*sel, confirm.as_ref().map(|(q, _)| q.as_str()))),
+            _ => None,
         }
     }
 
-    /// /manager is open while an agent runs: the UI keeps ticking, so its times move.
-    pub fn manager_live(&self) -> bool {
-        matches!(
-            self.dialog.as_ref().map(|d| &d.kind),
-            Some(DialogKind::Viewer { screen, .. }) if screen.title.starts_with(MANAGER_TITLE)
-        ) && self.agent_log.iter().any(|a| a.state == AgentState::Running)
+    /// Open `/manager` on the first agent.
+    pub fn open_manager(&mut self) {
+        self.flush_live();
+        self.answer_panel = false;
+        let kind = DialogKind::Manager { sel: 0, confirm: None };
+        self.show(Dialog { prompt: None, reply: None, kind, selected: 0, scroll: 0, typing: None });
+    }
+
+    /// The manager's keys: ↑↓ (j k) select; s stops a running agent and m merges a kept branch,
+    /// each after a y; d shows the branch's changes; ⏎ (o) reads the whole report; esc (q) closes.
+    fn manager_key(&mut self, key: KeyEvent) -> Vec<Action> {
+        // What the highlighted agent allows, decided before anything changes.
+        let (sel, confirm) = match &self.dialog.as_ref().map(|d| &d.kind) {
+            Some(DialogKind::Manager { sel, confirm }) => (*sel, confirm.clone()),
+            _ => return vec![],
+        };
+        let agents: Vec<AgentRecord> = super::manager::ordered(self).into_iter().cloned().collect();
+        let n = agents.len();
+        let here = agents.get(sel.min(n.saturating_sub(1))).cloned();
+        let set = |app: &mut App, sel: usize, confirm: Option<(String, String)>| {
+            if let Some(Dialog { kind: DialogKind::Manager { sel: s, confirm: c }, .. }) = app.dialog.as_mut() {
+                *s = sel;
+                *c = confirm;
+            }
+            app.dirty = true;
+        };
+        if let Some((_, command)) = confirm {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    set(self, sel, None);
+                    // A shell command's output belongs in the conversation: the manager makes way.
+                    if command.starts_with('!') {
+                        self.dialog = None;
+                    }
+                    return self.submit(command);
+                }
+                KeyCode::Char('n') | KeyCode::Esc => set(self, sel, None),
+                _ => {}
+            }
+            return vec![];
+        }
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => set(self, sel.saturating_sub(1), None),
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => set(self, (sel + 1).min(n.saturating_sub(1)), None),
+            KeyCode::Home => set(self, 0, None),
+            KeyCode::End => set(self, n.saturating_sub(1), None),
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Left => {
+                self.dialog = None;
+                self.dirty = true;
+            }
+            KeyCode::Char('s') => {
+                if let Some(a) = here.filter(|a| a.state == AgentState::Running) {
+                    set(self, sel, Some((format!("Stop \"{}\"?", a.description), format!("/tasks stop {}", a.id))));
+                }
+            }
+            KeyCode::Char('m') => {
+                if let Some(b) = here.as_ref().and_then(|a| a.branch.clone().filter(|_| a.kept)) {
+                    set(
+                        self,
+                        sel,
+                        Some((format!("Merge {b} into the current branch?"), format!("!git merge --no-edit {b}"))),
+                    );
+                }
+            }
+            KeyCode::Char('d') => {
+                if let Some(b) = here.as_ref().and_then(|a| a.branch.clone().filter(|_| a.kept)) {
+                    self.dialog = None;
+                    return self.submit(format!("!git diff --stat HEAD...{b}"));
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('o') | KeyCode::Right => {
+                if let Some(a) = here.filter(|a| !a.report.trim().is_empty()) {
+                    self.open_screen(action_panel(&a.description, &a.report, a.state == AgentState::Failed));
+                    self.answer_panel = true;
+                }
+            }
+            _ => {}
+        }
+        vec![]
     }
 }
-
-/// Cells in a /manager progress bar.
-const BAR_CELLS: usize = 12;
-/// How long the moving bar of an agent without a task list takes per cell.
-const BAR_STEP_MS: u128 = 120;
 
 /// A TodoWrite call's list as (done, total); `None` for an empty or malformed one.
 fn todo_counts(input: &Value) -> Option<(usize, usize)> {
     let list = input.get("todos")?.as_array()?;
     (!list.is_empty()).then(|| (list.iter().filter(|t| t["status"] == "completed").count(), list.len()))
-}
-
-/// An agent's progress bar, its tone, and what it counts. With a task list, a measured bar
-/// (`▕██████░░░░░░▏ 3/6 `); without one, while it runs, a block sweeping across, so the bar
-/// moves only while it works (it measures nothing it can't know); once done, full; failed or
-/// stopped, as far as its list got.
-fn progress_bar(a: &AgentRecord) -> (String, kodact_core::commands::screens::Tone, String) {
-    use kodact_core::commands::screens::Tone;
-    let fill = |n: usize| format!("▕{}{}▏", "█".repeat(n), "░".repeat(BAR_CELLS - n));
-    let tone = match a.state {
-        AgentState::Running => Tone::Accent,
-        AgentState::Done => Tone::Added,
-        AgentState::Failed => Tone::Removed,
-        AgentState::Stopped => Tone::Dim,
-    };
-    match (a.todos, a.state) {
-        (_, AgentState::Done) => {
-            (fill(BAR_CELLS), tone, a.todos.map(|(_, t)| format!(" {t}/{t} ")).unwrap_or_else(|| " ".into()))
-        }
-        (Some((done, total)), _) => {
-            let n = (done * BAR_CELLS).checked_div(total).unwrap_or(0).min(BAR_CELLS);
-            (fill(n), tone, format!(" {done}/{total} "))
-        }
-        (None, AgentState::Running) => {
-            // A three-cell block sweeping back and forth.
-            let period = 2 * (BAR_CELLS - 3);
-            let i = (a.started.elapsed().as_millis() / BAR_STEP_MS) as usize % period;
-            let at = if i <= BAR_CELLS - 3 { i } else { period - i };
-            let cells: String = (0..BAR_CELLS).map(|c| if (at..at + 3).contains(&c) { '█' } else { '░' }).collect();
-            (format!("▕{cells}▏"), tone, " ".into())
-        }
-        (None, _) => (fill(0), tone, " ".into()),
-    }
-}
-
-/// How the manager's title starts, which tells its screen from the others.
-const MANAGER_TITLE: &str = "Agents · ";
-
-/// The report lines shown in `/manager`, at most.
-const MANAGER_REPORT_LINES: usize = 12;
-
-impl App {
-    /// `/manager`: every sub-agent of the session, running first, each with where it ran, its
-    /// time and steps; Enter on one goes to its details (steps, report, branch), where it can be
-    /// stopped, or its branch looked at and merged. Built from what the UI saw: reopen to refresh.
-    pub fn manager_screen(&self) -> Screen {
-        use kodact_core::commands::screens::{Row, RowAction, Span as S, Tone};
-        let row = |spans: Vec<(String, Tone)>, action: Option<RowAction>| Row {
-            spans: spans.into_iter().map(|(text, tone)| S { text, tone }).collect(),
-            action,
-        };
-        let running = self.agent_log.iter().filter(|a| a.state == AgentState::Running).count();
-        let title = format!("{MANAGER_TITLE}{running} running · {} done", self.agent_log.len() - running);
-        if self.agent_log.is_empty() {
-            let rows = vec![
-                Row::text("No agents in this session yet.", Tone::Plain),
-                Row::blank(),
-                Row::text("The model starts them with the Task tool (ask it to split work across agents,", Tone::Dim),
-                Row::text(
-                    "on other models too); /subtask starts one in the background (/tasks lists those).",
-                    Tone::Dim,
-                ),
-            ];
-            return Screen { title, rows };
-        }
-        // Running first, then the rest, newest first.
-        let mut order: Vec<&AgentRecord> = self.agent_log.iter().filter(|a| a.state == AgentState::Running).collect();
-        order.extend(self.agent_log.iter().rev().filter(|a| a.state != AgentState::Running));
-        let live = |a: &AgentRecord| self.running.iter().find(|r| r.id == a.id);
-        let time = |a: &AgentRecord| match a.duration_ms {
-            Some(ms) => format!("{}s", ms / 1000),
-            None => format!("{}s", a.started.elapsed().as_secs()),
-        };
-        let steps = |a: &AgentRecord| match (live(a), a.tool_calls) {
-            (Some(r), _) => r.steps,
-            (None, Some(n)) => n as usize,
-            (None, None) => a.trail.len(),
-        };
-        let model = |a: &AgentRecord| -> String {
-            let m = a.model.clone().or_else(|| a.asked_model.clone()).unwrap_or_else(|| self.status.model.clone());
-            match &a.endpoint {
-                Some(e) => format!("{m} · {e}"),
-                None => m,
-            }
-        };
-        // The list, then one section per agent; each list row jumps to its section.
-        let head = order.len() + 2;
-        let mut sections: Vec<Row> = vec![];
-        let mut starts = vec![];
-        for a in &order {
-            starts.push(head + sections.len());
-            let (mark, word) = a.state_word();
-            let tone = match a.state {
-                AgentState::Running => Tone::Accent,
-                AgentState::Done => Tone::Added,
-                AgentState::Failed => Tone::Removed,
-                AgentState::Stopped => Tone::Dim,
-            };
-            sections
-                .push(row(vec![(format!("{mark} {}", a.description), Tone::Bold), (format!("  {word}"), tone)], None));
-            sections.push(row(
-                vec![
-                    (
-                        if a.background {
-                            format!("  background subtask {} · ", a.id)
-                        } else {
-                            format!("  {} agent · ", a.agent_type)
-                        },
-                        Tone::Dim,
-                    ),
-                    (format!("◆ {}", model(a)), Tone::Accent),
-                    (format!(" · {} · {} tool calls", time(a), steps(a)), Tone::Dim),
-                ],
-                None,
-            ));
-            if let Some(asked) = &a.asked_model {
-                if a.model.as_ref().is_some_and(|m| *m != kodact_api::resolve_model(asked)) {
-                    sections.push(Row::text(format!("  asked for {asked}, which no endpoint serves"), Tone::Removed));
-                }
-            }
-            let trail: Vec<String> = live(a).map(|r| r.trail.clone()).unwrap_or_else(|| a.trail.clone());
-            if !trail.is_empty() {
-                sections.push(Row::text("  Steps", Tone::Dim));
-                let shown = trail.len().min(8);
-                if trail.len() > shown {
-                    sections.push(Row::text(format!("    … {} earlier", trail.len() - shown), Tone::Dim));
-                }
-                for t in &trail[trail.len() - shown..] {
-                    sections.push(Row::text(format!("    {t}"), Tone::Plain));
-                }
-            }
-            if !a.report.trim().is_empty() {
-                let label = if a.state == AgentState::Failed { "  Why it failed" } else { "  Report" };
-                sections.push(Row::text(label, Tone::Dim));
-                let lines: Vec<&str> = a.report.lines().filter(|l| !l.trim().is_empty()).collect();
-                for l in lines.iter().take(MANAGER_REPORT_LINES) {
-                    sections.push(Row::text(format!("    {l}"), Tone::Plain));
-                }
-                if lines.len() > MANAGER_REPORT_LINES {
-                    sections
-                        .push(Row::text(format!("    … {} more lines", lines.len() - MANAGER_REPORT_LINES), Tone::Dim));
-                }
-            }
-            if a.state == AgentState::Running {
-                sections.push(row(
-                    vec![("  › Stop this agent".into(), Tone::Accent)],
-                    Some(RowAction::Confirm {
-                        question: format!("Stop \"{}\"? The turn goes on, told it was stopped.", a.description),
-                        command: format!("/tasks stop {}", a.id),
-                    }),
-                ));
-            }
-            if let (Some(branch), true) = (&a.branch, a.kept) {
-                let at = a.worktree.as_ref().map(|w| format!(" · {w}")).unwrap_or_default();
-                sections.push(Row::text(format!("  Branch {branch}{at}"), Tone::Dim));
-                sections.push(row(
-                    vec![("  › Show its changes".into(), Tone::Accent)],
-                    Some(RowAction::Run(format!("!git diff --stat HEAD...{branch}"))),
-                ));
-                sections.push(row(
-                    vec![("  › Merge it into the current branch".into(), Tone::Accent)],
-                    Some(RowAction::Confirm {
-                        question: format!("Merge {branch} into the current branch?"),
-                        command: format!("!git merge --no-edit {branch}"),
-                    }),
-                ));
-            }
-            sections.push(Row::blank());
-        }
-        let mut rows: Vec<Row> = order
-            .iter()
-            .zip(&starts)
-            .map(|(a, at)| {
-                let (mark, word) = a.state_word();
-                let tone = if a.state == AgentState::Running { Tone::Accent } else { Tone::Plain };
-                let (bar, bar_tone, count) = progress_bar(a);
-                row(
-                    vec![
-                        (format!("{mark} {word:<8} "), tone),
-                        (bar, bar_tone),
-                        (count, Tone::Dim),
-                        (if a.background { "background · ".to_string() } else { String::new() }, Tone::Dim),
-                        (a.description.clone(), Tone::Bold),
-                        (format!("  ◆ {}", model(a)), Tone::Accent),
-                        (format!("  {} · {} steps", time(a), steps(a)), Tone::Dim),
-                    ],
-                    Some(RowAction::Jump(*at)),
-                )
-            })
-            .collect();
-        rows.push(Row::blank());
-        rows.push(Row::text("Enter: its details · it follows the agents as they work", Tone::Dim));
-        rows.extend(sections);
-        Screen { title, rows }
-    }
 }
 
 /// The longest answer shown as a toast; a longer one opens a panel.
@@ -3750,175 +3611,6 @@ mod tests {
         assert_eq!(rows.join(" "), long, "nothing lost");
     }
 
-    /// `/manager` lists every agent of the session, running first, with its model and endpoint,
-    /// and jumps to its details: steps, report, and the actions it allows (stop a running one;
-    /// look at and merge a kept branch, after a yes).
-    #[test]
-    fn the_manager_lists_agents_and_acts_on_them() {
-        use kodact_core::commands::screens::RowAction;
-        let mut a = app();
-        a.status.model = "deep-thinking".into();
-        assert!(a.manager_screen().title.contains("0 running"));
-        let call = |a: &mut App, id: &str, input: Value| {
-            a.on_event(UiEvent::Engine(EngineEvent::Assistant {
-                message: kodact_types::ApiMessage {
-                    id: format!("m-{id}"),
-                    kind: "message".into(),
-                    role: kodact_types::Role::Assistant,
-                    model: "deep-thinking".into(),
-                    content: vec![ContentBlock::ToolUse {
-                        id: id.into(),
-                        name: "Task".into(),
-                        input,
-                        cache_control: None,
-                        provider: None,
-                    }],
-                    stop_reason: None,
-                    stop_sequence: None,
-                    usage: Default::default(),
-                },
-                uuid: format!("u-{id}"),
-                parent_tool_use_id: None,
-            }));
-        };
-        let done = |a: &mut App, id: &str, text: &str, failed: bool, result: Value| {
-            a.on_event(UiEvent::Engine(EngineEvent::User {
-                message: kodact_types::Message::user(vec![ContentBlock::ToolResult {
-                    tool_use_id: id.into(),
-                    content: kodact_types::ToolResultContent::Text(text.into()),
-                    is_error: Some(failed),
-                    cache_control: None,
-                }]),
-                uuid: format!("r-{id}"),
-                tool_use_result: Some(result),
-                is_meta: false,
-                parent_tool_use_id: None,
-            }));
-        };
-        a.submit("split the work".into());
-        call(
-            &mut a,
-            "t1",
-            json!({"description": "Refactor the parser", "prompt": "p", "model": "kgpt-reasoning-text", "isolation": "worktree"}),
-        );
-        call(
-            &mut a,
-            "t2",
-            json!({"description": "Write the tests", "prompt": "p", "subagent_type": "general-purpose"}),
-        );
-        call(&mut a, "t3", json!({"description": "Check the docs", "prompt": "p"}));
-        done(
-            &mut a,
-            "t1",
-            "Parser split into lexer.rs and parse.rs.\nAll 42 tests pass.",
-            false,
-            json!({"status": "completed", "model": "kgpt-reasoning-text", "endpoint": "kpit", "totalDurationMs": 42000,
-                   "totalToolUseCount": 9, "worktree": {"path": "/p/.kodact/worktrees/agent-1", "branch": "kodact/agent-1", "kept": true}}),
-        );
-        done(
-            &mut a,
-            "t3",
-            "FAILED: the docs folder is missing",
-            true,
-            json!({"status": "failed", "model": "deep-thinking"}),
-        );
-
-        let screen = a.manager_screen();
-        assert_eq!(screen.title, "Agents · 1 running · 2 done");
-        let text =
-            |r: &kodact_core::commands::screens::Row| r.spans.iter().map(|s| s.text.as_str()).collect::<String>();
-        let rows: Vec<String> = screen.rows.iter().map(text).collect();
-        // The list: running first, then newest first.
-        assert!(rows[0].contains("running") && rows[0].contains("Write the tests"), "{rows:#?}");
-        assert!(rows[1].contains("failed") && rows[1].contains("Check the docs"), "{rows:#?}");
-        assert!(
-            rows[2].contains("done")
-                && rows[2].contains("Refactor the parser")
-                && rows[2].contains("◆ kgpt-reasoning-text · kpit"),
-            "{rows:#?}"
-        );
-        // Each list row jumps to its own details.
-        for (i, title) in [(0, "Write the tests"), (1, "Check the docs"), (2, "Refactor the parser")] {
-            let Some(RowAction::Jump(at)) = &screen.rows[i].action else { panic!("row {i} jumps: {rows:#?}") };
-            assert!(rows[*at].contains(title), "{} → {}", rows[i], rows[*at]);
-        }
-        assert!(rows.iter().any(|r| r.contains("All 42 tests pass.")), "the report: {rows:#?}");
-        assert!(rows.iter().any(|r| r.contains("Why it failed")), "{rows:#?}");
-        let actions: Vec<&RowAction> = screen.rows.iter().filter_map(|r| r.action.as_ref()).collect();
-        assert!(actions.iter().any(|x| matches!(x, RowAction::Confirm { command, .. } if command == "/tasks stop t2")));
-        assert!(actions
-            .iter()
-            .any(|x| matches!(x, RowAction::Run(c) if c == "!git diff --stat HEAD...kodact/agent-1")));
-        assert!(actions.iter().any(
-            |x| matches!(x, RowAction::Confirm { command, .. } if command == "!git merge --no-edit kodact/agent-1")
-        ));
-        // A finished agent can't be stopped; one without a kept branch has nothing to merge.
-        assert_eq!(
-            actions
-                .iter()
-                .filter(|x| matches!(x, RowAction::Confirm { command, .. } if command.starts_with("/tasks stop")))
-                .count(),
-            1
-        );
-
-        // Typed: it opens at once and writes nothing into the conversation.
-        a.take_pending();
-        assert!(a.submit("/manager".into()).is_empty());
-        assert!(a.take_pending().is_empty());
-        assert!(a.viewer().is_some_and(|(s, _, _)| s.title.starts_with("Agents")));
-    }
-
-    /// Background agents (`/subtask`) are in /manager with the others, and an open manager
-    /// follows them as they work: new steps, the end, without reopening, keeping its place.
-    #[test]
-    fn the_manager_shows_background_agents_and_follows_them() {
-        use kodact_core::commands::screens::RowAction;
-        let mut a = app();
-        let sys = |a: &mut App, subtype: &str, data: Value| {
-            a.on_event(UiEvent::Engine(EngineEvent::System { subtype: subtype.into(), data }))
-        };
-        let rows = |a: &App| -> Vec<String> {
-            let (s, _, _) = a.viewer().expect("the manager is open");
-            s.rows.iter().map(|r| r.spans.iter().map(|s| s.text.as_str()).collect()).collect()
-        };
-        sys(
-            &mut a,
-            "subtask",
-            json!({"id": "sub-1", "status": "started", "task": "Audit the dependencies\nin detail"}),
-        );
-        assert!(a.submit("/manager".into()).is_empty());
-        let r = rows(&a);
-        assert!(
-            r[0].contains("running") && r[0].contains("background · ") && r[0].contains("Audit the dependencies"),
-            "{r:#?}"
-        );
-        let (s, _, _) = a.viewer().unwrap();
-        assert!(s
-            .rows
-            .iter()
-            .any(|r| matches!(&r.action, Some(RowAction::Confirm { command, .. }) if command == "/tasks stop sub-1")));
-
-        // A step while open: the open screen has it, at the same place.
-        a.on_key(key(KeyCode::Enter));
-        let at = a.viewer().unwrap().1;
-        sys(&mut a, "subtask_step", json!({"id": "sub-1", "tool": "Read", "arg": "Cargo.toml"}));
-        assert!(rows(&a).iter().any(|l| l.contains("Read Cargo.toml")), "{:#?}", rows(&a));
-        assert_eq!(a.viewer().unwrap().1, at, "the highlighted row stays");
-
-        // Its end, as the driver hands it back.
-        sys(
-            &mut a,
-            "subtask",
-            json!({"id": "sub-1", "status": "completed", "task": "Audit the dependencies", "result": "2 crates are outdated.",
-                   "num_tool_calls": 5, "duration_ms": 31000}),
-        );
-        let r = rows(&a);
-        assert!(a.viewer().unwrap().0.title.contains("0 running · 1 done"), "{r:#?}");
-        assert!(r.iter().any(|l| l.contains("2 crates are outdated.")), "{r:#?}");
-        assert!(r[0].contains("31s · 5 steps"), "{r:#?}");
-        assert!(!a.manager_live(), "nothing running: no ticking for it");
-    }
-
     /// An answer panel doesn't hold the keyboard: a typed character closes it and goes to the
     /// input. A screen to act on (/manager) keeps its keys.
     #[test]
@@ -3935,32 +3627,29 @@ mod tests {
         a.editor.clear();
         a.submit("/manager".into());
         typed(&mut a, "x");
-        assert!(a.viewer().is_some(), "the manager keeps its keys");
+        assert!(a.manager().is_some(), "the manager keeps its keys");
     }
 
-    /// The manager's progress bars: measured from an agent's task list (a sub-agent's TodoWrite,
-    /// a background agent's steps), moving while one without a list works, full when done.
-    #[test]
-    fn the_manager_shows_progress_bars() {
-        use kodact_core::commands::screens::Tone;
-        let mut a = app();
-        let todo = |done: usize, total: usize| {
-            let items: Vec<Value> = (0..total)
-                .map(|i| json!({"content": format!("t{i}"), "status": if i < done { "completed" } else { "pending" }, "activeForm": "x"}))
-                .collect();
-            json!({"todos": items})
-        };
-        // A Task agent, then a TodoWrite inside it (a child message).
+    /// The manager as drawn, `w` columns wide, one string a row.
+    fn manager_rows(a: &App, w: usize) -> Vec<String> {
+        let (sel, confirm) = a.manager().expect("the manager is open");
+        super::super::manager::draw(a, sel, confirm, w, 40, Instant::now())
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect()
+    }
+
+    fn task_call(a: &mut App, id: &str, input: Value) {
         a.on_event(UiEvent::Engine(EngineEvent::Assistant {
             message: kodact_types::ApiMessage {
-                id: "m1".into(),
+                id: format!("m-{id}"),
                 kind: "message".into(),
                 role: kodact_types::Role::Assistant,
-                model: "m".into(),
+                model: "deep-thinking".into(),
                 content: vec![ContentBlock::ToolUse {
-                    id: "t1".into(),
+                    id: id.into(),
                     name: "Task".into(),
-                    input: json!({"description": "Port the API", "prompt": "p"}),
+                    input,
                     cache_control: None,
                     provider: None,
                 }],
@@ -3968,9 +3657,183 @@ mod tests {
                 stop_sequence: None,
                 usage: Default::default(),
             },
-            uuid: "u1".into(),
+            uuid: format!("u-{id}"),
             parent_tool_use_id: None,
         }));
+    }
+
+    fn task_done(a: &mut App, id: &str, text: &str, failed: bool, result: Value) {
+        a.on_event(UiEvent::Engine(EngineEvent::User {
+            message: kodact_types::Message::user(vec![ContentBlock::ToolResult {
+                tool_use_id: id.into(),
+                content: kodact_types::ToolResultContent::Text(text.into()),
+                is_error: Some(failed),
+                cache_control: None,
+            }]),
+            uuid: format!("r-{id}"),
+            tool_use_result: Some(result),
+            is_meta: false,
+            parent_tool_use_id: None,
+        }));
+    }
+
+    /// `/manager` shows every agent, running first, the highlighted one's details beside the
+    /// list; its keys stop a running agent and merge a kept branch after a yes, show a branch's
+    /// changes, and read a whole report. It writes nothing into the conversation.
+    #[test]
+    fn the_manager_shows_the_agents_and_acts_on_them() {
+        let mut a = app();
+        a.status.model = "deep-thinking".into();
+        a.submit("/manager".into());
+        assert!(manager_rows(&a, 120).iter().any(|r| r.contains("No agents in this session yet.")));
+        a.on_key(key(KeyCode::Esc));
+        a.submit("split the work".into());
+        task_call(
+            &mut a,
+            "t1",
+            json!({"description": "Refactor the parser", "prompt": "p", "model": "kgpt-reasoning-text"}),
+        );
+        task_call(&mut a, "t2", json!({"description": "Write the tests", "prompt": "p"}));
+        task_call(&mut a, "t3", json!({"description": "Check the docs", "prompt": "p"}));
+        task_done(
+            &mut a,
+            "t1",
+            "Parser split in two.\nAll 42 tests pass.",
+            false,
+            json!({"status": "completed", "model": "kgpt-reasoning-text", "endpoint": "kpit", "totalDurationMs": 42000, "totalToolUseCount": 9,
+                   "worktree": {"path": "/p/.kodact/worktrees/agent-1", "branch": "kodact/agent-1", "kept": true}}),
+        );
+        task_done(
+            &mut a,
+            "t3",
+            "FAILED: the docs folder is missing",
+            true,
+            json!({"status": "failed", "model": "deep-thinking"}),
+        );
+        a.take_pending();
+        assert!(a.submit("/manager".into()).is_empty());
+        assert!(a.take_pending().is_empty(), "nothing in the conversation");
+
+        let rows = manager_rows(&a, 130);
+        let text = rows.join("\n");
+        assert!(
+            rows[0].contains("◆ Agents")
+                && rows[0].contains("1 running")
+                && rows[0].contains("1 done")
+                && rows[0].contains("1 failed"),
+            "{text}"
+        );
+        // Running first, then newest first; the details are the running one's.
+        let at = |t: &str| text.find(t).unwrap_or_else(|| panic!("{t} in\n{text}"));
+        assert!(
+            at("Write the tests") < at("Check the docs") && at("Check the docs") < at("Refactor the parser"),
+            "{text}"
+        );
+        assert!(text.contains("RUNNING") && text.contains(" s  stop"), "{text}");
+
+        // s asks, y stops it through /tasks stop.
+        a.on_key(key(KeyCode::Char('s')));
+        assert!(manager_rows(&a, 130)
+            .last()
+            .map(|_| manager_rows(&a, 130).join("\n"))
+            .unwrap()
+            .contains("Stop \"Write the tests\"?"));
+        assert_eq!(a.on_key(key(KeyCode::Char('y'))), vec![Action::Send("/tasks stop t2".into())]);
+        assert!(a.manager().is_some(), "still open");
+
+        // Down to the done one: its model and endpoint, report, branch; m asks, y merges.
+        a.on_key(key(KeyCode::Down));
+        a.on_key(key(KeyCode::Down));
+        let text = manager_rows(&a, 130).join("\n");
+        assert!(
+            text.contains("◆ kgpt-reasoning-text")
+                && text.contains("· kpit")
+                && text.contains("All 42 tests pass.")
+                && text.contains("kodact/agent-1"),
+            "{text}"
+        );
+        assert!(text.contains(" d  diff") && text.contains(" m  merge") && !text.contains(" s  stop"), "{text}");
+        a.on_key(key(KeyCode::Char('m')));
+        a.on_event(UiEvent::Idle);
+        let sent = a.on_key(key(KeyCode::Char('y')));
+        assert_eq!(sent, vec![Action::Send("!git merge --no-edit kodact/agent-1".into())]);
+        assert!(a.manager().is_none(), "the merge's output goes in the conversation");
+
+        // d shows the changes; Enter reads the whole report.
+        a.on_event(UiEvent::Idle);
+        a.submit("/manager".into());
+        a.on_key(key(KeyCode::End));
+        assert_eq!(
+            a.on_key(key(KeyCode::Char('d'))),
+            vec![Action::Send("!git diff --stat HEAD...kodact/agent-1".into())]
+        );
+        a.on_event(UiEvent::Idle);
+        a.submit("/manager".into());
+        a.on_key(key(KeyCode::End));
+        a.on_key(key(KeyCode::Enter));
+        let (screen, _, _) = a.viewer().expect("the report");
+        assert_eq!(screen.title, "Refactor the parser");
+
+        // Narrow: still every agent and the details, one under the other.
+        a.on_key(key(KeyCode::Esc));
+        a.submit("/manager".into());
+        let narrow = manager_rows(&a, 80).join("\n");
+        // (The turns ended above: the running agent was stopped with them.)
+        assert!(
+            narrow.contains("Write the tests") && narrow.contains("Check the docs") && narrow.contains("FAILED"),
+            "{narrow}"
+        );
+    }
+
+    /// Background agents (`/subtask`) are in the manager, their steps and task list live, as
+    /// they come: the view is drawn from them each frame.
+    #[test]
+    fn the_manager_shows_background_agents_live() {
+        let mut a = app();
+        let sys = |a: &mut App, subtype: &str, data: Value| {
+            a.on_event(UiEvent::Engine(EngineEvent::System { subtype: subtype.into(), data }))
+        };
+        sys(
+            &mut a,
+            "subtask",
+            json!({"id": "sub-1", "status": "started", "task": "Audit the dependencies\nin detail"}),
+        );
+        a.submit("/manager".into());
+        let text = manager_rows(&a, 130).join("\n");
+        assert!(text.contains("bg Audit the dependencies") && text.contains("background subtask sub-1"), "{text}");
+        assert!(a.manager_live(), "running: the UI ticks");
+        sys(&mut a, "subtask_step", json!({"id": "sub-1", "tool": "Read", "arg": "Cargo.toml"}));
+        sys(&mut a, "subtask_step", json!({"id": "sub-1", "tool": "TodoWrite", "arg": "", "todos": [1, 4]}));
+        let text = manager_rows(&a, 130).join("\n");
+        assert!(text.contains("Read Cargo.toml") && text.contains("1/4"), "{text}");
+        sys(
+            &mut a,
+            "subtask",
+            json!({"id": "sub-1", "status": "completed", "task": "Audit", "result": "2 crates are outdated.",
+            "num_tool_calls": 5, "duration_ms": 31000}),
+        );
+        let text = manager_rows(&a, 130).join("\n");
+        assert!(
+            text.contains("1 done")
+                && text.contains("2 crates are outdated.")
+                && text.contains("31s")
+                && text.contains("4/4"),
+            "{text}"
+        );
+        assert!(!a.manager_live());
+    }
+
+    /// The bars: measured from a task list (a sub-agent's TodoWrite), a sweep that moves while
+    /// one without a list runs, full when done, as far as it got when it failed.
+    #[test]
+    fn the_manager_bars_measure_what_they_can() {
+        use super::super::manager::bar;
+        let mono = Theme { color: false, light: false, accent: None, depth: Default::default() };
+        let mut a = app();
+        task_call(&mut a, "t1", json!({"description": "Port the API", "prompt": "p"}));
+        let todos = json!({"todos": [
+            {"content": "a", "status": "completed", "activeForm": "a"}, {"content": "b", "status": "completed", "activeForm": "b"},
+            {"content": "c", "status": "pending", "activeForm": "c"}, {"content": "d", "status": "pending", "activeForm": "d"}]});
         a.on_event(UiEvent::Engine(EngineEvent::Assistant {
             message: kodact_types::ApiMessage {
                 id: "m2".into(),
@@ -3980,7 +3843,7 @@ mod tests {
                 content: vec![ContentBlock::ToolUse {
                     id: "c1".into(),
                     name: "TodoWrite".into(),
-                    input: todo(3, 6),
+                    input: todos,
                     cache_control: None,
                     provider: None,
                 }],
@@ -3991,47 +3854,22 @@ mod tests {
             uuid: "u2".into(),
             parent_tool_use_id: Some("t1".into()),
         }));
-        let rec = a.agent_log.iter().find(|r| r.id == "t1").unwrap().clone();
-        assert_eq!(rec.todos, Some((3, 6)));
-        let (bar, tone, count) = progress_bar(&rec);
-        assert_eq!((bar.as_str(), tone, count.as_str()), ("▕██████░░░░░░▏", Tone::Accent, " 3/6 "));
-
-        // A background agent's list comes with its steps.
-        a.on_event(UiEvent::Engine(EngineEvent::System {
-            subtype: "subtask".into(),
-            data: json!({"id": "s1", "status": "started", "task": "Audit"}),
-        }));
-        a.on_event(UiEvent::Engine(EngineEvent::System {
-            subtype: "subtask_step".into(),
-            data: json!({"id": "s1", "tool": "TodoWrite", "arg": "", "todos": [1, 4]}),
-        }));
-        assert_eq!(a.agent_log.iter().find(|r| r.id == "s1").unwrap().todos, Some((1, 4)));
-
-        // Without a list, the bar moves while it runs, and only then.
-        let mut busy = rec.clone();
-        busy.todos = None;
-        let at = |ms: u64| {
-            let mut r = busy.clone();
-            r.started = Instant::now() - std::time::Duration::from_millis(ms);
-            progress_bar(&r).0
+        let rec = a.agent_log[0].clone();
+        assert_eq!(rec.todos, Some((2, 4)));
+        let txt = |r: &AgentRecord, now: Instant| {
+            bar(&mono, r, 8, now).iter().map(|s| s.content.to_string()).collect::<String>()
         };
-        assert_ne!(at(0), at(BAR_STEP_MS as u64 * 2), "it moves");
-        assert_eq!(at(0).matches('█').count(), 3);
-        let mut done = busy.clone();
+        let now = Instant::now();
+        assert_eq!(txt(&rec, now), "▕████░░░░▏");
+        let mut sweep = rec.clone();
+        sweep.todos = None;
+        assert_ne!(txt(&sweep, now), txt(&sweep, now + std::time::Duration::from_millis(300)), "it moves");
+        let mut done = sweep.clone();
         done.state = AgentState::Done;
-        assert_eq!(progress_bar(&done).0, format!("▕{}▏", "█".repeat(BAR_CELLS)));
+        assert_eq!(txt(&done, now), "▕████████▏");
         let mut failed = rec.clone();
         failed.state = AgentState::Failed;
-        assert_eq!(
-            progress_bar(&failed),
-            ("▕██████░░░░░░▏".to_string(), Tone::Removed, " 3/6 ".to_string()),
-            "as far as it got"
-        );
-
-        // In the list row.
-        let screen = a.manager_screen();
-        let first: String = screen.rows[0].spans.iter().map(|s| s.text.as_str()).collect();
-        assert!(first.contains("▕██████░░░░░░▏ 3/6 ") && first.contains("Port the API"), "{first}");
+        assert_eq!(txt(&failed, now), "▕████░░░░▏", "as far as it got");
     }
 
     #[test]
