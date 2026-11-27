@@ -581,6 +581,78 @@ fn shown_settings_path() -> String {
     kodact_config::short_path(&settings_path())
 }
 
+/// The endpoint already set up, in a few words (`gpt.example.net · deep-thinking`), from the
+/// variables in this shell, then the settings file; `None` when there is none. Never a key.
+pub fn existing_endpoint(settings: &Value, get: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let from_file = |k: &str| settings.pointer(&format!("/env/{k}")).and_then(Value::as_str).map(str::to_string);
+    let var = |k: &str| get(k).filter(|v| !v.trim().is_empty()).or_else(|| from_file(k));
+    let host = |u: String| {
+        let rest = u.split_once("://").map(|(_, r)| r.to_string()).unwrap_or(u);
+        rest.split('/').next().unwrap_or("").to_string()
+    };
+    let place = if let Some(u) = var("KODACT_OPENAI_BASE_URL") {
+        host(u)
+    } else if let Some(u) = var("KODACT_GEMINI_BASE_URL") {
+        host(u)
+    } else if var("KODACT_GEMINI_API_KEY").is_some() {
+        "Google Gemini".to_string()
+    } else if let Some(u) = var("KODACT_BASE_URL") {
+        host(u)
+    } else if var("KODACT_API_KEY").is_some()
+        || var("KODACT_AUTH_TOKEN").is_some()
+        || var("KODACT_OPENAI_API_KEY").is_some()
+    {
+        "your provider".to_string()
+    } else {
+        return None;
+    };
+    let model = get("KODACT_MODEL")
+        .filter(|m| !m.trim().is_empty())
+        .or_else(|| settings.get("model").and_then(Value::as_str).map(str::to_string));
+    Some(match model {
+        Some(m) => format!("{place} · {m}"),
+        None => place,
+    })
+}
+
+/// Ask, before the wizard, whether to replace the endpoint already set up or add another
+/// beside it (and its name). `Ok(None)`: replace (or none set up yet); `Ok(Some(name))`: add.
+fn replace_or_add(theme: &Theme, existing: &str) -> io::Result<Option<String>> {
+    use std::io::{BufRead, Write};
+    let line = |spans: Vec<Span<'static>>| println!("{}", super::brand::ansi(&Line::from(spans)));
+    line(vec![
+        Span::styled("You already have an endpoint: ", theme.dim()),
+        Span::styled(existing.to_string(), theme.accent()),
+    ]);
+    line(vec![Span::styled("  1  ", theme.accent()), Span::raw("Replace it")]);
+    line(vec![
+        Span::styled("  2  ", theme.accent()),
+        Span::raw("Add another endpoint beside it (both work, /model switches)"),
+    ]);
+    let stdin = io::stdin();
+    let read = |prompt: &str| -> io::Result<String> {
+        print!("{prompt}");
+        io::stdout().flush()?;
+        let mut s = String::new();
+        stdin.lock().read_line(&mut s)?;
+        Ok(s.trim().to_string())
+    };
+    loop {
+        match read("Choose 1 or 2 [1]: ")?.as_str() {
+            "" | "1" => return Ok(None),
+            "2" => break,
+            _ => continue,
+        }
+    }
+    loop {
+        let name = read("Name for the new endpoint (e.g. kpit): ")?;
+        match valid_endpoint_name(&name) {
+            Ok(()) => return Ok(Some(name)),
+            Err(why) => line(vec![Span::styled(format!("  {why}"), theme.warning())]),
+        }
+    }
+}
+
 /// The variable an added endpoint's key is kept in (in the settings' `env` block):
 /// `work-gw` → `KODACT_ENDPOINT_WORK_GW_KEY`.
 pub fn endpoint_key_var(name: &str) -> String {
@@ -1429,8 +1501,18 @@ pub async fn run(theme: &Theme, add: Option<&str>) -> Result<SetupOutcome, Fail>
 /// Standalone `kodact setup` entrypoint.
 pub async fn run_standalone(add: Option<String>) -> Result<i32, Fail> {
     let theme = Theme::named("auto", crate::term::get().color, palette::Depth::detect());
+    let mut add = add;
     if let Some(name) = &add {
         valid_endpoint_name(name).map_err(Fail::config)?;
+    } else if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        // An endpoint is set up already: replace it, or add this one beside it.
+        let saved: Value = std::fs::read_to_string(settings_path())
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or(Value::Null);
+        if let Some(existing) = existing_endpoint(&saved, &|k| std::env::var(k).ok()) {
+            add = replace_or_add(&theme, &existing).map_err(|e| Fail::config(format!("setup: {e}")))?;
+        }
     }
     match run(&theme, add.as_deref()).await? {
         SetupOutcome::Configured { provider, model } => {
@@ -1571,6 +1653,27 @@ mod tests {
         assert_eq!(e["models"], json!(["kgpt-reasoning-text"]));
         assert!(valid_endpoint_name("default").is_err() && valid_endpoint_name("a/b").is_err());
         assert!(write_endpoint(&path, "default", &s).is_err());
+    }
+
+    /// Setup sees the endpoint already set up, from the shell or the settings, and never shows a key.
+    #[test]
+    fn the_endpoint_already_set_up_is_described() {
+        let none = |_: &str| None;
+        assert_eq!(existing_endpoint(&Value::Null, &none), None);
+        let file = json!({"env": {"KODACT_OPENAI_BASE_URL": "https://gpt.example.net/api/v1", "KODACT_OPENAI_API_KEY": "sk-secret"}, "model": "deep-thinking"});
+        let d = existing_endpoint(&file, &none).unwrap();
+        assert_eq!(d, "gpt.example.net · deep-thinking");
+        let shell = |k: &str| match k {
+            "KODACT_OPENAI_BASE_URL" => Some("https://llm-proxy.example.com".to_string()),
+            "KODACT_MODEL" => Some("kgpt-reasoning-text".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            existing_endpoint(&file, &shell).unwrap(),
+            "llm-proxy.example.com · kgpt-reasoning-text",
+            "the shell wins, as it does"
+        );
+        assert!(!d.contains("sk-"));
     }
 
     /// The variables that beat the settings are named after a setup, never their values.

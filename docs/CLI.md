@@ -290,7 +290,10 @@ Each request goes to, in this order:
    single endpoint (above), called `default`, or `defaultEndpoint` (a name),
    or else the first.
 
-- `kodact setup --add <name>` adds one without editing the file: the same
+- `kodact setup` adds one without editing the file: with an endpoint already set
+  up (in your settings or your shell), it asks first whether to replace it or add
+  another beside it, and the new one's name. `kodact setup --add <name>` skips
+  the question (for scripts). Adding: the same
   wizard (provider, URL, key, model) saves it as `endpoints.<name>`, its key in
   your settings' `env` block as `KODACT_ENDPOINT_<NAME>_KEY` (named by
   `apiKeyEnv`), and the model chosen as one it serves. Your default endpoint and
