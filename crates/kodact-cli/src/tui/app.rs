@@ -309,6 +309,8 @@ pub struct App {
     pub agent_log: Vec<AgentRecord>,
     /// The open screen is an action command's answer, to read: typing goes on in the input.
     answer_panel: bool,
+    /// The edit the open approval dialog asks about, as hunks (worked out once, when it opens).
+    edit_hunks: Option<Vec<Value>>,
     /// Tool calls still running, in call order: their header waits in the live
     /// region with a turning dot, and goes to scrollback with its result.
     pub running: Vec<Running>,
@@ -464,6 +466,7 @@ impl App {
             ran_on: Default::default(),
             agent_log: Vec::new(),
             answer_panel: false,
+            edit_hunks: None,
             running: vec![],
             theme,
             editor: Editor::with_history(history),
@@ -1373,6 +1376,7 @@ impl App {
 
     fn open_dialog(&mut self, prompt: PermissionPrompt, reply: oneshot::Sender<PermissionAnswer>) {
         self.danger_armed = false;
+        self.edit_hunks = proposed_hunks(&prompt.tool_name, &prompt.input);
         self.flush_live();
         let mut typing = None;
         let kind = match prompt.tool_name.as_str() {
@@ -1448,6 +1452,13 @@ impl App {
         } else {
             self.dialog = Some(d);
         }
+    }
+
+    /// The open approval dialog's edit, as hunks to draw as a diff.
+    pub fn dialog_edit_hunks(&self) -> Option<&[Value]> {
+        let d = self.dialog.as_ref()?;
+        matches!(d.kind, DialogKind::Permission { .. }).then_some(())?;
+        self.edit_hunks.as_deref()
     }
 
     /// The rows of the open dialog: (label, description).
@@ -1673,7 +1684,10 @@ impl App {
                 } else if !arg.is_empty() {
                     body.push(format!("  {arg}"));
                 }
-                body.extend(edit_preview(&p.tool_name, &p.input));
+                // Drawn as a diff when its hunks could be worked out (`dialog_edit_hunks`).
+                if self.edit_hunks.is_none() {
+                    body.extend(edit_preview(&p.tool_name, &p.input));
+                }
                 // The generic reason says nothing the title doesn't.
                 if !p.reason.is_empty() && p.reason != "this tool requires permission" {
                     body.push(p.reason.clone());
@@ -1726,7 +1740,13 @@ impl App {
         if !matches!(d.kind, DialogKind::Permission { .. }) {
             return false;
         }
-        let max_scroll = self.dialog_text().1.len().saturating_sub(1);
+        // The diff's rows too: at most a header a hunk and a row a line (the unified layout);
+        // the drawing clamps to the rows there are.
+        let diff_rows: usize = self
+            .dialog_edit_hunks()
+            .map(|h| h.iter().map(|h| 1 + h["lines"].as_array().map_or(0, Vec::len)).sum())
+            .unwrap_or(0);
+        let max_scroll = (self.dialog_text().1.len() + diff_rows).saturating_sub(1);
         if let Some(d) = self.dialog.as_mut() {
             d.scroll = d.scroll.saturating_add_signed(delta).min(max_scroll);
         }
@@ -4287,24 +4307,35 @@ mod tests {
             "oldStart": 1, "oldLines": 3, "newStart": 1, "newLines": 3,
             "lines": [" def add(a, b):", "-    return a - b", "+    return a + b", ""]
         }]});
-        // The changes are laid out at the width of the moment: one column when narrow...
+        // The changes are laid out at the width of the moment, as GitHub shows a diff: the
+        // hunk's header and its context; unified when narrow (both line numbers, then the sign)...
         let lines = result_lines(&t, "Edit", "The file was updated", false, Some(&edit));
-        assert_eq!(
-            texts(&lay_out(lines.clone(), 100)),
-            ["  └ 1 addition, 1 removal", "       2 -     return a - b", "       2 +     return a + b"]
-        );
-        // ...side by side from 140 columns: the old line on the left, the new on the right.
+        let narrow = texts(&lay_out(lines.clone(), 100));
+        assert_eq!(narrow[0], "  └ 1 addition, 1 removal");
+        assert_eq!(narrow[1].trim(), "@@ -1,3 +1,3 @@");
+        assert_eq!(narrow[2].trim_end(), "        1    1   def add(a, b):");
+        assert_eq!(narrow[3].trim_end(), "        2      -     return a - b");
+        assert_eq!(narrow[4].trim_end(), "             2 +     return a + b");
+        assert_eq!(narrow[3].find('-'), narrow[4].find('+'), "the signs in one column");
+        // ...split from SPLIT_DIFF_COLS: the old line on the left, the new on the right.
         let wide = texts(&lay_out(lines, 160));
-        assert_eq!(wide.len(), 2, "{wide:?}");
-        let (old, new) = wide[1].split_once(" │ ").expect("two halves");
-        assert_eq!(old.trim(), "2      return a - b");
-        assert_eq!(new.trim(), "2      return a + b");
-        assert!(crate::tui::text::width(&wide[1]) <= 160);
+        let row = wide.iter().find(|r| r.contains("return a - b")).expect("the change");
+        let (old, new) = row.split_once('│').expect("two halves");
+        assert_eq!(old.trim(), "2 -     return a - b");
+        assert_eq!(new.trim(), "2 +     return a + b");
+        assert!(
+            wide.iter().any(|r| r.contains("def add(a, b):") && r.matches("def add").count() == 2),
+            "context on both sides"
+        );
+        assert!(wide.iter().all(|r| crate::tui::text::width(r) <= 160));
         // A long edit: at most DIFF_LINES rows, the rest counted.
         let many: Vec<Value> = (0..40).map(|i| json!(format!("+line {i}"))).collect();
         let big = json!({"structuredPatch": [{"oldStart": 1, "newStart": 1, "lines": many}]});
         let rows = texts(&lay_out(result_lines(&t, "Edit", "", false, Some(&big)), 100));
-        assert_eq!(rows.last().unwrap(), &format!("    … {} more changed lines", 40 - DIFF_LINES));
+        assert!(
+            rows.last().unwrap().starts_with("    … ") && rows.last().unwrap().contains("more changed lines"),
+            "{rows:?}"
+        );
         let write = json!({"type": "create", "filePath": "/p/new.txt", "content": "a\nb\n", "structuredPatch": []});
         assert_eq!(texts(&result_lines(&t, "Write", "x", false, Some(&write))), ["  └ 2 lines, a new file"]);
         assert_eq!(texts(&result_lines(&t, "Bash", "", false, None)), ["  └ (no output)"]);
@@ -4356,7 +4387,10 @@ mod tests {
         });
         let (title, body) = a.dialog_text();
         assert_eq!(title, "Approve Edit?");
-        assert_eq!(body, ["  src/calc.py", "  - return a - b", "  + return a + b"], "no generic reason line");
+        // The change is drawn as a diff (dialog_edit_hunks), not as text lines.
+        assert_eq!(body, ["  src/calc.py"], "no generic reason line");
+        let hunks = a.dialog_edit_hunks().expect("hunks");
+        assert_eq!(hunks[0]["lines"], json!(["-return a - b", "+return a + b"]));
         assert!(a.waiting_for_answer());
     }
 

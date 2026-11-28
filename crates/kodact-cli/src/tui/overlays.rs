@@ -222,7 +222,14 @@ pub(super) fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
             }
         })
         .collect();
-    let preview = rows;
+    let mut preview = rows;
+    // A proposed edit, as GitHub shows a diff: split when the dialog is wide, its frame then
+    // as wide as the terminal (a question's frame is otherwise kept narrow).
+    let diff = app.dialog_edit_hunks().map(|h| h.to_vec());
+    if let Some(hunks) = &diff {
+        let styles = super::layout::DiffStyles::new(&t);
+        preview.extend(super::layout::diff_rows(hunks, &styles, w.saturating_sub(4) as u16, true));
+    }
     let mut danger_rows = vec![];
     // What a destructive command would do, in red, with a glyph and a word.
     if let Some(danger) = app.dialog_danger() {
@@ -287,7 +294,11 @@ pub(super) fn dialog(app: &App, w: usize, room: usize) -> Vec<Line<'static>> {
         }
         all.push(Line::default());
         all.push(Line::from(Span::styled(foot.unwrap_or_else(|| hint.clone()), t.dim())));
-        framed(app, title.clone(), all, w)
+        if diff.is_some() {
+            boxed(title.clone(), all, w, t.accent())
+        } else {
+            framed(app, title.clone(), all, w)
+        }
     };
     let option_lines: Vec<Line<'static>> = (0..options.len()).map(|i| option(i, None)).collect();
     let all = whole(&preview, option_lines.clone(), None);

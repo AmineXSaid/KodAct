@@ -151,6 +151,20 @@ pub const PROMPT_BG: Role = role(0x1f1418, 0xf3ecea, Color::DarkGray, Color::Gra
 pub const SUCCESS_BG: Role = role(0x16301f, 0xdff1e4, Color::Reset, Color::Reset);
 /// Behind a failed command's `exit 1` badge.
 pub const DANGER_BG: Role = role(0x3a1a10, 0xfbe2d8, Color::Reset, Color::Reset);
+/// Diffs, as GitHub draws them: a soft tint behind an added or a removed line, a stronger one
+/// behind the characters that changed in it, a band for a hunk's header, and the empty side of
+/// a split row. Text keeps its own colour on them. (16 colours: no tints; the signs and the
+/// red and green text carry it.)
+pub const DIFF_ADD_LINE: Role = role(0x12261e, 0xe6ffec, Color::Reset, Color::Reset);
+pub const DIFF_ADD_WORD: Role = role(0x1f5c36, 0xabf2bc, Color::Reset, Color::Reset);
+pub const DIFF_DEL_LINE: Role = role(0x2d161a, 0xffebe9, Color::Reset, Color::Reset);
+pub const DIFF_DEL_WORD: Role = role(0x6e2a2f, 0xffc1c0, Color::Reset, Color::Reset);
+pub const DIFF_HUNK_BG: Role = role(0x131d2c, 0xddf4ff, Color::Reset, Color::Reset);
+pub const DIFF_HUNK_FG: Role = role(0x8fa3bf, 0x4a6078, Color::Blue, Color::Blue);
+pub const DIFF_FILLER: Role = role(0x15171c, 0xf3f4f6, Color::Reset, Color::Reset);
+/// The line numbers' gutter on a changed line: the line's tint, a little stronger.
+pub const DIFF_ADD_GUTTER: Role = role(0x183323, 0xccffd8, Color::Reset, Color::Reset);
+pub const DIFF_DEL_GUTTER: Role = role(0x3a1c21, 0xffd7d5, Color::Reset, Color::Reset);
 /// A wine tint: the selected row, the glow style's band behind the person's words.
 pub const WARM_BG: Role = role(0x2a1219, 0xf6e2e7, Color::DarkGray, Color::Gray);
 /// Text on [`PROMPT_BG`].

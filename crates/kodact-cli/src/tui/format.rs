@@ -660,6 +660,43 @@ pub(super) fn rule_text(s: &Suggestion) -> Option<String> {
     }
 }
 
+/// What an edit would change, as hunks with their real line numbers and three lines of
+/// context, for the approval dialog to draw as a diff: the file as it is, the edit applied to
+/// it in memory as the Edit tool would apply it. `None` when it can't be worked out (the text
+/// to replace isn't there as given); the dialog then shows [`edit_preview`].
+pub(super) fn proposed_hunks(tool: &str, input: &Value) -> Option<Vec<Value>> {
+    use kodact_tools::builtin::{apply_edit, patch_hunks};
+    let path = input["file_path"].as_str()?;
+    let current = std::fs::read_to_string(path).ok();
+    let s = |v: &Value, k: &str| v[k].as_str().unwrap_or("").to_string();
+    let after = match tool {
+        "Edit" => {
+            let all = input["replace_all"].as_bool().unwrap_or(false);
+            match &current {
+                Some(c) => apply_edit(c, &s(input, "old_string"), &s(input, "new_string"), all).ok()?,
+                // A file not there yet: the two strings alone.
+                None => return Some(patch_hunks(&s(input, "old_string"), &s(input, "new_string"))),
+            }
+        }
+        "MultiEdit" => {
+            let mut text = current.clone()?;
+            for e in input["edits"].as_array()? {
+                text = apply_edit(
+                    &text,
+                    &s(e, "old_string"),
+                    &s(e, "new_string"),
+                    e["replace_all"].as_bool().unwrap_or(false),
+                )
+                .ok()?;
+            }
+            text
+        }
+        "Write" => s(input, "content"),
+        _ => return None,
+    };
+    Some(patch_hunks(current.as_deref().unwrap_or(""), &after))
+}
+
 /// What an edit would change, for the permission dialog: removed lines as
 /// `  - `, added lines as `  + ` (the dialog colours them), a few of each.
 pub(super) fn edit_preview(tool: &str, input: &Value) -> Vec<String> {
